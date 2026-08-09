@@ -310,9 +310,14 @@ impl InputSession {
     }
 
     /// 上屏指定候选词并复位会话。
+    ///
+    /// 回声候选(`c.echo`,词库解不出的原始输入串)不是词:按
+    /// `commit_raw` 的语义处理——不学习、`last_word` 置 `None`
+    /// (对应 librime 里 raw 类型不进 memory 的行为)。
     fn commit_word(&mut self, c: &Candidate) -> String {
         let word = c.word.clone();
-        self.record_committed(&word, Some(&word));
+        let as_word = if c.echo { None } else { Some(word.as_str()) };
+        self.record_committed(&word, as_word);
         self.reset();
         word
     }
@@ -551,6 +556,39 @@ mod tests {
             before,
             "commit_raw 原始字母上屏不应产生学习"
         );
+    }
+
+    #[test]
+    fn echo_candidate_commit_does_not_learn() {
+        // 回声候选(词库解不出的原始输入串)上屏不应被当成词学习——
+        // 它不是词,语义等同 commit_raw(对应 librime raw 不进 memory)。
+        // 引擎挂内存用户层,断言上屏回声候选后 unigram_len() 不变。
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        // 空词库:输入 "zgr" 解不出任何真实候选,只会产出回声候选
+        let mut s = InputSession::new(Arc::clone(&engine));
+
+        for ch in "zgr".chars() {
+            s.handle(InputEvent::Char(ch)).expect("按键失败");
+        }
+        let user = engine.user_lm().expect("引擎应有用户层");
+        let before = user.unigram_len();
+
+        // 空格选中唯一候选(即回声候选)上屏
+        let out = s.handle(InputEvent::Space).expect("空格选词失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "zgr"),
+            "回声候选上屏应提交原始输入串: {out:?}"
+        );
+        assert_eq!(
+            user.unigram_len(),
+            before,
+            "回声候选上屏不应产生学习(等同 commit_raw)"
+        );
+        assert_eq!(s.last_word, None, "回声候选上屏后 last_word 应为 None");
     }
 
     #[test]

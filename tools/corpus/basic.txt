@@ -1,0 +1,81 @@
+# ---- 全拼单字 ----
+ni
+hao
+wo
+zhong
+guo
+ren
+ta
+shi
+de
+le
+
+# ---- 全拼词 ----
+nihao
+zhongguo
+renmin
+beijing
+shanghai
+gongzuo
+xuexi
+diannao
+pengyou
+mingtian
+
+# ---- 整句 ----
+woshizhongguoren
+woaibeijingtiananmen
+tianqibucuowomenchuquba
+jintiantianqihenhao
+
+# ---- 简拼 ----
+zgr
+nh
+bjdx
+zg
+rm
+bj
+sh
+gz
+xx
+dn
+
+# ---- 混合简拼 ----
+zhongguor
+nih
+beijdx
+zhonggr
+renm
+
+# ---- 歧义切分 ----
+xian
+fangan
+jinan
+changan
+geili
+tiananmen
+lingyu
+huange
+
+# ---- 半截或非法音节 ----
+zhon
+q
+x
+zh
+gu
+nia
+qiax
+xyza
+
+# ---- 超长串 ----
+woshizhongguorenwoaibeijingtiananmen
+nihaonihaonihaonihaonihaonihaonihao
+abcdefghijklmnopqrstuvwxyz
+zhongguozhongguozhongguozhongguo
+
+# ---- 纯字母但不成拼音 ----
+hello
+world
+qwerty
+asdfgh
+zzzz

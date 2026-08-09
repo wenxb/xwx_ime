@@ -1,51 +1,180 @@
-//! 候选词（candidate）数据结构。
+//! 候选词(candidate)数据结构。
 //!
-//! 候选词是输入法引擎的核心数据单元：一次按键处理的结果会产出一组候选词，
-//! 上屏的也是候选词。`Candidate` 同时承担两层含义：
+//! 候选词是输入法引擎的核心数据单元:一次按键处理的结果会产出一组候选词,
+//! 上屏的也是候选词。`Candidate` 同时承担两层含义:
 //!
-//! 1. **词典条目**：`dict.rs` 从词库查出的原始条目（此时 `score` 尚未计算，为 0.0）；
-//! 2. **引擎排序结果**：`lib.rs` 综合词频 + 语言模型打分后的最终候选
-//!    （此时 `score` 是最终得分，`freq` 保留原始词频供调试/回退使用）。
+//! 1. **词典条目**:`dict.rs` 从词库查出的原始条目(此时 `score` 尚未计算,为 0.0);
+//! 2. **引擎排序结果**:`lib.rs` 综合词频 + 语言模型打分后的最终候选
+//!    (此时 `score` 是最终得分,`freq` 保留原始词频供调试/回退使用)。
 
 use serde::{Deserialize, Serialize};
 
+/// 候选的拼写来源(B4:取代旧 `fuzzy: bool` 的两层划分)。
+///
+/// 排序按枚举声明序**严格分层**:精确层全部 → 模糊层全部 → 简拼层全部
+/// (`#[derive(PartialOrd, Ord)]` 的枚举比较就是声明序,`Exact < Fuzzy <
+/// Abbrev`)。层内仍按分排序,见 `lib.rs` 的 `sort_candidates`。
+///
+/// 不用「连续 credibility 混排」的理由:简拼候选动辄上千条(`xx` 命中
+/// 10,816),一旦允许与精确候选按分混排,全拼第一页立刻被冲垮
+/// (见 `docs/design-batch1.md` B4 与 `PLAN.md` 第三节)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SpellingKind {
+    /// 精确匹配(输入串就是该词的完整拼音)。
+    #[default]
+    Exact,
+    /// 模糊拼音匹配(经混淆对展开到达,带 `fuzzy_penalty` 扣分)。
+    Fuzzy,
+    /// 简拼/混合简拼匹配(`lookup_abbrev` / `lookup_mixed` 命中的整串候选)。
+    Abbrev,
+}
+
+/// 旧 `fuzzy` 布尔字段与新 `spelling` 字段之间的映射。
+///
+/// serde 的 `alias` 只改「从哪个键读」,不改值的形态(旧值是 bool、
+/// 新值是字符串),所以反序列化要走 `Candidate` 的自定义实现:先把整个
+/// JSON 对象读成中间表示(同时认 `spelling` 与 `fuzzy` 两个键),再组装。
+impl From<bool> for SpellingKind {
+    /// 旧语义:true → 模糊层,false → 精确层。
+    fn from(fuzzy: bool) -> Self {
+        if fuzzy {
+            SpellingKind::Fuzzy
+        } else {
+            SpellingKind::Exact
+        }
+    }
+}
+
+impl From<SpellingKind> for bool {
+    /// 旧布尔语义的投影:只有「经模糊拼音到达」才是 true;
+    /// 简拼不是模糊拼音(它走的是另一条更靠后的层),映射为 false。
+    fn from(kind: SpellingKind) -> Self {
+        kind == SpellingKind::Fuzzy
+    }
+}
+
+impl Serialize for SpellingKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(match self {
+            SpellingKind::Exact => "exact",
+            SpellingKind::Fuzzy => "fuzzy",
+            SpellingKind::Abbrev => "abbrev",
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for SpellingKind {
+    /// 只认新格式的字符串形态(`"exact"` / `"fuzzy"` / `"abbrev"`);
+    /// 旧格式的布尔值由 `Candidate` 的自定义反序列化在字段层接管
+    /// (见 `Candidate` 的 `Deserialize` 实现),不会走到这里。
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "exact" => Ok(SpellingKind::Exact),
+            "fuzzy" => Ok(SpellingKind::Fuzzy),
+            "abbrev" => Ok(SpellingKind::Abbrev),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["exact", "fuzzy", "abbrev"],
+            )),
+        }
+    }
+}
+
 /// 一个候选词。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Candidate {
-    /// 候选词文本，如 "你好"。
+    /// 候选词文本,如 "你好"。
     pub word: String,
-    /// 对应的拼音串。多音节时用空格分隔，如 "ni hao"。
+    /// 对应的拼音串。多音节时用空格分隔,如 "ni hao"。
     ///
     /// 约定与 `data/README.md` 中词库的 `pinyin` 字段格式一致。
     pub pinyin: String,
-    /// 最终得分（越大越靠前）。由引擎综合词频与语言模型打分得出；
+    /// 最终得分(越大越靠前)。由引擎综合词频与语言模型打分得出;
     /// 词典直接产出的条目此字段为 0.0。
     pub score: f32,
-    /// 原始词频（词典中记录的静态频率），用于展示与打分的回退基准。
+    /// 原始词频(词典中记录的静态频率),用于展示与打分的回退基准。
     pub freq: u64,
-    /// 该候选是否来自含模糊拼音边的解码路径(分层排序用)。
+    /// 该候选的拼写来源(分层排序用):精确 / 模糊拼音 / 简拼。
     ///
-    /// 精确匹配为 `false`;只要到达该候选的最优路径含任一模糊边
-    /// (一处不精确则整体不精确)即为 `true`。词典直接产出的条目与
-    /// `fallback_candidates` 联想路径(不经过 `expand_fuzzy`)恒为
-    /// `false`,因此 `fuzzy_enabled = false` 时全部候选都在精确层,
-    /// 分层退化为无操作。
+    /// 词典直接产出的条目与 `fallback_candidates` 联想路径(不经过
+    /// `expand_fuzzy`)恒为 `Exact`;简拼来源(`lookup_abbrev` /
+    /// `lookup_mixed`)由引擎回填 `Abbrev`。
     ///
-    /// 序列化向后兼容:旧数据没有此字段,反序列化按 `false`(精确)
-    /// 处理——这正是字段引入前的语义,旧候选天然全在精确层。
+    /// 序列化:新格式写为 `"spelling": "fuzzy"` 等字符串;读入时**同时**
+    /// 兼容旧格式的 `"fuzzy": true/false` 布尔字段与连字段都没有的更旧
+    /// 数据(缺省为 `Exact`)——两条旧路径都落回字段引入前的语义,
+    /// 旧候选天然全在精确层。兼容逻辑在 `Candidate` 的 `Deserialize`
+    /// 实现里(serde 的 `alias` 处理不了「旧值是 bool、新值是字符串」
+    /// 的形态差异)。
+    pub spelling: SpellingKind,
+    /// 该候选是否是「回声候选」(echo candidate)。
+    ///
+    /// 回声候选由 `lookup_candidates` 在**全场一个候选都没有**时追加:
+    /// `word` / `pinyin` 就是原始输入串本身,`freq = 0`,仅用来让候选
+    /// 列表非空(用户能看见"打了一串字母至少有个东西"),语义照搬
+    /// librime `echo_translator.cc` 的 `quality(-100)` 最低优先级项——
+    /// 只要任何真实候选存在就绝不出现。它**不是词**,上屏时按
+    /// `commit_raw` 处理(不学习、`last_word` 置 `None`)。
+    ///
+    /// 序列化向后兼容:旧数据没有此字段,反序列化按 `false`(真实候选)
+    /// 处理——这正是字段引入前的语义,旧候选全是真实候选。
     #[serde(default)]
-    pub fuzzy: bool,
+    pub echo: bool,
+}
+
+impl<'de> Deserialize<'de> for Candidate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // 中间表示:新键 `spelling`(字符串)与旧键 `fuzzy`(布尔)同时
+        // 可选;其余字段照常。`spelling` 优先于 `fuzzy`(新数据不可能带
+        // 旧键,但防御「新旧键同时出现且冲突」时以新键为准)。
+        #[derive(Deserialize)]
+        struct Repr {
+            word: String,
+            pinyin: String,
+            score: f32,
+            freq: u64,
+            #[serde(default)]
+            spelling: Option<SpellingKind>,
+            #[serde(default)]
+            fuzzy: Option<bool>,
+            #[serde(default)]
+            echo: bool,
+        }
+        let r = Repr::deserialize(deserializer)?;
+        Ok(Candidate {
+            word: r.word,
+            pinyin: r.pinyin,
+            score: r.score,
+            freq: r.freq,
+            spelling: r
+                .spelling
+                .or_else(|| r.fuzzy.map(SpellingKind::from))
+                .unwrap_or_default(),
+            echo: r.echo,
+        })
+    }
 }
 
 impl Candidate {
-    /// 构造一个新候选词（`score` 初始为 0.0，由引擎后续打分）。
+    /// 构造一个新候选词(`score` 初始为 0.0,由引擎后续打分)。
     pub fn new(word: impl Into<String>, pinyin: impl Into<String>, freq: u64) -> Self {
         Self {
             word: word.into(),
             pinyin: pinyin.into(),
             score: 0.0,
             freq,
-            fuzzy: false, // 词典条目是精确匹配;分层信息由引擎回填
+            spelling: SpellingKind::Exact, // 词典条目是精确匹配;分层信息由引擎回填
+            echo: false, // 词典条目是真实候选;回声标记由引擎追加时设置
         }
     }
 }
@@ -64,12 +193,70 @@ mod tests {
 
     #[test]
     fn serde_legacy_without_fuzzy_defaults_exact() {
-        // 字段引入前的旧格式没有 `fuzzy`:反序列化应回退为 false(精确层),
-        // 与引入前的语义一致(旧候选全是精确匹配)。
+        // 字段引入前的旧格式没有 `fuzzy`/`spelling`:反序列化应回退为
+        // Exact(精确层),与引入前的语义一致(旧候选全是精确匹配)。
         let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42}"#;
         let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
-        assert!(!c.fuzzy, "缺省 fuzzy 应为 false(精确层)");
+        assert_eq!(c.spelling, SpellingKind::Exact, "缺省 spelling 应为 Exact(精确层)");
         assert_eq!(c.word, "你好");
         assert_eq!(c.freq, 42);
+    }
+
+    #[test]
+    fn serde_legacy_fuzzy_true_maps_to_fuzzy_layer() {
+        // 旧格式 `fuzzy: true` 的候选是模糊层:新字段应反序列化为 Fuzzy,
+        // 不能掉回 Exact(否则旧数据里的模糊候选会被错误地提升进精确层)。
+        let legacy = r#"{"word":"里","pinyin":"li","score":-2.0,"freq":10,"fuzzy":true}"#;
+        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
+        assert_eq!(c.spelling, SpellingKind::Fuzzy, "旧 fuzzy:true 应映射为 Fuzzy");
+    }
+
+    #[test]
+    fn serde_legacy_fuzzy_false_maps_to_exact_layer() {
+        let legacy = r#"{"word":"你","pinyin":"ni","score":-1.0,"freq":100,"fuzzy":false}"#;
+        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
+        assert_eq!(c.spelling, SpellingKind::Exact, "旧 fuzzy:false 应映射为 Exact");
+    }
+
+    #[test]
+    fn serde_new_spelling_roundtrips_all_kinds() {
+        for (kind, tag) in [
+            (SpellingKind::Exact, "exact"),
+            (SpellingKind::Fuzzy, "fuzzy"),
+            (SpellingKind::Abbrev, "abbrev"),
+        ] {
+            let json = format!(
+                r#"{{"word":"词","pinyin":"ci","score":0.0,"freq":1,"spelling":"{tag}"}}"#
+            );
+            let c: Candidate = serde_json::from_str(&json).expect("新格式反序列化不应失败");
+            assert_eq!(c.spelling, kind);
+        }
+    }
+
+    #[test]
+    fn serde_legacy_without_echo_defaults_real() {
+        // 字段引入前的旧格式没有 `echo`:反序列化应回退为 false(真实候选),
+        // 与引入前的语义一致(旧候选全是真实候选,没有回声概念)。
+        let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42,"fuzzy":false}"#;
+        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
+        assert!(!c.echo, "缺省 echo 应为 false(真实候选)");
+        assert_eq!(c.word, "你好");
+        assert_eq!(c.freq, 42);
+    }
+
+    #[test]
+    fn serde_spelling_wins_over_conflicting_legacy_fuzzy() {
+        // 防御:新旧键同时出现且冲突时以新键为准(手写/迁移中的数据)。
+        let mixed = r#"{"word":"词","pinyin":"ci","score":0.0,"freq":1,"fuzzy":true,"spelling":"exact"}"#;
+        let c: Candidate = serde_json::from_str(mixed).expect("混合格式反序列化不应失败");
+        assert_eq!(c.spelling, SpellingKind::Exact, "新键 spelling 应优先");
+    }
+
+    #[test]
+    fn spelling_kind_declaration_order_is_layer_order() {
+        // 严格分层依赖枚举声明序:Exact < Fuzzy < Abbrev(排序时精确层在
+        // 最前)。若有人调整声明顺序,这个测试会先红。
+        assert!(SpellingKind::Exact < SpellingKind::Fuzzy);
+        assert!(SpellingKind::Fuzzy < SpellingKind::Abbrev);
     }
 }

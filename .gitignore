@@ -5,6 +5,9 @@
 # 词库二进制：scripts/dict_to_bin.py 从 SQLite/Rime 构建而来，应通过
 # `just install` / 发布物分发，而不是进 git。
 data/dict.bin
+# 简拼(首字母)副索引:scripts/abbrev_to_bin.py 从 dict.bin 生成(约 69 MB),
+# 与 dict.bin 同等对待,通过 `just install` / 发布物分发,不进 git。
+data/abbrev.bin
 data/*.sqlite3
 
 # 语言模型（文本或未来的 mmap 二进制格式），由语料训练生成
@@ -28,3 +31,10 @@ scripts/eval_samples.jsonl
 *.swo
 *~
 .DS_Store
+# ---- rime oracle (对照工具) ----
+tools/rime_oracle/.rime_user/
+tools/rime_oracle/rime_oracle
+
+# 简拼路线 spike 的原型产物(69MB),用完即弃、可由 spike.py 重新生成。
+# spike 的 .py 脚本保留入库:它们是「为什么选路线 (c)」的实测证据。
+tools/spike_abbrev/*.bin

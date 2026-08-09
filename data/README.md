@@ -58,6 +58,52 @@ Rime .dict.yaml → build_dict.py → dict.sqlite3 → dict_to_bin.py → dict.b
   逐字补全（如 `召` shao=1 / zhao=128448 → 取 zhao），查不到读音的
   字对应词条跳过。实测 98 万条 tencent 全部可注音进库。
 
+## 一点五、简拼副索引 abbrev.bin(运行时只读二进制)
+
+简拼(`zgr` → 中国人)的存储层,路线 (c)(见
+`docs/design-batch1.md`「B3 spike 结论」)。由 `scripts/abbrev_to_bin.py`
+**只读** `dict.bin` 生成,产物是**独立文件 `data/abbrev.bin`**(不改动主索引)。
+
+key 是「拼音各音节首字母串」(`"zhong guo ren"` → `"zgr"`);每个词条只进
+一个首字母 key,因此关联总数恒等于词条数(实测 1.00×,无组合爆炸)。
+`MmapDict::with_abbrev` 装配后,`lookup_abbrev` 对纯简拼直接二分这张表。
+
+### 二进制布局(v1,little-endian)
+
+与 `dict.bin` v1 **完全同构**:同样的 52 字节头、12 字节索引记录、词条区
+按 freq 降序。差别只有两处:魔数换成 `XWXABR1\0`,词条区每条多带一个
+「全拼」字段(查出的词要回送打分流程,必须带回全拼)。
+
+```text
+偏移      内容
+0         magic: "XWXABR1\0"(8 字节)
+8         u32 LE: 版本号(当前 1)
+12        u64 LE: 首字母 key 数 K
+20        u64 LE: 关联总数(== 词条数)
+28        u64 LE: 首字母索引区偏移(K × 12 字节)
+36        u64 LE: 首字母字符串区偏移
+44        u64 LE: 词条区偏移
+
+首字母索引区(K 条,按首字母串字节序排序 → 二分查找):
+  u32 LE 首字母串偏移(相对字符串区)+ u16 LE 长度
+  + u32 LE 词块偏移(相对词条区)+ u16 LE 词块长度
+
+词条区(每首字母 key 一个块,块内按 freq 降序):
+  word_len u8 + word UTF-8 + pinyin_len u8 + pinyin UTF-8 + freq u32 LE
+```
+
+构建:
+
+```sh
+python3 scripts/abbrev_to_bin.py            # data/dict.bin → data/abbrev.bin
+python3 scripts/abbrev_to_bin.py in.bin out.bin   # 自定义路径
+```
+
+实测(rime-ice 全量词表):唯一首字母 key 569,250 个,产物 68.9 MB
+(主索引的 0.90×),构建约 16s。混合简拼(`zhongguor`)不走这张表,
+由 `MmapDict::lookup_mixed` 用「音节切分 + 空格拼回主索引前缀」实现,
+见 `docs/design-batch1.md`「设计更正」。
+
 ## 二、中间格式 dict.sqlite3（构建/迁移用）
 
 引擎运行时不使用，仅作为 `dict_to_bin.py` 的输入中间格式

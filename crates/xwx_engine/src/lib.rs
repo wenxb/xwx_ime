@@ -29,7 +29,7 @@ pub mod session;
 pub mod user_lm;
 pub mod wanxiang;
 
-pub use candidate::Candidate;
+pub use candidate::{Candidate, SpellingKind};
 pub use corrector::{expand_fuzzy, expand_fuzzy_scored, ConfusionPair, COMMON_CONFUSION_PAIRS};
 pub use dict::{DictError, DictStore, Dictionary, MmapDict, SqliteDict};
 pub use lm::{BigramLM, LanguageModel, LmContext, LmError, LmState, LmStore};
@@ -116,6 +116,11 @@ struct LatticeEdge {
 }
 
 /// beam 里一条部分路径。
+///
+/// Block A 之后 `lookup_candidates` 只消费「是否为空」(决定走不走
+/// 兜底),字段本体仅供 `decode_paths`(测试/调试)读取,故 lib 构建
+/// 下标记 `allow(dead_code)`。
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug)]
 struct BeamPath {
     /// 累计分 = Σ(log10(freq/总词频) + lm_weight × log10 P(word | 路径上文))。
@@ -123,14 +128,6 @@ struct BeamPath {
     /// 两项同量纲（都是对数概率，负值）才可加：词频项对数化后，短语
     /// 不再被百万级原始词频淹没（第 4 步量级失衡修复的核心）。
     score: f32,
-    /// 沿路径累计的模糊拼音惩罚(各边 `fuzzy_penalty` 之和,非负)。
-    ///
-    /// `> 0` 说明路径含模糊边,用于把「路径是否精确」传到候选分层:
-    /// 路径只要含任一模糊边就整体归模糊层(一处不精确则整体不精确)。
-    /// 它与 `score` 已扣除的惩罚是同一份量,这里单独留一份是为了在
-    /// 排序处恢复「是否含模糊边」这一布尔信息(penalty 已被揉进 score,
-    /// 无法事后还原)。
-    fuzzy_penalty: f32,
     /// 路径已选词的顺序。
     words: Vec<WordSpot>,
 }
@@ -141,10 +138,9 @@ struct BeamPath {
 /// 扩展只 push 一个节点（O(1) 分配），结束时再沿父链重建词序。
 #[derive(Debug)]
 struct BeamNode {
-    /// 累计分 = Σ(log10(freq/总词频) + lm_weight × log10 P(word | 路径上文))。
+    /// 累计分 = Σ(log10(freq/总词频) + lm_weight × log10 P(word | 路径上文))
+    ///          - Σ(各边 fuzzy_penalty)(模糊惩罚已揉进分数,非负)。
     score: f32,
-    /// 沿路径累计的模糊拼音惩罚(各边 `fuzzy_penalty` 之和,非负)。
-    fuzzy_penalty: f32,
     /// 沿路径推进的 LM 状态。
     state: LmState,
     /// 本步选的格边（起点位置, 桶内下标）；根节点为 `None`。
@@ -156,14 +152,12 @@ struct BeamNode {
     parent: Option<usize>,
 }
 
-/// 路径里一个词的位置。
+/// 路径里一个词的位置(字段仅供 `decode_paths` 测试/调试读取)。
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug)]
 struct WordSpot {
     word: String,
     pinyin: String,
-    freq: u64,
-    /// 到达该词的路径是否含模糊边(由所在路径的 `fuzzy_penalty > 0` 推出)。
-    fuzzy: bool,
 }
 
 /// 一条完整解码路径（beam 结果，测试/调试用）。
@@ -320,22 +314,33 @@ impl ImeEngine {
         }
     }
 
-    /// 核心查询管线：给定拼音串，返回排序后的候选列表。
+    /// 核心查询管线:给定拼音串,返回排序后的候选列表。
     ///
-    /// 做法（第 2b 步：切分格 + beam search 解码，替代旧「穷举切分 +
-    /// 候选孤立打分」）：
+    /// 做法(Block A 重构后:候选来源与整句解码解耦):
     ///
-    /// 1. 构建切分格：[`Self::build_lattice`] 从每个位置枚举音节链，
-    ///    每条链的拼音串查词库得「词边」（含模糊拼音变体边），
-    ///    不再枚举全部切分；
-    /// 2. beam search：[`Self::decode_beam`] 沿位置推进，每个位置只保留
-    ///    top-K 条部分路径，LM 状态**沿路径传递**（`LanguageModel::score`
-    ///    返回的新状态就是给路径分叉用的）；
-    /// 3. 串尾的完整路径按总分降序；每个候选（词）的得分 = 包含它的
-    ///    最优完整路径的总分——「西安」和「先」从此是两条整句路径的
-    ///    竞争，而不是各自从初始上下文独立起算；
-    /// 4. 整串无法完整解码（还没打完，如 `"nih"`、`"z"`）时走
+    /// 1. 构建切分格:[`Self::build_lattice`] 从每个位置枚举音节链,
+    ///    每条链的拼音串查词库得「词边」(含模糊拼音变体边),
+    ///    不再枚举全部切分;
+    /// 2. beam search:[`Self::decode_beam_with_lattice`] 沿位置推进,
+    ///    每个位置只保留 top-K 条部分路径,LM 状态**沿路径传递**——
+    ///    beam 的职责只剩「算出完整路径是否存在」(它同时是兜底分支的
+    ///    判定信号),不再充当候选来源(旧实现候选被 BEAM_WIDTH 钳死);
+    /// 3. 候选收集(A1+A2):候选 = `lattice[0]` 上的**全部**词边——
+    ///    只取起始于位置 0 的词(旧实现把路径上所有词位都列为候选,
+    ///    导致 `nihao` 里混进只覆盖 `hao` 的「好/号/毫」),且不被
+    ///    beam 宽度钳制(词典查询在格构建时已完成,这里零新增查询);
+    /// 4. 打分口径(A3):候选分 = **「以该候选开头的最优完整路径分」**
+    ///    = 边自身得分 + 从 `edge.end` 到串尾的最优补全分,补全分由
+    ///    一次后向 DP 在格上算出(见 [`Self::backward_completion`])。
+    ///    这样「覆盖整串的词」(你好)与「只覆盖前缀的词」(你)落在
+    ///    同一量纲上,前者自然胜出;
+    /// 5. 整串无法完整解码(还没打完,如 `"nih"`、`"z"`)时走
     ///    [`Self::fallback_candidates`] 的边打字边联想兜底。
+    ///
+    /// 两条路径(正常 / 兜底)末尾都会再合并一次简拼来源
+    /// ([`Self::abbrev_candidates`]):简拼候选本来就覆盖整个输入串
+    /// (用户打前缀、拿到整词),不进 lattice、不拆成边,按
+    /// [`SpellingKind::Abbrev`] 排进候选列表的简拼层。
     pub fn lookup_candidates(
         &self,
         pinyin: &str,
@@ -345,52 +350,229 @@ impl ImeEngine {
             return Ok(Vec::new());
         }
 
-        let paths = self.decode_beam(pinyin, ctx, BEAM_WIDTH)?;
+        let lattice = self.build_lattice(pinyin)?;
+        let paths = self.decode_beam_with_lattice(pinyin, ctx, BEAM_WIDTH, &lattice)?;
         if paths.is_empty() {
-            // 整串还不能完整解码（首音节没打完 / 停在半音节）：兜底联想，
-            // 否则 IBus 层会在打字中途发 HideLookupTable，候选窗闪一下就没。
-            return self.fallback_candidates(pinyin, ctx);
+            // 整串还不能完整解码(首音节没打完 / 停在半音节):兜底联想,
+            // 否则 IBus 层会在打字中途发 HideLookupTable,候选窗闪一下就没。
+            let mut ranked = self.fallback_candidates(pinyin, ctx)?;
+            // 简拼来源合并(2):简拼候选覆盖整串,本身就是整串候选。
+            // 注意:必须在 fallback 截断**之后**合并——fallback 自己
+            // 已按 MAX_CANDIDATES 截断,若先合并再截断,简拼层(在排序
+            // 最末)会整体被截掉。合并后重排截断,简拼层得以保留
+            // (它只与同样排在末尾的兜底长尾竞争最后的候选位)。
+            ranked.extend(self.abbrev_candidates(pinyin, ctx, &ranked)?);
+            sort_candidates(&mut ranked);
+            ranked.truncate(MAX_CANDIDATES);
+            if ranked.is_empty() {
+                ranked.push(Self::echo_candidate(pinyin));
+            }
+            return Ok(ranked);
         }
 
-        // 完整路径 → 候选：一个词的分 = 包含它的最优完整路径的总分。
-        // 同一个 (word, pinyin) 可以出现在多条路径的不同位置（如
-        // `"yi yi"` 里「一」出现两次），取它们各自的路径分里最高的。
-        let mut best: HashMap<(String, String), (f32, u64, bool)> = HashMap::new();
-        for path in &paths {
-            for spot in &path.words {
-                let entry = best
-                    .entry((spot.word.clone(), spot.pinyin.clone()))
-                    .or_insert_with(|| (f32::NEG_INFINITY, spot.freq, spot.fuzzy));
-                if path.score > entry.0 {
-                    *entry = (path.score, spot.freq, spot.fuzzy);
-                }
+        // A3 打分:候选分 = 以该候选开头的最优完整路径分。
+        // 先跑后向 DP 拿「每个位置到串尾的最优补全分」,再给 lattice[0]
+        // 上每条边打分。
+        let best_suffix = self.backward_completion(pinyin, ctx, &lattice)?;
+        let total_freq = self.dict.total_freq()?;
+        let log10_total = (total_freq as f64).log10();
+
+        // 首词(位置 0)的 LM 状态由真实上文 ctx 给出,这是精确的
+        // (首词的前文就是已上屏文本,不存在近似问题)。
+        let initial = self.lm.state_from_context(ctx);
+
+        // 同一 (word, pinyin) 可能由多条边给出(不同音节链切到同一拼音
+        // key,或模糊展开键与精确键撞车),保留得分最高的一条。
+        let mut best: HashMap<(String, String), Candidate> = HashMap::new();
+        for edge in &lattice[0] {
+            let (logp, _) = self.lm.score(&initial, &edge.word);
+            let dict_logp = if total_freq > 0 {
+                ((edge.freq.max(1) as f64).log10() - log10_total) as f32
+            } else {
+                0.0
+            };
+            // 边自身得分与前向 beam 完全同式;补全分取自后向 DP。
+            // 边终点必有完整补全:beam 已确认整串可解,且任何有出边的
+            // 位置都能沿格走到串尾(边严格前进、终点不超串长),
+            // 故 best_suffix[edge.end] 必为有限值。
+            let score = dict_logp + logp * self.lm_weight - edge.fuzzy_penalty
+                + best_suffix[edge.end];
+            let cand = Candidate {
+                word: edge.word.clone(),
+                pinyin: edge.pinyin.clone(),
+                score,
+                freq: edge.freq, // 词典原始频率,供展示/回退
+                // 该边自身是否模糊(B4 起为逐边判定的分层来源)。
+                spelling: if edge.fuzzy_penalty > 0.0 {
+                    SpellingKind::Fuzzy
+                } else {
+                    SpellingKind::Exact
+                },
+                echo: false,     // 解码出的都是真实候选
+            };
+            let entry = best
+                .entry((cand.word.clone(), cand.pinyin.clone()))
+                .or_insert_with(|| cand.clone());
+            if cand.score > entry.score {
+                *entry = cand;
             }
         }
 
-        // 不变量:路径的 fuzzy_penalty > 0 当且仅当它产出的词都被标为模糊。
-        // (重构时若把 fuzzy 标记改由别的途径推出,这里能立刻发现漂移。)
-        for path in &paths {
-            debug_assert_eq!(
-                path.fuzzy_penalty > 0.0,
-                path.words.iter().any(|w| w.fuzzy),
-                "fuzzy 标记与路径累计惩罚不一致"
-            );
-        }
-
-        let mut ranked: Vec<Candidate> = best
-            .into_iter()
-            .map(|((word, pinyin), (score, freq, fuzzy))| Candidate {
-                word,
-                pinyin,
-                score,
-                freq, // 词典原始频率，供展示/回退（相比旧实现不再丢 freq）
-                fuzzy, // 最优路径是否含模糊边(分层排序用)
-            })
-            .collect();
-
+        let mut ranked: Vec<Candidate> = best.into_values().collect();
+        // 简拼来源合并(2):已在精确/模糊层出现过的 (word, pinyin)
+        // 不再进简拼层(`abbrev_candidates` 内部去重)。
+        ranked.extend(self.abbrev_candidates(pinyin, ctx, &ranked)?);
         sort_candidates(&mut ranked);
         ranked.truncate(MAX_CANDIDATES);
+        // 回声候选兜底(公开 API 后置条件:非空输入 ⇒ 候选非空):
+        // 整串连兜底联想都解不出任何候选时(如不支持的简拼),追加一个
+        // word = 原始输入串的回声候选,让用户至少看见自己打的东西,
+        // 而不是 IBus 层 HideLookupTable 后"输入法像死了"。语义照搬
+        // librime echo_translator:仅当全场一个候选都没有时才冒头,
+        // 绝不污染正常候选列表。必须在 truncate 之后追加,才不会被截掉。
+        if ranked.is_empty() && !pinyin.is_empty() {
+            ranked.push(Self::echo_candidate(pinyin));
+        }
         Ok(ranked)
+    }
+
+    /// 后向 DP(A3):`result[pos]` = 从 `pos` 到串尾的最优补全分
+    /// (log10 域,越大越好);不可达串尾的位置为 `f32::NEG_INFINITY`。
+    ///
+    /// 递推(从串尾往前,与 [`Self::decode_beam_with_lattice`] 的前向
+    /// beam 对称):`result[pos] = max over lattice[pos] 的边 e of
+    /// (e 的词频项 + lm_weight × LM 近似分 - e.fuzzy_penalty + result[e.end])`,
+    /// 边界 `result[len] = 0`(空后缀代价为零)。每条边只处理一次,
+    /// 复杂度 O(边数)。
+    ///
+    /// **刻意的近似,不是 bug**:LM 是左到右的(打分需要左侧上下文),
+    /// 后向 DP 在位置 `pos` 拿不到「从开头走到这里」的精确 LM 状态,
+    /// 只能从「无上文」状态起评每条边的 LM 分。bigram 下等价于每条边
+    /// 只拿 unigram/backoff 分、拿不到 bigram 接续分。这个近似
+    /// **只影响候选之间的相对排序**(所有候选的补全分用同一口径,
+    /// 比较仍然公平),**不影响 beam 选出的整句首选**——首选由前向
+    /// beam 用精确 LM 状态决定,不经过这里。若未来要消除近似,只能
+    /// 把后向 DP 换成「从 beam 幸存路径反查」(回到被 BEAM_WIDTH 钳死
+    /// 的老路)或引入双向 LM,两者都不值得。
+    fn backward_completion(
+        &self,
+        pinyin: &str,
+        ctx: &LmContext<'_>,
+        lattice: &[Vec<LatticeEdge>],
+    ) -> Result<Vec<f32>, EngineError> {
+        let len = pinyin.len();
+        let mut result = vec![f32::NEG_INFINITY; len + 1];
+        result[len] = 0.0;
+        let total_freq = self.dict.total_freq()?;
+        let log10_total = (total_freq as f64).log10();
+        // LM 近似的起点状态:无上文。`ctx` 仅供首词(位置 0)精确打分,
+        // 后缀位置统一用 initial(见函数级注释的近似说明)。
+        let _ = ctx;
+        let initial = self.lm.initial_state();
+
+        for pos in (0..len).rev() {
+            for edge in &lattice[pos] {
+                if !result[edge.end].is_finite() {
+                    continue; // 该边到不了串尾,不构成完整补全
+                }
+                let (logp, _) = self.lm.score(&initial, &edge.word);
+                let dict_logp = if total_freq > 0 {
+                    ((edge.freq.max(1) as f64).log10() - log10_total) as f32
+                } else {
+                    0.0
+                };
+                let score = dict_logp + logp * self.lm_weight - edge.fuzzy_penalty
+                    + result[edge.end];
+                if score > result[pos] {
+                    result[pos] = score;
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// 构造一个回声候选:word / pinyin 都是原始输入串本身,freq = 0。
+    ///
+    /// 仅在全场一个真实候选都没有时由 `lookup_candidates` 追加(照搬
+    /// librime echo_translator 的最低优先级兜底项),让候选列表非空。
+    fn echo_candidate(pinyin: &str) -> Candidate {
+        Candidate {
+            word: pinyin.to_string(),
+            pinyin: pinyin.to_string(),
+            score: 0.0,
+            freq: 0,
+            spelling: SpellingKind::Exact,
+            echo: true,
+        }
+    }
+
+    /// 简拼来源候选(2):`lookup_abbrev` / `lookup_mixed` 命中的整串词。
+    ///
+    /// 打分口径与 [`Self::fallback_candidates`] 完全同式(同一量纲):
+    /// `log10(freq/总词频) + lm_weight × LM(ctx) 分`——简拼候选覆盖
+    /// 整串,只打一次词频项与 LM 项,与「一个词覆盖全串」的兜底词同权。
+    ///
+    /// 去重:已在 `existing`(精确/模糊/兜底层)出现过的 `(word, pinyin)`
+    /// 不再进简拼层——同一词条只能属于一个层,靠前层优先(精确 > 模糊
+    /// > 简拼的结构性保证因此成立,见 `sort_candidates`)。
+    ///
+    /// 优雅退化:副索引缺失时 `lookup_abbrev` 返回空、`lookup_mixed`
+    /// 靠编译期静态音节表照常工作(见 `MmapDict::lookup_mixed` 注释),
+    /// 两条路径都不 panic;`DictStore::Sqlite`(测试/内存词库)没有
+    /// 简拼能力,直接返回空。
+    ///
+    /// 调用方约定:本函数只在 `existing` 排序截断**之前**合并,
+    /// 否则截断后的 100 条会丢掉简拼层(merge-then-truncate,
+    /// 见 `lookup_candidates` 两条路径的合并点)。
+    fn abbrev_candidates(
+        &self,
+        pinyin: &str,
+        ctx: &LmContext<'_>,
+        existing: &[Candidate],
+    ) -> Result<Vec<Candidate>, EngineError> {
+        let raw: Vec<Candidate> = match &self.dict {
+            DictStore::Mmap(d) => {
+                let mut v = d.lookup_abbrev(pinyin)?;
+                v.extend(d.lookup_mixed(pinyin)?);
+                v
+            }
+            DictStore::Sqlite(_) => Vec::new(),
+        };
+        if raw.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let total_freq = self.dict.total_freq()?;
+        let log10_total = (total_freq as f64).log10();
+        let state = self.lm.state_from_context(ctx);
+        let seen: std::collections::HashSet<(&str, &str)> = existing
+            .iter()
+            .map(|c| (c.word.as_str(), c.pinyin.as_str()))
+            .collect();
+
+        let mut best: HashMap<(String, String), Candidate> = HashMap::new();
+        for mut c in raw {
+            if seen.contains(&(c.word.as_str(), c.pinyin.as_str())) {
+                continue; // 已在更靠前的层出现:同词不进简拼层
+            }
+            let (lm_score, _) = self.lm.score(&state, c.word.as_str());
+            let dict_logp = if total_freq > 0 {
+                ((c.freq.max(1) as f64).log10() - log10_total) as f32
+            } else {
+                0.0
+            };
+            c.score = dict_logp + lm_score * self.lm_weight;
+            c.spelling = SpellingKind::Abbrev;
+            // lookup_abbrev(前缀命中多个简拼 key)与 lookup_mixed(多种
+            // 切法)都可能重复命中同一词,简拼层内部仍按 (word, pinyin) 去重。
+            let entry = best
+                .entry((c.word.clone(), c.pinyin.clone()))
+                .or_insert_with(|| c.clone());
+            if c.score > entry.score {
+                *entry = c;
+            }
+        }
+        Ok(best.into_values().collect())
     }
 
     /// 构建切分格：`result[start]` = 从 `start` 出发的所有词边。
@@ -491,6 +673,7 @@ impl ImeEngine {
     /// 每个位置 `pos` 的路径桶在开始扩展前已收齐所有入边（入边只来自
     /// 更早的位置），先剪到 top-K 再向前扩展——这是「beam 即剪枝」的
     /// 落点：LM 状态沿路径传递，被剪路径的状态随之丢弃。
+    #[cfg_attr(not(test), allow(dead_code))] // 只被 decode_paths(测试)调用
     fn decode_beam(
         &self,
         pinyin: &str,
@@ -500,7 +683,7 @@ impl ImeEngine {
         if pinyin.is_empty() {
             return Ok(Vec::new());
         }
-        self.decode_beam_with_lattice(pinyin, ctx, k, self.build_lattice(pinyin)?)
+        self.decode_beam_with_lattice(pinyin, ctx, k, &self.build_lattice(pinyin)?)
     }
 
     /// 与 [`Self::decode_beam`] 相同，但格子由调用方传入（分层便于
@@ -510,7 +693,7 @@ impl ImeEngine {
         pinyin: &str,
         ctx: &LmContext<'_>,
         k: usize,
-        lattice: Vec<Vec<LatticeEdge>>,
+        lattice: &[Vec<LatticeEdge>],
     ) -> Result<Vec<BeamPath>, EngineError> {
         let len = pinyin.len();
         let mut arena: Vec<BeamNode> = Vec::with_capacity((len + 1) * k);
@@ -521,7 +704,6 @@ impl ImeEngine {
         let log10_total = (total_freq as f64).log10();
         arena.push(BeamNode {
             score: 0.0,
-            fuzzy_penalty: 0.0,
             state: self.lm.state_from_context(ctx),
             edge: None,
             parent: None,
@@ -549,8 +731,6 @@ impl ImeEngine {
                         // 模糊边减去累计 -log10(weight),多处混淆叠加累加。
                         score: arena[node_idx].score + dict_logp + logp * self.lm_weight
                             - edge.fuzzy_penalty,
-                        // 沿路径累计惩罚:排序处据此判断路径是否含模糊边。
-                        fuzzy_penalty: arena[node_idx].fuzzy_penalty + edge.fuzzy_penalty,
                         state: next_state,
                         edge: Some((pos, slot)),
                         parent: Some(node_idx),
@@ -572,11 +752,6 @@ impl ImeEngine {
         // 重建完整路径：沿 parent 走回根，反转成词序。
         let mut paths: Vec<BeamPath> = Vec::with_capacity(beams[len].len());
         for &idx in &beams[len] {
-            // 路径只要含任一模糊边(累计惩罚 > 0)就整体归模糊层:
-            // 「一处不精确则整体不精确」。判断用累计惩罚而非逐边布尔或,
-            // 两者等价(惩罚非负,和 > 0 当且仅当至少一边 > 0),而惩罚
-            // 本就沿 arena 累计,这里零额外开销。
-            let has_fuzzy = arena[idx].fuzzy_penalty > 0.0;
             let mut words: Vec<WordSpot> = Vec::new();
             let mut cur = Some(idx);
             while let Some(i) = cur {
@@ -585,8 +760,6 @@ impl ImeEngine {
                     words.push(WordSpot {
                         word: e.word.clone(),
                         pinyin: e.pinyin.clone(),
-                        freq: e.freq,
-                        fuzzy: has_fuzzy,
                     });
                 }
                 cur = arena[i].parent;
@@ -594,7 +767,6 @@ impl ImeEngine {
             words.reverse();
             paths.push(BeamPath {
                 score: arena[idx].score,
-                fuzzy_penalty: arena[idx].fuzzy_penalty,
                 words,
             });
         }
@@ -692,21 +864,23 @@ impl ImeEngine {
     }
 }
 
-/// 候选按最终排序规则排好（分降序、同分频次降序、再按词/拼音），
-/// 保证输出确定性与亲和性（旧实现同分时顺序任意，依赖 HashMap 序）。
-/// 首层 key 是精确/模糊分层:精确匹配整体优先,详见函数内注释。
+/// 候选按最终排序规则排好(分降序、同分频次降序、再按词/拼音),
+/// 保证输出确定性与亲和性(旧实现同分时顺序任意,依赖 HashMap 序)。
+/// 首层 key 是拼写来源分层(B4):精确层全部 → 模糊层全部 → 简拼层
+/// 全部,详见函数内注释。
 fn sort_candidates(ranked: &mut [Candidate]) {
-    // 分层排序:精确匹配(fuzzy == false)整体优先,模糊匹配作为补充
-    // 排在后面;层内仍按分降序。理由:模糊惩罚是固定量,而词频差在
-    // 对数域可以任意大,两者同池按分比较时高频模糊词总能压过低频
-    // 精确词(实测 lan:然 734万 > 蓝 43万)。分层让「精确优先」成为
-    // 结构性保证而非数值巧合;层内排序不变,`fuzzy_penalty` 在同为
-    // 模糊层的候选之间仍起区分作用(n/l 0.8 排在 s/x 0.2 之前)。
-    // fuzzy_enabled = false 时所有候选 fuzzy 都是 false,首层 key
-    // 全部相等,排序与分层前逐位一致。
+    // 严格分层排序:精确匹配整体优先,模糊匹配其次,简拼最后;层内
+    // 仍按分降序。理由:模糊惩罚与词频差同池按分比较时高频模糊词总能
+    // 压过低频精确词(实测 lan:然 734万 > 蓝 43万);简拼候选动辄
+    // 上千条(`xx` 命中 10,816),一旦允许与精确候选按分混排,全拼
+    // 第一页立刻被冲垮。分层让「精确 > 模糊 > 简拼」成为结构性保证
+    // 而非数值巧合;层内排序不变,`fuzzy_penalty` 在同为模糊层的候选
+    // 之间仍起区分作用(n/l 0.8 排在 s/x 0.2 之前)。
+    // fuzzy_enabled = false 且无简拼来源时所有候选都是 Exact,首层
+    // key 全部相等,排序与分层前逐位一致。
     ranked.sort_by(|a, b| {
-        a.fuzzy
-            .cmp(&b.fuzzy)
+        a.spelling
+            .cmp(&b.spelling)
             .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal))
             .then_with(|| b.freq.cmp(&a.freq))
             .then_with(|| a.word.cmp(&b.word))
@@ -886,9 +1060,16 @@ mod tests {
             .lookup_candidates("nihao", &LmContext::empty())
             .expect("查询失败");
         assert_eq!(cands[0].word, "你好", "整串最优路径的短语应排第一");
-        // 单字候选仍要保留（用户可能只想上屏一个字）
+        // 单字候选仍要保留(用户可能只想上屏一个字)。
+        // Block A 起候选只含起始于位置 0 的词:「你」(ni,位置 0)保留;
+        // 「好」只覆盖后段音节 hao(位置 2),不再作为候选出现——
+        // 输入 nihao 时用户无法有意义地选中「好」(语义同 librime:
+        // 其同输入候选全部起始于位置 0)。
         assert!(cands.iter().any(|c| c.word == "你"), "单字「你」应在候选里");
-        assert!(cands.iter().any(|c| c.word == "好"), "单字「好」应在候选里");
+        assert!(
+            !cands.iter().any(|c| c.word == "好"),
+            "只覆盖后段音节的「好」不应出现在 nihao 的候选里: {cands:?}"
+        );
     }
 
     /// 整句解码优于逐词贪心：k=1（贪心）在第一个位置选了局部最优的
@@ -918,12 +1099,22 @@ mod tests {
         assert_eq!(beam[0].words, vec!["泥", "门"], "beam 应找到全局最优");
         assert!(beam[0].score > greedy[0].score, "整句解码分应更高");
 
-        // 可见面：候选排序也应由整条路径决定——「泥」的候选分来自
-        // 路径[泥,门]（269.8），压过路径[你,门]（85.2）里的「你」。
+        // 可见面:候选排序由「以该候选开头的最优完整路径分」决定
+        // (Block A)。「泥」的候选分 = 泥自身 + 补全「门」,「你」的
+        // 候选分 = 你自身 + 补全「门」;两者后缀相同,而补全分由后向
+        // DP 在无上文 LM 状态下近似(**看不到**「泥→门」的 bigram,
+        // 只能拿「门」的 unigram 分——近似是刻意的,见
+        // `backward_completion` 注释)。因此候选排序不再继承 beam 的
+        // bigram 增益:「你」(unigram 100)排在「泥」(unigram 10)前。
+        // 整句首选仍由前向 beam 的精确 bigram 状态决定(上面的
+        // beam[0] == [泥,门]),两条口径互不干扰。
         let cands = engine
             .lookup_candidates("nimen", &ctx)
             .expect("查询失败");
-        assert_eq!(cands[0].word, "泥", "最优路径里的词应排最前");
+        assert_eq!(
+            cands[0].word, "你",
+            "候选排序用近似 LM(无 bigram 增益):unigram 更高的「你」应排最前"
+        );
     }
 
     /// 上文能改变整条路径的选择：无上文时 [你,门] 最优；
@@ -1255,15 +1446,15 @@ mod tests {
 
         let (sl, sr) = (cands[pl].score, cands[pr].score);
         assert!(sr > sl, "然的分数确实更高(词频差压过惩罚),分层前它排前面");
-        assert!(!cands[pl].fuzzy, "蓝是精确匹配");
-        assert!(cands[pr].fuzzy, "然是模糊匹配(r/l)");
+        assert_eq!(cands[pl].spelling, SpellingKind::Exact, "蓝是精确匹配");
+        assert_eq!(cands[pr].spelling, SpellingKind::Fuzzy, "然是模糊匹配(r/l)");
 
         // 层间边界:所有精确候选都在所有模糊候选之前
-        let first_fuzzy = cands.iter().position(|c| c.fuzzy);
+        let first_fuzzy = cands.iter().position(|c| c.spelling == SpellingKind::Fuzzy);
         if let Some(ff) = first_fuzzy {
             assert!(
-                cands[..ff].iter().all(|c| !c.fuzzy),
-                "精确层内不应混入模糊候选: {cands:?}"
+                cands[..ff].iter().all(|c| c.spelling == SpellingKind::Exact),
+                "精确层内不应混入模糊/简拼候选: {cands:?}"
             );
         }
     }
@@ -1295,7 +1486,9 @@ mod tests {
         );
         assert!(pe < ph && pe < pl, "精确层整体在前: {cands:?}");
         assert!(ph < pl, "模糊层内高 weight 的应在前: {cands:?}");
-        assert!(cands[ph].fuzzy && cands[pl].fuzzy && !cands[pe].fuzzy);
+        assert_eq!(cands[ph].spelling, SpellingKind::Fuzzy);
+        assert_eq!(cands[pl].spelling, SpellingKind::Fuzzy);
+        assert_eq!(cands[pe].spelling, SpellingKind::Exact);
     }
 
     /// 混合路径(精确边 + 模糊边)归模糊层:一处不精确则整体不精确。
@@ -1322,17 +1515,22 @@ mod tests {
         let get = |word: &str| cands.iter().find(|c| c.word == word);
         let pure = get("那哈").expect("那哈应在候选里");
         let mixed = get("拉哈").expect("拉哈应在候选里");
-        assert!(!pure.fuzzy, "纯精确路径应在精确层: {cands:?}");
-        assert!(mixed.fuzzy, "含一条模糊边的混合路径应归模糊层: {cands:?}");
+        assert_eq!(pure.spelling, SpellingKind::Exact,
+            "纯精确边应在精确层: {cands:?}");
+        assert_eq!(mixed.spelling, SpellingKind::Fuzzy,
+            "该候选由模糊边到达,应归模糊层: {cands:?}");
 
         // 混合路径词频再高(10000 vs 50)也得排在精确层之后
         let pos = |word: &str| cands.iter().position(|c| c.word == word);
         assert!(pos("那哈") < pos("拉哈"), "精确层整体优先: {cands:?}");
-        // 混合路径里的精确边「哈」继承该路径的模糊层归属:它出现在
-        // [那,哈](精确)与 [拉哈](模糊)两条路径里,取最优路径的分,
-        // 最优是精确路径(惩罚 0),故「哈」在精确层。
-        let ha = get("哈").expect("哈应在候选里");
-        assert!(!ha.fuzzy, "哈的最优路径是纯精确的 [那,哈]: {cands:?}");
+        // Block A 起候选只含起始于位置 0 的词:「哈」只覆盖后段音节
+        // ha(位置 2),不再作为候选出现;也就不再有「继承所在路径的
+        // 模糊层归属」的问题(那是旧实现「候选取自路径所有词位」的
+        // 连带语义)。
+        assert!(
+            !cands.iter().any(|c| c.word == "哈"),
+            "只覆盖后段音节的「哈」不应出现在 naha 的候选里: {cands:?}"
+        );
     }
 
     /// fuzzy_enabled = false 时排序与分层前完全一致:全部候选 fuzzy
@@ -1364,20 +1562,369 @@ mod tests {
 
         // 关 fuzzy:候选与改动前完全一致(里 不出现,纯按词频排)
         assert!(!off.iter().any(|c| c.word == "里"));
-        assert!(off.iter().all(|c| !c.fuzzy), "关 fuzzy 时应全是精确层");
+        assert!(off.iter().all(|c| c.spelling == SpellingKind::Exact),
+            "关 fuzzy 时应全是精确层");
         let off_words: Vec<&str> = off.iter().map(|c| c.word.as_str()).collect();
         assert_eq!(off_words, ["你", "妮", "泥", "逆"], "词频降序: {off:?}");
 
         // 开 fuzzy:精确层前缀逐位相同,模糊层追加在后
-        let on_exact: Vec<&str> = on.iter().filter(|c| !c.fuzzy).map(|c| c.word.as_str()).collect();
+        let on_exact: Vec<&str> = on.iter()
+            .filter(|c| c.spelling == SpellingKind::Exact)
+            .map(|c| c.word.as_str())
+            .collect();
         assert_eq!(on_exact, off_words, "精确层应与关 fuzzy 时逐位一致");
-        let on_fuzzy: Vec<&str> = on.iter().filter(|c| c.fuzzy).map(|c| c.word.as_str()).collect();
+        let on_fuzzy: Vec<&str> = on.iter()
+            .filter(|c| c.spelling == SpellingKind::Fuzzy)
+            .map(|c| c.word.as_str())
+            .collect();
         assert_eq!(on_fuzzy, ["里"], "模糊层只应有「里」: {on:?}");
     }
 
+    /// 回声候选:词库里查不到的输入(整串无法解码、兜底联想也为空),
+    /// `lookup_candidates` 应返回**恰好 1 个**回声候选,word == 输入串,
+    /// echo == true——保证公开 API 的后置条件「非空输入 ⇒ 候选非空」。
+    #[test]
+    fn unresolvable_input_yields_single_echo_candidate() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        // 空词库:任何输入都解不出候选
+        let cands = engine
+            .lookup_candidates("zgr", &LmContext::empty())
+            .expect("查询失败");
+        assert_eq!(cands.len(), 1, "查不到时应恰好 1 个回声候选: {cands:?}");
+        assert_eq!(cands[0].word, "zgr", "回声候选的 word 应为原始输入串");
+        assert_eq!(cands[0].pinyin, "zgr");
+        assert!(cands[0].echo, "应标记为回声候选");
+        assert_eq!(cands[0].freq, 0);
+    }
 
+    /// 回声候选绝不污染正常候选列表:词库里有的词,结果里不应有
+    /// 任何 echo == true 的候选(语义同 librime:别人有候选时回声不冒头)。
+    #[test]
+    fn resolvable_input_has_no_echo_candidate() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("你", "ni", 100).expect("插入失败");
+        engine.dict.upsert("你好", "ni hao", 200).expect("插入失败");
 
+        let cands = engine
+            .lookup_candidates("ni", &LmContext::empty())
+            .expect("查询失败");
+        assert!(!cands.is_empty(), "词库命中时应有候选");
+        assert!(
+            cands.iter().all(|c| !c.echo),
+            "正常有候选时不应混入回声候选: {cands:?}"
+        );
+    }
 
+    /// Block A1:候选必须全部起始于位置 0——只覆盖后段音节的词
+    /// 不该出现在候选里(用户无法有意义地选中它们)。
+    ///
+    /// 构造:输入 `nihao`,词库有「好」(hao,仅覆盖第二音节)。新语义
+    /// 下它不应出现;「你好」(覆盖整串)与「你」(覆盖首音节)应出现。
+    /// 对照 librime:同输入的候选全部起始于位置 0。
+    #[test]
+    fn candidates_all_start_at_position_zero() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("你好", "ni hao", 100).expect("插入失败");
+        engine.dict.upsert("你", "ni", 200).expect("插入失败");
+        engine.dict.upsert("好", "hao", 150).expect("插入失败");
+        engine.dict.upsert("号", "hao", 120).expect("插入失败");
+        engine.dict.upsert("毫", "hao", 80).expect("插入失败");
 
+        let cands = engine
+            .lookup_candidates("nihao", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            cands.iter().any(|c| c.word == "你好"),
+            "覆盖整串的「你好」应在候选里: {cands:?}"
+        );
+        assert!(
+            cands.iter().any(|c| c.word == "你"),
+            "覆盖首音节的「你」应在候选里: {cands:?}"
+        );
+        for w in ["好", "号", "毫"] {
+            assert!(
+                !cands.iter().any(|c| c.word == w),
+                "只覆盖后段音节 hao 的「{w}」不应出现在 nihao 的候选里: {cands:?}"
+            );
+        }
+        // 不变量:所有候选的拼音都必须以首音节 ni 开头
+        // (即对应 lattice[0] 上的边)。
+        assert!(
+            cands
+                .iter()
+                .all(|c| c.pinyin == "ni" || c.pinyin.starts_with("ni ")),
+            "所有候选都应起始于位置 0(拼音以 ni 开头): {cands:?}"
+        );
+    }
 
+    /// Block A2:候选数不再被 `BEAM_WIDTH` 钳死——候选来源是
+    /// `lattice[0]` 全量,而非 beam 的幸存路径。
+    ///
+    /// 构造:单音节 `ni` 的词库里放 20 个同音字。旧实现最多返回
+    /// `BEAM_WIDTH = 16` 个;新实现应返回全部 20 个。
+    #[test]
+    fn candidate_count_not_clamped_by_beam_width() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        // 20 个不同的同音字,词频递减以保证确定性排序
+        let words: Vec<String> = (0..20u32)
+            .map(|i| char::from_u32(0x4E00 + i).unwrap().to_string())
+            .collect();
+        for (i, w) in words.iter().enumerate() {
+            engine
+                .dict
+                .upsert(w, "ni", 1000 - i as u64)
+                .expect("插入失败");
+        }
+
+        let cands = engine
+            .lookup_candidates("ni", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            cands.len() > BEAM_WIDTH,
+            "候选数 {} 应大于 BEAM_WIDTH={BEAM_WIDTH}(不再被 beam 钳死)",
+            cands.len()
+        );
+        assert_eq!(cands.len(), 20, "20 个同音字应全部成为候选: {cands:?}");
+    }
+
+    /// Block A3:打分口径——「覆盖整串的词」应排在「只覆盖前缀的词」
+    /// 之前,即使后者自身词频更高(覆盖整串只需一次词频+LM 打分,
+    /// 前缀词还需补全剩余音节,多付一次词频+LM 代价)。
+    ///
+    /// 构造:输入 `nihao`,「你」(ni, freq=200)自身词频高于「你好」
+    /// (ni hao, freq=100),但「你好」覆盖整串,「你」还需补全 hao,
+    /// 故「你好」总分应更高、排在前面。
+    #[test]
+    fn full_coverage_word_outranks_prefix_word() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("你", "ni", 200).expect("插入失败");
+        engine.dict.upsert("好", "hao", 150).expect("插入失败");
+        engine.dict.upsert("你好", "ni hao", 100).expect("插入失败");
+
+        let cands = engine
+            .lookup_candidates("nihao", &LmContext::empty())
+            .expect("查询失败");
+        let pos = |word: &str| cands.iter().position(|c| c.word == word);
+        let (p_full, p_prefix) = (
+            pos("你好").expect("「你好」应在候选里"),
+            pos("你").expect("「你」应在候选里"),
+        );
+        assert!(
+            p_full < p_prefix,
+            "覆盖整串的「你好」应排在只覆盖前缀的「你」之前: {cands:?}"
+        );
+        assert!(
+            cands[p_full].score > cands[p_prefix].score,
+            "「你好」分 {} 应高于「你」分 {}",
+            cands[p_full].score,
+            cands[p_prefix].score
+        );
+    }
+
+    /// B4 严格分层(真实词库):任何简拼候选都不得排在任何精确候选
+    /// 之前——即使简拼候选的词频高得多。输入 `beijdx`:兜底联想
+    /// (`beijing` 等 bei-j* 前缀词)给精确层(几十条,装不满
+    /// MAX_CANDIDATES),`lookup_abbrev("beijdx")` 命中「北京」类
+    /// b-j-d-x 词给简拼层。**不能用 `sh` 这类输入**:它的精确层
+    /// (`sha/sh*` 前缀词)超过 MAX_CANDIDATES=100,简拼层会被截断
+    /// 整条挤掉——那是「Exact 装满 ⇒ 简拼不可见」的既定行为,不是
+    /// 本测试要查的「交错」。用真实词库而非玩具词库:玩具词库查不出
+    /// 「高频简拼词压过精确词」。
+    #[test]
+    fn real_dict_abbrev_layer_never_outranks_exact() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+        assert!(engine.dict.has_abbrev(), "副索引应已装配");
+
+        let cands = engine
+            .lookup_candidates("beijdx", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            cands.iter().any(|c| c.spelling == SpellingKind::Exact),
+            "beijdx 应有精确层候选(兜底联想 bei-j* 前缀): {:?}",
+            cands.iter().take(5).map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
+        assert!(
+            cands.iter().any(|c| c.spelling == SpellingKind::Abbrev),
+            "beijdx 应有简拼层候选(b-j-d-x 简拼词): {:?}",
+            cands.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
+        // 严格分层断言:最后一个精确候选必须排在第一个简拼候选之前。
+        let last_exact = cands
+            .iter()
+            .rposition(|c| c.spelling == SpellingKind::Exact)
+            .expect("应有精确层");
+        let first_abbrev = cands
+            .iter()
+            .position(|c| c.spelling == SpellingKind::Abbrev)
+            .expect("应有简拼层");
+        assert!(
+            last_exact < first_abbrev,
+            "任何精确候选都应在任何简拼候选之前(last_exact={last_exact}, \
+             first_abbrev={first_abbrev}): {:?}",
+            cands.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
+        // 层内相对顺序不被打乱:精确层按分非增。
+        let exact_scores: Vec<f32> = cands
+            .iter()
+            .filter(|c| c.spelling == SpellingKind::Exact)
+            .map(|c| c.score)
+            .collect();
+        assert!(
+            exact_scores.windows(2).all(|w| w[0] >= w[1]),
+            "精确层内仍按分降序: {exact_scores:?}"
+        );
+    }
+
+    /// B4 层间边界(真实词库):精确层与简拼层同时有货时,层序必须
+    /// 整体非降——任何简拼候选夹在精确候选之间就是交错。输入
+    /// `beijdx`:兜底联想给精确层(几十条),`lookup_abbrev` 给简拼层,
+    /// 两层都进得了候选(精确层装不满 MAX_CANDIDATES)。(模糊层的
+    /// 边界由玩具词库测试
+    /// `mixed_exact_and_fuzzy_edges_belong_to_fuzzy_layer` /
+    /// `layered_sort_disabled_matches_legacy_exactly` 覆盖——真实词库
+    /// 下模糊层是否存在取决于词库,不宜钉死。)
+    #[test]
+    fn real_dict_layer_boundary_no_interleave() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        let cands = engine
+            .lookup_candidates("beijdx", &LmContext::empty())
+            .expect("查询失败");
+        let kinds: Vec<SpellingKind> = cands.iter().map(|c| c.spelling).collect();
+        assert!(kinds.contains(&SpellingKind::Exact), "beijdx 应有精确层: {kinds:?}");
+        assert!(kinds.contains(&SpellingKind::Abbrev), "beijdx 应有简拼层: {kinds:?}");
+        // 枚举声明序即层序(Exact < Fuzzy < Abbrev):排序后序列必须
+        // 整体非降——一旦出现「后层夹在前层之间」就是交错。
+        assert!(
+            kinds.windows(2).all(|w| w[0] <= w[1]),
+            "层间不得交错(层序应整体非降): {:?}",
+            cands.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
+    }
+
+    /// 简拼层去重(真实词库):`zgr` 走 `lookup_abbrev` 命中的词,与
+    /// `lookup_mixed`(残余声母路径)命中的同一词不得重复出现;整个
+    /// 候选列表里同一 `(word, pinyin)` 只出现一次。
+    #[test]
+    fn real_dict_abbrev_no_duplicates_across_sources() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        for input in ["zgr", "zhongg", "nihao"] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            let mut seen: std::collections::HashSet<(&str, &str)> =
+                std::collections::HashSet::new();
+            for c in &cands {
+                assert!(
+                    seen.insert((c.word.as_str(), c.pinyin.as_str())),
+                    "{input} 的 (word, pinyin) 不得跨层重复: ({}, {})",
+                    c.word,
+                    c.pinyin
+                );
+            }
+        }
+    }
+
+    /// 回声语义未变(真实词库 + 简拼):`zgr` 现在有真实简拼候选,
+    /// 回声候选**不得**出现(回声只在全场无候选时冒头);简拼接入
+    /// 后回声自然更少出现,这是预期——但解不出的串(非拼音字母组合
+    /// `vq`,词典无任何 `v` 起始音节,简拼副索引也没有 `vq` 前缀)
+    /// 仍必须回回声,语义不变。
+    #[test]
+    fn real_dict_abbrev_suppresses_echo_but_unresolvable_still_echoes() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        let zgr = engine
+            .lookup_candidates("zgr", &LmContext::empty())
+            .expect("查询失败");
+        assert!(!zgr.is_empty(), "zgr 应有简拼候选");
+        assert!(
+            zgr.iter().all(|c| !c.echo),
+            "有简拼候选时不应出现回声候选: {:?}",
+            zgr.iter().take(3).map(|c| (&c.word, c.echo)).collect::<Vec<_>>()
+        );
+        assert!(
+            zgr.iter().all(|c| c.spelling == SpellingKind::Abbrev),
+            "zgr 的候选应全部在简拼层(无精确/模糊来源): {:?}",
+            zgr.iter().take(3).map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
+
+        let vq = engine
+            .lookup_candidates("vq", &LmContext::empty())
+            .expect("查询失败");
+        assert_eq!(vq.len(), 1, "vq 解不出候选,应只有回声: {vq:?}");
+        assert!(vq[0].echo, "vq 应回回声候选");
+    }
+
+    /// 副索引缺失时优雅退化(引擎层):`MmapDict::open()` 不挂副索引,
+    /// 引擎不得 panic,且全拼行为与「没接简拼」完全一致(精确候选
+    /// 逐位不变,简拼层为空)。
+    #[test]
+    fn engine_without_abbrev_index_degrades_gracefully() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !dict_path.is_file() {
+            return;
+        }
+        let engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        assert!(!engine.dict.has_abbrev(), "未装配副索引");
+
+        // 全拼:精确候选不受影响
+        let nihao = engine
+            .lookup_candidates("nihao", &LmContext::empty())
+            .expect("查询失败");
+        assert!(nihao.iter().any(|c| c.word == "你好"), "全拼应照常: {nihao:?}");
+        assert!(
+            nihao.iter().all(|c| c.spelling == SpellingKind::Exact),
+            "无副索引时不应出现简拼层: {:?}",
+            nihao.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
+
+        // 纯简拼:退化为回声(副索引缺失 ⇒ lookup_abbrev 空;输入
+        // 切不出音节 ⇒ lookup_mixed 也空),引擎不 panic。
+        let zgr = engine
+            .lookup_candidates("zgr", &LmContext::empty())
+            .expect("查询失败");
+        assert_eq!(zgr.len(), 1, "无副索引时 zgr 应只剩回声: {zgr:?}");
+        assert!(zgr[0].echo, "无副索引时 zgr 应回回声候选");
+
+        // 混合简拼:靠静态音节表照常工作(不依赖副索引),这是
+        // `real_abbrev_mixed_lookup` 同一不变量在引擎层的对应。
+        // 直接在词库层断言(`lookup_mixed` 本身),绕开「精确层装满
+        // 时简拼层被截断」的引擎层遮蔽——那条遮蔽是 MAX_CANDIDATES
+        // 的既定行为,与本不变量无关。
+        let dict_path2 = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let dict = crate::dict::MmapDict::open(&dict_path2).expect("词库加载失败");
+        assert!(!dict.has_abbrev(), "裸 open 不应挂副索引");
+        let mixed = dict.lookup_mixed("zhongguor").expect("混合简拼查询失败");
+        assert!(
+            mixed.iter().any(|c| c.word == "中国人"),
+            "无副索引时 lookup_mixed 仍应命中中国人(静态音节表): {:?}",
+            mixed.iter().take(5).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+        );
+    }
 }

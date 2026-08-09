@@ -88,6 +88,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 词库是 dict_to_bin.py 生成的只读 mmap 二进制（dict.bin）：
     // 打开失败（缺失/损坏）时引擎退回内存空词库，不会创建任何文件。
     let dict_path = resolve_data_path("XWX_DICT_PATH", "dict.bin");
+    // 简拼副索引:`XWX_ABBREV_PATH` 覆盖,默认与 dict.bin 同目录的
+    // `abbrev.bin`。缺失/损坏时 `with_abbrev` 仅告警、引擎退回精确路径,
+    // 绝不 panic(见 `MmapDict::with_abbrev`)。
+    let abbrev_path = std::env::var("XWX_ABBREV_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| dict_path.with_file_name("abbrev.bin"));
     // 语言模型:`XWX_LM_PATH` 显式覆盖(原样尊重,即使文件不存在,后续
     // 逻辑优雅退化为空模型);未设置时按优先级探测数据目录里的
     // .gram / bigram.txt(详见 resolve_lm_path 注释)。
@@ -99,6 +105,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         ImeEngine::new(Some(&dict_path))?
     };
+    engine.dict = engine.dict.with_abbrev(&abbrev_path);
+    if engine.dict.has_abbrev() {
+        tracing::info!(path = %abbrev_path.display(), "简拼副索引已装配");
+    } else {
+        tracing::info!(path = %abbrev_path.display(), "简拼副索引未装配(简拼查询退化为空)");
+    }
     tracing::info!(path = %dict_path.display(), entries = engine.dict_count(), "词库已就绪");
 
     if lm_is_gram {
@@ -123,6 +135,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "未找到语言模型,使用空模型"
         );
     }
+
+    // —— 用户学习模型(第 5 步)——
+    // 把 UserLM 叠到通用模型之上(MixedLM 用户层)。`with_user_lm` 按值
+    // 接收 self 并返回 Self,而上面 bigram 分支的 `engine.lm.load(...)`
+    // 需要 `&mut engine`,因此接线必须放在那之后、`Arc::new(engine)` 之前。
+    // 路径沿用 resolve_data_path 约定(与 dict.bin 同处),文件名
+    // `user_bigram.txt`(与 user_lm.rs 的 open_or_create 读写的 bigram
+    // 文本格式匹配,见 USER_LM_FILE_NAME)。
+    let user_lm_path = resolve_data_path("XWX_USER_LM_PATH", xwx_engine::USER_LM_FILE_NAME);
+    let engine = engine.with_user_lm(xwx_engine::UserLM::open_or_create(&user_lm_path));
+    tracing::info!(path = %user_lm_path.display(), "用户学习模型已接入");
     let engine = Arc::new(engine);
 
     // —— 连接总线 ——
@@ -155,8 +178,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     conn.object_server().at(ibus_proto::ENGINE_PATH, first).await?;
     tracing::info!(path = ibus_proto::ENGINE_PATH, "引擎已就绪，等待 ibus-daemon 激活");
 
-    // 常驻运行
-    std::future::pending::<()>().await;
+    // —— 常驻运行 + 用户模型落盘调度 ——
+    //
+    // `learn_committed` 只改内存计数并累加 dirty(见 lib.rs 文档:落盘由
+    // 本进程入口调度)。这里做两件小事,不引入 actor/通道:
+    //   1. 定时检查:到批量阈值(needs_flush)就 flush 一次;
+    //   2. Ctrl+C 退出时兜底 flush 一次,把不足阈值的尾巴也落盘。
+    // flush 失败只告警不吞掉(用户词频是统计量,丢一批可接受,但绝不静默)。
+    let mut flush_tick = tokio::time::interval(std::time::Duration::from_secs(30));
+    flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = flush_tick.tick() => {
+                if let Some(user) = engine.user_lm() {
+                    if user.needs_flush() {
+                        if let Err(e) = user.flush() {
+                            tracing::warn!(error = %e, "用户语言模型定时回写失败");
+                        }
+                    }
+                }
+            }
+            sig = tokio::signal::ctrl_c() => {
+                if let Err(e) = sig {
+                    tracing::warn!(error = %e, "监听 Ctrl+C 失败");
+                }
+                if let Some(user) = engine.user_lm() {
+                    if let Err(e) = user.flush() {
+                        tracing::warn!(error = %e, "用户语言模型退出回写失败");
+                    }
+                }
+                tracing::info!("收到退出信号,已兜底回写用户语言模型");
+                break;
+            }
+        }
+    }
     Ok(())
 }
 

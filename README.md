@@ -47,6 +47,9 @@
 - [x] 拼音音节表（400+ 音节）与 DP 全切分
 - [x] mmap 只读二进制词库（`dict.bin`，启动 O(1) 映射、查询二分；
       `scripts/dict_to_bin.py` 从 SQLite 转换；SQLite 仅作构建/迁移中间格式）
+- [x] 简拼(首字母)副索引存储层(`abbrev.bin`,`scripts/abbrev_to_bin.py`
+      从 `dict.bin` 只读生成;`MmapDict::with_abbrev` 装配,纯简拼 `zgr` 二分副索引、
+      混合简拼 `zhongguor` 走音节切分+主索引前缀;基准 `examples/abbrev_bench.rs`)
 - [x] 二元语言模型（文本格式加载；mmap 二进制格式见 `data/README.md` 规划）
 - [x] 模糊拼音（n/l、zh/z、前后鼻音等 13 组混淆对）
 - [x] 按键状态机：字母、退格、空格选词、数字选词、翻页、方向键、Esc、回车
@@ -199,6 +202,7 @@ IBus 的 D-Bus 序列化要求类型串与字段顺序严格一致，改协议�
 │           └── lib.rs         适配层导出入口
 data/
 ├── dict.bin              运行时只读二进制词库（dict_to_bin.py 生成，mmap 映射）
+├── abbrev.bin           简拼(首字母)副索引(abbrev_to_bin.py 生成,mmap 映射)
 ├── xwx.xml                component XML 模板（安装时注入 exec 路径）
 ├── README.md              词库二进制格式、LM 格式、Rime 导入教程
 └── debian/               deb 打包资产（cargo deb 用）
@@ -206,7 +210,8 @@ data/
     └── xwx.xml             打 deb 生成的 component XML（构建产物，exec=/usr/bin/xwx_ime）
 scripts/
 ├── build_dict.py          词库构建工具（Rime → dict.sqlite3）
-└── dict_to_bin.py         dict.sqlite3 → dict.bin（运行时二进制格式）
+├── dict_to_bin.py         dict.sqlite3 → dict.bin(运行时二进制格式)
+└── abbrev_to_bin.py      dict.bin → abbrev.bin(简拼副索引,只读主索引)
 justfile                    任务入口：build / dev / install / deb
 ```
 

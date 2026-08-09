@@ -1,0 +1,214 @@
+# XWX 输入法改造计划与进度
+
+> 总方针：**不重复造轮子，拿 librime 当参照**。两条腿并行——
+> ①「读 librime 源码补组件清单」告诉我们**缺什么**；
+> ②「差分对拍量化行为偏差」告诉我们**现有的东西偏了多少**。
+> 缺一不可：`BEAM_WIDTH=16` 把候选钳死、候选里混入非起始位置的词，
+> 这两个都是对拍逼出来的，读源码看不出来。
+>
+> 详细设计见 [`docs/design-batch1.md`](docs/design-batch1.md)，
+> 组件清单见 [`docs/gear-audit.md`](docs/gear-audit.md)，
+> **换人/换会话接手先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)**
+> （定过又推翻的判断、刻意代价、指标的坑、协作约定）。
+>
+> ⚠ **仓库只有 1 个提交，这轮全部工作（1000+ insertions + 6 个新增文件）
+> 尚未进 git**。当前测试**全绿**（101 passed / 1 ignored），是个天然的存档点。
+
+最后更新：2026-08-09
+
+---
+
+## 一、基础设施
+
+### 差分对拍台
+- [x] `tools/rime_oracle/` — 驱动本机已装的 librime 1.10.0（免 sudo，直接链 `librime.so.1`）
+- [x] 方案切到 `luna_pinyin_simp`（默认 `luna_pinyin` 出繁体，没法和我们的简体词库比对）
+- [x] `crates/xwx_engine/examples/probe.rs` — 我方同格式对端
+- [x] `tools/compare.py` — 六项指标 + `RECALL_MISS`（真召回缺失）/ `RANK_GAP`（召回了但排名靠后）
+- [x] `tools/corpus/basic.txt` — 81 行、9 组分类语料
+- [x] 双侧输出深度 10 → 100（否则分不清「没召回」和「排名靠后」）
+
+跑法：
+```bash
+./tools/rime_oracle/rime_oracle < tools/corpus/basic.txt > /tmp/oracle.txt
+XWX_DICT_PATH=$PWD/data/dict.bin \
+  cargo run -q -p xwx_engine --example probe --offline < tools/corpus/basic.txt > /tmp/xwx.txt
+python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
+```
+
+> ⚠ oracle 的 `user_data_dir` 硬编码在 `tools/rime_oracle/.rime_user`，
+> **绝不能指向 `~/.local/share/fcitx5/rime`**（那是日常打字在用的配置）。
+
+### 组件清单
+- [x] `docs/gear-audit.md` — librime `src/rime/gear/` 全部 36 个组件逐项对照 xwx 现状
+
+---
+
+## 二、已完成的改动
+
+### 第 0 批：零架构风险项
+- [x] **UserLM 接线** — `learn_committed` 整条学习链路此前在生产进程里是死代码
+      （`main.rs` 从未调用 `with_user_lm`）。已接线 + 30s 定时 flush + Ctrl+C 兜底
+- [x] **回声候选** — 候选列表永不为空。照搬 librime `echo_translator`：
+      仅当全场无任何候选时冒头，`quality` 垫底，不污染正常候选
+
+### Block A：候选管线重构
+- [x] **A1 候选只能起始于位置 0** — 此前 `for spot in &path.words` 取了路径上所有词位，
+      导致 `nihao` 的候选里混进只覆盖 `hao` 的「好/号/毫」，用户选中毫无意义
+- [x] **A2 候选来源改为 `lattice[0]` 全量** — 此前只从 beam 幸存路径取词，
+      被 `BEAM_WIDTH = 16` 钳死（八个不同单音节输入全部恰好返回 16 个候选）。
+      修复**未新增任何词典查询**（`build_lattice` 早就查完了）
+- [x] **A3 后向 DP 统一打分** — 让「覆盖整串的词」与「只覆盖前缀的词」落在同一量纲。
+      含一处**刻意的近似**（后向拿不到精确 LM 状态，丢 bigram），已写进代码注释
+
+### B3：简拼（首字母输入）
+- [x] **路线选型 spike** — `tools/spike_abbrev/`，实测三条路线后**路线 (c) 声母副索引**定稿
+- [x] spike 推翻了设计文档原方案（主索引 key 空格分隔、用户输入不带空格，
+      前缀匹配命中恒为 0），已改为「先切音节 → 空格拼回前缀 → 残余字符当声母过滤」
+- [x] **存储层** — `scripts/abbrev_to_bin.py` → `data/abbrev.bin`（68.9 MB，主索引 0.90×）；
+      `dict.rs` 新增 `AbbrevIndex` / `lookup_abbrev` / `lookup_mixed`
+- [x] 早停已验证是**真早停**（凑够 `MAX_LOOKUP_RESULTS=500` 即 `break 'outer`，
+      不是全扫后截断）
+- [x] 副索引缺失时**优雅退化**（实测挪走文件后不 panic、词库不变空、精确查询正常）
+
+---
+
+## 三、进行中
+
+### B3 引擎集成（三步一体，进行中）
+- [x] **① 消掉音节表预热** — 首次混合简拼查询原本要懒扫 173 万 key 建音节表，
+      实测预热 **839.9ms → 0.7ms**，且它发生在**按键处理路径上**（IBus 侧是同步的），
+      用户第一次打 `zhongg` 会卡近一秒。已达标（验收线 < 5ms）
+
+  > **做法：直接用 `segmenter.rs` 的 `pub const SYLLABLES`。**
+  > 最初写了个 v2 文件格式（构建期把 412 个音节写进 `abbrev.bin`），实测也有效，
+  > 但排查时发现那张静态表**本来就编译在二进制里**：
+  >
+  > | | 数量 |
+  > |---|---|
+  > | `segmenter.rs` 静态表 | 410 |
+  > | 词库实际用到 | 412 |
+  > | 词库有、静态表没有 | 仅 `fiao`、`tei`（方言/拟声） |
+  > | 静态表有、词库没有 | 0 |
+  >
+  > 用静态表一次解决三件事：预热消失（连扫描都不需要）、不用维护 v2 文件格式、
+  > **混合简拼不再依赖副索引存在**。第三件事是哨兵测试
+  > `real_abbrev_mixed_lookup`（用 `MmapDict::open()` 不挂副索引）逼出来的——
+  > v2 方案下它是红的，说明那个方案偷偷引入了耦合。
+  >
+  > `fiao`/`tei` 刻意不加进 `SYLLABLES`：那是主切分路径，动它会影响全拼行为。
+  > 代价是这两个音节的混合简拼切分不支持，可接受。
+  >
+  > 收尾：`abbrev.bin` 已连同构建脚本与 reader 一起回退 v1 并**重新生成**
+  > （磁盘文件与 reader 版本必须同步，上一轮的红状态就是栽在这个不一致上）。
+- [ ] **② 简拼接进引擎** — `lookup_abbrev`/`lookup_mixed` 返回的都是覆盖整串的候选，
+      **不需要拆成 lattice 边**，直接合并进候选列表
+- [ ] **③ B4 候选分级** — `Candidate.fuzzy: bool` → `SpellingKind { Exact, Fuzzy, Abbrev }`，
+      排序改为**严格分层**（精确层全部 → 模糊层 → 简拼层）
+
+  > 顺带清理：`BeamPath.fuzzy_penalty`（`lib.rs:138`）在 Block A 之后已成残留
+  > （clippy `dead_code` 提示）。候选现在直接取 `lattice[0]` 的边，`fuzzy` 由
+  > `edge.fuzzy_penalty > 0.0` **逐边**判定（`lib.rs:404`），不再走「整条路径含
+  > 模糊边则整体归模糊层」那条通道。**这个语义改变是对的**——候选只覆盖位置 0
+  > 的一条边，被路径后段的模糊边污染反而错。Block A 顺手修正了它，只是旧字段
+  > 留在原地没删。
+
+> 严格分层不用连续 credibility 的理由：简拼候选动辄上千条（`xx` 命中 10,816），
+> 一旦允许和精确候选按分混排，全拼第一页立刻被冲垮。第一步先要安全。
+
+---
+
+## 四、待做
+
+### Block B 剩余
+- [ ] **B1 输入缓冲加光标** — `InputSession.pinyin` 目前是 append-only `String`，
+      `Left`/`Right` 直接 `Noop` 透传（`session.rs:257-258` 自认 TODO）。
+      长串中间打错一个字母只能全删重打
+- [ ] **B2 音节分隔符 `'`** — `xi'an` 消歧。优先级低：对拍显示 librime **不用** `'`
+      也能把「西安」排进 top-5，所以它是兜底手段而非必需品
+
+### 全拼排序调优（范围已收窄）
+- [ ] **多音节词竞争不过高频单字** — 明确案例：`xian` 的「西安」排第 **18** 名。
+      根因是 A3 那处已批准的后向 DP 近似丢了 bigram
+
+> 范围修正记录：曾判断「有 39 个词可通过调排序改善」，按字/词拆开后
+> **33 个是单字同音字排序差异**（rime-ice 与 luna 的词频数据差别，
+> 去对齐 librime 不是目标），多字词只有 6 个，真正常用的只有「西安」一个。
+> 原判断夸大约一个数量级。
+
+### gear 清单里的其他缺口（按审计的优先级）
+- [ ] **punctuator（P0）** — 中文模式打逗号句号出的是英文半角
+- [ ] **ascii_composer 的 Shift（P0）** — Shift+G 变成小写 `g` 进拼音串，打不出 `GPU`
+- [ ] **造词 / unity_table_encoder（P1）** — UserLM 只调频不造词，
+      上屏 N 次的自造短语永远学不会
+- [ ] **selector 的 `,`/`.` 翻页（P1）** — 需与 punctuator 一起设计（`,` 既是标点又是翻页键）
+- [ ] **editor 的 Ctrl+Delete 删候选（P1）** — UserLM 目前只有正向计数，无删除接口
+- [ ] **recognizer（P1）** — 中文模式里输邮箱/网址会被逐字母切成拼音
+- [ ] **charset_filter（P2）** — 不过滤会吐 CJK 扩展区生僻字占候选位
+
+---
+
+## 五、指标与基线
+
+### 差分对拍指标演进
+| 指标 | 起始 | 第 0 批后 | Block A 后 | 目标 |
+|---|---|---|---|---|
+| `TOP10_OVERLAP` overall | 3.20 | 3.20 | **4.02** | — |
+| ↳ 全拼四组均值 | 4.95 | 4.95 | **6.83** | **≥6.83 不许退化** |
+| `ZERO_ONLY_XWX`（含回声） | 12 | **0** | 0 | 0 |
+| 简拼组 `ZERO_ONLY_XWX`（**排除回声**） | 10/10 | 10/10 | 10/10 | **0**（② 的门槛） |
+| 简拼组 `TOP10_OVERLAP` | 0.0 | 0.0 | 0.0 | **≥3.0**（② 的门槛） |
+| 简拼组 `NCAND_RATIO` 中位 | 0.0004 | 0.0004 | 0.0004 | 只观察趋势 |
+| 简拼组 `TOP1_AGREE` | 0/10 | 0/10 | 0/10 | 只报数，**不当门槛** |
+
+> `ZERO_ONLY_XWX` 归零是**症状**修好（候选窗不再空白），不是**能力**修好——
+> 回声候选只让用户看见自己敲了什么。所以简拼组要单独看「排除回声」那一行。
+>
+> **`TOP1_AGREE` 不能当验收门槛**（简拼组也不行）：两边词库/LM 不同，对齐它
+> 等于让实现去迎合 librime 的词库。验收看 `TOP10_OVERLAP`、`ZERO_ONLY_XWX`、
+> `RECALL_MISS`、`RANK_GAP` 这类结构性指标。
+>
+> 口径更正记录：本表原先给简拼组写的是「`TOP1_AGREE` ≥6/10」，
+> 与上面这条自相矛盾（`design-batch1.md` 的 Block B 验收表同）。已改为
+> 结构性门槛，`TOP1_AGREE` 降为参考项。
+
+### 测试基线
+| 阶段 | 数量 |
+|---|---|
+| 起始 | 87 passed / 1 ignored（76 / 3 / 8） |
+| 第 0 批后 | 91（80 / 3 / 8） |
+| Block A 后 | 94（83 / 3 / 8） |
+| B3 存储层后 | 101（90 / 3 / 8） |
+| B3 ① 后 | **101（90 / 3 / 8）全绿，0 failed** |
+
+```bash
+cargo test --workspace --offline    # 必须在项目根跑
+```
+> `.cargo/config.toml` 指定 `target-dir = /mnt/hdd/target/xwx_ime`。
+> **不要覆盖 `CARGO_TARGET_DIR`** —— 在别处验证等于没验证。
+
+### 性能预算
+| 项目 | 现状 | 上限 |
+|---|---|---|
+| `decode_bench` 最长串（17 字符） | ~9.2ms | 12ms |
+| 简拼单次查询 `zgr` | 0.070ms（p95 0.097） | — |
+| 混合简拼单次 `zhongg` | 0.592ms（p95 0.676） | 5ms |
+| 混合简拼单次 `zhongguor` | 0.635ms（p95 0.731） | 5ms |
+| 音节表预热 | **0.7ms**（原 839.9ms） | 5ms ✅ |
+
+### 引擎内部截断常量（解读指标时必须记得）
+- `MAX_CANDIDATES = 100`（`lib.rs:61`）— 候选总数上限
+- `MAX_LOOKUP_RESULTS = 500`（`dict.rs:27`）— 单次词典查询上限
+- `BEAM_WIDTH = 16`（`lib.rs:84`）— 现在只影响整句路径，不再钳制候选数
+
+---
+
+## 六、工作方式约定
+
+- **判据在测量前钉死**。已踩三次：拿「词库内容差异」解释未达标、
+  拿「Rust 应该更快」的估算过延迟门槛、以及把「39 个词」夸大一个数量级。
+  任务书里要写明「X < 5ms 要有实测数字，不接受论证」。
+- **达不到验收线要如实报**，但**调整标准不是执行者的事**。
+- **不许删除或改名已有测试来凑绿**。因语义变化需要改断言的，
+  必须逐条说明「原来断言什么 / 改成什么 / 为什么新行为对」。
+- **聚合数字先拆开看**是不是同一类问题——聚合指标最容易掩盖异质性。
