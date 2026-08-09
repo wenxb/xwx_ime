@@ -59,6 +59,19 @@ pub enum EngineError {
 
 /// 单次查询最多返回的候选数。
 const MAX_CANDIDATES: usize = 100;
+/// 简拼层的保底名额(不是封顶):总条数超 `MAX_CANDIDATES` 时,
+/// 简拼层至少留这么多个候选位,不被精确/模糊/兜底层整层挤掉。
+///
+/// 理由(实测依据,见 PLAN.md 第三节「混合简拼被截断」):
+/// - 缺口输入(`zhongguor`/`nih`/`renm`)的目标词清一色落在简拼层
+///   第 1 名,保底 5 个绰绰有余;
+/// - 代价侧:head 装满 100 条时被挤掉的只是第 96~100 名(局部切分
+///   出的碎片单字/兜底长尾),翻 10 页才到,代价可忽略;
+/// - 只是保底,不是上限:head 很短时简拼层照旧补满 100(与旧
+///   「合并排序截 100」逐位一致,见 `merge_with_abbrev`);
+/// - 简拼层不足 5 条时按实际条数预留;为 0 时 head 照旧用满 100,
+///   不白留空位。
+const ABBREV_QUOTA: usize = 5;
 /// 语言模型得分在最终候选分中的默认权重。
 ///
 /// 第 4 步把词频项归一化为 `log10(freq / 总词频)` 后，词频项与 LM 的
@@ -355,15 +368,14 @@ impl ImeEngine {
         if paths.is_empty() {
             // 整串还不能完整解码(首音节没打完 / 停在半音节):兜底联想,
             // 否则 IBus 层会在打字中途发 HideLookupTable,候选窗闪一下就没。
-            let mut ranked = self.fallback_candidates(pinyin, ctx)?;
+            let ranked = self.fallback_candidates(pinyin, ctx)?;
             // 简拼来源合并(2):简拼候选覆盖整串,本身就是整串候选。
             // 注意:必须在 fallback 截断**之后**合并——fallback 自己
             // 已按 MAX_CANDIDATES 截断,若先合并再截断,简拼层(在排序
             // 最末)会整体被截掉。合并后重排截断,简拼层得以保留
             // (它只与同样排在末尾的兜底长尾竞争最后的候选位)。
-            ranked.extend(self.abbrev_candidates(pinyin, ctx, &ranked)?);
-            sort_candidates(&mut ranked);
-            ranked.truncate(MAX_CANDIDATES);
+            let abbrev = self.abbrev_candidates(pinyin, ctx, &ranked)?;
+            let (_, mut ranked) = merge_with_abbrev(ranked, abbrev);
             if ranked.is_empty() {
                 ranked.push(Self::echo_candidate(pinyin));
             }
@@ -418,12 +430,13 @@ impl ImeEngine {
             }
         }
 
-        let mut ranked: Vec<Candidate> = best.into_values().collect();
+        let ranked: Vec<Candidate> = best.into_values().collect();
         // 简拼来源合并(2):已在精确/模糊层出现过的 (word, pinyin)
-        // 不再进简拼层(`abbrev_candidates` 内部去重)。
-        ranked.extend(self.abbrev_candidates(pinyin, ctx, &ranked)?);
-        sort_candidates(&mut ranked);
-        ranked.truncate(MAX_CANDIDATES);
+        // 不再进简拼层(`abbrev_candidates` 内部去重)。截断走
+        // `merge_with_abbrev`:简拼层有 ABBREV_QUOTA 个保底名额,
+        // 精确层装满 100 时不再把简拼层整层截掉(PLAN.md 第三节缺口)。
+        let abbrev = self.abbrev_candidates(pinyin, ctx, &ranked)?;
+        let (_, mut ranked) = merge_with_abbrev(ranked, abbrev);
         // 回声候选兜底(公开 API 后置条件:非空输入 ⇒ 候选非空):
         // 整串连兜底联想都解不出任何候选时(如不支持的简拼),追加一个
         // word = 原始输入串的回声候选,让用户至少看见自己打的东西,
@@ -795,9 +808,27 @@ impl ImeEngine {
     /// 「边输入边联想」兜底：整串还没有分词键（`"nih"`、`"zhon"`、`"z"`）。
     ///
     /// 复刻第 2.5 段的语义并保留（IBus 层依赖它避免打字途中候选窗闪没）：
-    /// 最长可完整切分前缀的整切分词 + 逐个音节词，加上「下一音节前缀」
-    /// 联想（`lookup_prefix`）；一个音节都切不出来时整串前缀联想。
+    /// 最长可完整切分前缀的整切分词 + 各切法首音节的词；一个音节都切不出来时
+    /// 整串前缀联想（`lookup_prefix`）。
     /// 兜底候选没有路径，按旧语义各自从 `ctx` 独立打分。
+    ///
+    /// A1 不变量在此同样成立(补漏:此前只修了格路径):候选必须起始于
+    /// 位置 0——每种切法只查它的**首音节**与整段 `joined`,不再遍历
+    /// 所有音节。旧行为把非起始音节(`zhongguor` 切出 `[zhong,gu,o]`
+    /// 时的 `gu`/`o`)的词也灌进候选,实测 `zhongguor` 前 20 名里 13 个
+    /// 是「只覆盖非起始音节」的词(过/国/果/古/哦……),用户无法有意义地
+    /// 选中——与 A1 修掉的「`nihao` 出现好/号/毫」是同一个缺陷。
+    /// 多种切法的**首音节可以不同**(`qia` → `[qi,a]` 与 `[qia]`),
+    /// 每种切法的首音节都要查(`qi` 与 `qia` 都是合法的位置 0 起点)。
+    ///
+    /// 注意：这里**不再**把切分残余字母（`nih` 切出 `ni` 后剩下的 `h`）
+    /// 当整音节做 `lookup_prefix`——那会把「只解释输入尾部 1~2 个字母的
+    /// 词」（所有 h 开头的高频词：哈/哈尔滨/哈哈大笑）灌进候选，还带着
+    /// 整词高频优势排在「覆盖整个输入串」的词之前（实测 `nih` 的「你好」
+    /// 被挤到第 97 名）。残余字母的正确解释是「后续音节的声母」，
+    /// 由简拼层 `lookup_mixed` 处理（`nih` → `ni h*` → 你好），
+    /// 见 [`Self::abbrev_candidates`]。下面的整串前缀联想分支仍覆盖
+    /// 「首音节一个都没切出来」的场景（如 `zhon` → 中/种/重）。
     fn fallback_candidates(
         &self,
         pinyin: &str,
@@ -815,12 +846,12 @@ impl ImeEngine {
             for seg in self.segmenter.segment(&pinyin[..k]) {
                 let joined = seg.join(" ");
                 merged.extend(self.dict.lookup(&joined)?);
-                for syllable in seg {
-                    merged.extend(self.dict.lookup(&syllable)?);
+                // A1:只查首音节(覆盖位置 0 的前缀词),不遍历后续音节
+                // ——非起始音节的词对当前输入没有意义(见函数级文档)。
+                // 多种切法各自的首音节都会查到(循环按切法逐个处理)。
+                if let Some(first) = seg.first() {
+                    merged.extend(self.dict.lookup(first)?);
                 }
-            }
-            if k < pinyin.len() {
-                merged.extend(self.dict.lookup_prefix(&pinyin[k..])?);
             }
         }
         if merged.is_empty() {
@@ -888,6 +919,58 @@ fn sort_candidates(ranked: &mut [Candidate]) {
     });
 }
 
+/// 合并简拼层并按 [`MAX_CANDIDATES`] 收尾,给简拼层留
+/// [`ABBREV_QUOTA`] 个保底名额。
+///
+/// `ranked`(精确/模糊/兜底层)与 `abbrev`(简拼层)各自排序截断后
+/// 按层序拼接——简拼层在入参里就是独立的 Vec,各自排序与一次合并
+/// 排序结果逐位一致(`sort_candidates` 首层 key 是层序,层间有序),
+/// 但配额只在分层截取时才有「边界」可依附。设简拼层 `n` 条:
+/// - 总条数 ≤ `MAX_CANDIDATES` 时两层原样拼接,不截断;
+/// - 总条数超限时,简拼层取 `max(min(ABBREV_QUOTA, n), 100 - head 条数)`
+///   条——保底 ABBREV_QUOTA 条,但不封顶:head 很短时简拼层照旧
+///   补满 100(head ≤ 100 时与旧「合并截 100」逐位一致,全拼无退化);
+/// - 非简拼层截到 `100 − 简拼层实取条数`(`n = 0` 时照旧用满 100,
+///   不白留空位)。
+///
+/// 配额只影响「谁被截断」,不影响层序:任何简拼候选仍排在所有
+/// 精确/模糊候选之后。返回值 = (合并后总条数, 截断后列表);
+/// `abbrev` 必须未经截断,总条数才真实(供断言「简拼层装满时被
+/// 配额截断」——截断后的前 5 条分不出「恰好 5 条」与「被截到 5 条」)。
+fn merge_with_abbrev(
+    mut ranked: Vec<Candidate>,
+    abbrev: Vec<Candidate>,
+) -> (usize, Vec<Candidate>) {
+    let abbrev_total = abbrev.len();
+    ranked.extend(abbrev);
+    let total = ranked.len();
+    // 简拼层在「排序前」的 ranked 中是尾部 abbrev_total 条,先切出来
+    // 各自排序截断,再按层序拼接——配额才有「截取边界」可依附。
+    // (若在合并排序后的 Vec 上按「末尾 abbrev_total 条 = 简拼层」截取,
+    // 排序重排后该假设已不成立,会切错位置。)
+    let mut head = ranked;
+    let mut tail = head.split_off(total - abbrev_total);
+    sort_candidates(&mut head);
+    sort_candidates(&mut tail);
+    if total > MAX_CANDIDATES {
+        // 只有总条数超上限才需要截断。配额是「保底名额」而非「简拼层
+        // 封顶」:简拼层取「剩余空位」与配额中较大的那个——
+        // - head 装满(≥100−配额)时:空位 ≈ 0,配额生效,简拼层保底
+        //   ABBREV_QUOTA 条(本任务要救的场景:zhongguor 等);
+        // - head 很短(如 ren 只有 21 条)时:空位有 79 条,简拼层照旧
+        //   填满到 100——与旧「合并排序截 100」行为逐位一致,不退化
+        //   (head ≤ 100 时旧行为等价于「先取 head 全量、再用简拼层
+        //   补满 100」,与这里逐位相同)。
+        let tail_keep = ABBREV_QUOTA
+            .min(tail.len())
+            .max(MAX_CANDIDATES.saturating_sub(head.len()));
+        tail.truncate(tail_keep);
+        head.truncate(MAX_CANDIDATES - tail_keep);
+    }
+    head.extend(tail);
+    (total, head)
+}
+
 /// 把一批路径节点剪到前 `k` 条（按分降序，`k = 0` 即清空）。
 ///
 /// 路径由 arena 里的节点构成（DAG 上「词序列 → 节点」一一对应），
@@ -935,8 +1018,12 @@ mod tests {
 
     #[test]
     fn mid_syllable_keeps_candidates() {
-        // 打字打到一半（如 "nih"）：整串还切不完整，但候选不能消失——
-        // 应按"已切分前缀 + 下一音节前缀"继续给候选（对应候选窗闪一下就没的 bug）。
+        // 打字打到一半(如 "nih"):整串还切不完整,但候选不能消失——
+        // 应按"已切分前缀"继续给候选(对应候选窗闪一下就没的 bug)。
+        // 残余字母("nih" 切出 "ni" 后剩下的 "h")不再当整音节做前缀联想
+        // (旧行为会把所有 h 开头的高频词灌进候选,见 fallback_candidates
+        // 函数级文档);"ni + h 开头音节"的词由简拼层 lookup_mixed 负责
+        // (玩具词库无副索引,这里只验证兜底层不再产出 h 开头的词)。
         let engine = ImeEngine::new(None).expect("内存引擎创建失败");
         engine.dict.upsert("你", "ni", 100).expect("插入失败");
         engine.dict.upsert("尼", "ni", 50).expect("插入失败");
@@ -951,8 +1038,9 @@ mod tests {
             "应包含最长可切前缀 ni 的候选"
         );
         assert!(
-            cands.iter().any(|c| c.word == "哈"),
-            "应包含尾部(下一音节前缀) h 的候选"
+            cands.iter().all(|c| c.word != "哈"),
+            "残余字母 h 不应再当整音节联想出「哈」(它只解释输入尾部 1 个字母): {:?}",
+            cands.iter().map(|c| &c.word).collect::<Vec<_>>()
         );
     }
 
@@ -1657,6 +1745,76 @@ mod tests {
         );
     }
 
+    /// Block A1 不变量在**兜底路径**同样成立(补漏回归):整串尚不能
+    /// 完整解码时(如 `zhongguor`、`qiax`),`fallback_candidates` 曾经
+    /// 遍历每种切法的**所有**音节查词,把只覆盖非起始音节的词
+    /// (`zhongguor` 切出 `[zhong,gu,o]` 时 `gu` 的「古」、`o` 的「哦」)
+    /// 灌进候选——与 A1 在格路径修掉的缺陷同源。
+    ///
+    /// 判定逻辑(不硬编码字表):候选拼音(空格分隔音节串)的**首音节**
+    /// 必须属于「最长可完整切分前缀」的某种切法的首音节集合——即存在
+    /// 一种从位置 0 出发的音节切法以它开头。这是「候选起始于位置 0」
+    /// 的直接判据:首音节不从位置 0 起头的词(过 guo / 古 gu / 哦 o)
+    /// 不可能由任何首段切法产出;而首音节不同的多条切法
+    /// (`qiax` 的 `[qi,a]` 与 `[qia]`)各自的首音节都合法。
+    #[test]
+    fn fallback_candidates_all_start_at_position_zero() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let dict_path = root.join("dict.bin");
+        let abbrev_path = root.join("abbrev.bin");
+        if !dict_path.is_file() {
+            return; // 环境缺词库:跳过
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        if abbrev_path.is_file() {
+            engine.dict = engine.dict.with_abbrev(&abbrev_path);
+        }
+
+        // 各输入的最长可切前缀切法由引擎同款 Segmenter 现算,不硬编码:
+        // zhongguor → 前缀 zhongguo:[zhong,gu,o] / [zhong,guo]
+        // qiax      → 前缀 qia     :[qi,a] / [qia]
+        let expected: [(&str, &[&str]); 2] = [
+            ("zhongguor", &["zhong"]),
+            ("qiax", &["qi", "qia"]),
+        ];
+        for (input, want_firsts) in expected {
+            let k = (1..=input.len())
+                .rev()
+                .find(|&k| !engine.segmenter.segment(&input[..k]).is_empty())
+                .expect("这两个输入都应有可切前缀");
+            let allowed_firsts: std::collections::HashSet<String> = engine
+                .segmenter
+                .segment(&input[..k])
+                .iter()
+                .filter_map(|seg| seg.first().cloned())
+                .collect();
+            let want: std::collections::HashSet<String> =
+                want_firsts.iter().map(|s| s.to_string()).collect();
+            assert_eq!(
+                allowed_firsts, want,
+                "{input} 的首音节集合(判据的前提)与预期不符"
+            );
+
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            assert!(!cands.is_empty(), "{input} 不应没有候选");
+            for c in &cands {
+                if c.echo || c.spelling == SpellingKind::Abbrev {
+                    // 回声候选 word=输入串,无音节结构;简拼候选覆盖整串、
+                    // 其 pinyin 是完整词拼音、天然从位置 0 起,均豁免。
+                    continue;
+                }
+                let first_syl = c.pinyin.split(' ').next().expect("候选拼音非空");
+                assert!(
+                    allowed_firsts.contains(first_syl),
+                    "{input} 的候选「{}」(拼音 {})首音节 {first_syl} 不在合法首音节集合                      {allowed_firsts:?} 里——它只覆盖非起始音节(A1 兜底路径回归)",
+                    c.word, c.pinyin
+                );
+            }
+        }
+    }
+
     /// Block A2:候选数不再被 `BEAM_WIDTH` 钳死——候选来源是
     /// `lattice[0]` 全量,而非 beam 的幸存路径。
     ///
@@ -1926,5 +2084,308 @@ mod tests {
             "无副索引时 lookup_mixed 仍应命中中国人(静态音节表): {:?}",
             mixed.iter().take(5).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
         );
+    }
+
+    /// 简拼层保底配额(PLAN.md 第三节缺口的修法):
+    /// 精确+兜底层装满 `MAX_CANDIDATES` 时,简拼层仍有 `ABBREV_QUOTA`
+    /// 条进候选列表,且目标词必须出现。真实词库 + 万象 gram,
+    /// 与 probe 对拍同一装配;缺文件时跳过(同 `real_wanxiang_routes_through_engine`)。
+    #[test]
+    fn abbrev_layer_survives_full_exact_layer() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let dict_path = root.join("dict.bin");
+        let abbrev_path = root.join("abbrev.bin");
+        let gram = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+        let (Some(gram_path), true, true) = (gram, dict_path.is_file(), abbrev_path.is_file())
+        else {
+            return; // 环境缺文件:跳过(与 real_wanxiang_routes_through_engine 同款)
+        };
+        if !gram_path.is_file() {
+            return;
+        }
+        let mut engine =
+            ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        for (input, want) in [
+            ("zhongguor", "中国人"),
+            ("nih", "你好"),
+            ("renm", "人们"),
+            ("beijdx", "北京大学"),
+            ("zhonggr", "中国人"),
+        ] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            assert!(
+                cands.iter().any(|c| c.word == want),
+                "{input} 的候选里必须出现 {want}(简拼层保底配额): 末尾 {:?}",
+                cands.iter().rev().take(8).map(|c| &c.word).collect::<Vec<_>>()
+            );
+        }
+
+        // 装满组:候选总数达到 MAX_CANDIDATES。简拼层条数 = max(ABBREV_QUOTA,
+        // 100 − 非简拼层条数)——配额是保底不是封顶:残余字母前缀联想
+        // 分支删除后,zhongguor 的兜底层从「满超 100」降到 94 条,
+        // 简拼层因此拿到 6 个位(而不是恰好 5)。只断结构:
+        // 简拼层 ≥ ABBREV_QUOTA 且严格分层(不排在精确/模糊候选之前)。
+        for input in ["zhongguor", "nih", "renm"] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            assert_eq!(cands.len(), MAX_CANDIDATES, "{input} 应装满");
+            let n_abbrev = cands
+                .iter()
+                .filter(|c| c.spelling == SpellingKind::Abbrev)
+                .count();
+            assert!(
+                n_abbrev >= ABBREV_QUOTA,
+                "{input} 简拼层应至少保底 {ABBREV_QUOTA} 条(实际 {n_abbrev})"
+            );
+            let first_abbrev = cands
+                .iter()
+                .position(|c| c.spelling == SpellingKind::Abbrev)
+                .expect("简拼层非空");
+            assert!(
+                cands[..first_abbrev]
+                    .iter()
+                    .all(|c| c.spelling != SpellingKind::Abbrev),
+                "{input} 严格分层:简拼候选不得排在精确/模糊候选之前"
+            );
+        }
+    }
+    /// 残余字母联想交给简拼层后的可见性(真实词库 + 万象 gram):
+    /// `nih`/`renm`/`zhongguor` 的目标词必须出现且位于简拼层,
+    /// 而不再被「只解释尾部 1 个字母的词」挤出前 95 名
+    /// (修前:你好 97 / 人们 96 / 中国人 96)。排名上限是当前实测值
+    /// 的回归锉(不许变差),不是验收目标——目标是前 20。
+    #[test]
+    fn mixed_abbrev_targets_are_visible() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let dict_path = root.join("dict.bin");
+        let abbrev_path = root.join("abbrev.bin");
+        let gram = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+        let (Some(gram_path), true, true) = (gram, dict_path.is_file(), abbrev_path.is_file())
+        else {
+            return; // 环境缺文件:跳过
+        };
+        if !gram_path.is_file() {
+            return;
+        }
+        let mut engine =
+            ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        // (输入, 目标词, 排名上限回归锉);上限 = 实测值,不允许再往后退。
+        // `zhongguor` 的上限因 A1 兜底路径补漏而收紧:95 → 22。
+        // 三段式:原断言「中国人名次 < 95」(兜底层混入只覆盖非起始音节的
+        // 碎片单字 94 条,把简拼层挤到第 95 位起);改为「名次 < 22」——
+        // 兜底路径与格路径一样只保留起始于位置 0 的候选后,碎片单字消失,
+        // 中国人升到第 22 名(实测)。新行为是对的:那些碎片(过/国/古/哦)
+        // 对 zhongguor 的输入者本就无意义。`nih`(26)仍卡在简拼层内排序
+        // (你还 词频 > 你好,词库数据决定),不在本次范围。
+        for (input, want, rank_ceiling) in [
+            ("nih", "你好", 26usize),
+            ("renm", "人们", 20usize),
+            ("zhongguor", "中国人", 22usize),
+        ] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            let pos = cands
+                .iter()
+                .position(|c| c.word == want)
+                .unwrap_or_else(|| panic!("{input} 应含 {want}: {:?}", cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()));
+            assert!(
+                pos < rank_ceiling,
+                "{input} 的 {want} 排第 {} 名,不应比修理后实测位({rank_ceiling})更靠后",
+                pos + 1
+            );
+            // 目标词必须在简拼层,且严格分层未破坏:
+            // 简拼候选不得排在精确/模糊候选之前。
+            assert_eq!(
+                cands[pos].spelling,
+                SpellingKind::Abbrev,
+                "{input} 的 {want} 应来自简拼层"
+            );
+            if let Some(first_abbrev) = cands.iter().position(|c| c.spelling == SpellingKind::Abbrev) {
+                assert!(
+                    cands[..first_abbrev]
+                        .iter()
+                        .all(|c| c.spelling != SpellingKind::Abbrev),
+                    "{input} 严格分层:简拼候选不得排在精确/模糊候选之前"
+                );
+            }
+        }
+    }
+
+    /// 「首音节未打完」联想仍然工作(真实词库):输入 `ni`
+    /// 时 你/尼/泥 仍在前排;输入 `zhongg`(打了 `zhong` + 一个声母)时
+    /// 中国 仍然出现(简拼层 `lookup_mixed` 命中 `zhong g*`)。
+    #[test]
+    fn mid_typing_completion_still_works() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let dict_path = root.join("dict.bin");
+        let abbrev_path = root.join("abbrev.bin");
+        let gram = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+        let (Some(gram_path), true, true) = (gram, dict_path.is_file(), abbrev_path.is_file())
+        else {
+            return;
+        };
+        if !gram_path.is_file() {
+            return;
+        }
+        let mut engine =
+            ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        let ni = engine
+            .lookup_candidates("ni", &LmContext::empty())
+            .expect("查询失败");
+        for w in ["你", "尼", "泥"] {
+            assert!(
+                ni.iter().any(|c| c.word == w),
+                "ni 应仍含 {w}: {:?}",
+                ni.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+            );
+        }
+
+        let zhongg = engine
+            .lookup_candidates("zhongg", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            zhongg.iter().any(|c| c.word == "中国"),
+            "zhongg 应仍含 中国: {:?}",
+            zhongg.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+
+    /// 配额只是保底不是封顶,且不浪费名额(回归:`ren` 旧行为是
+    /// head 21 条 + 简拼联想补满 100,曾有一版实现把简拼层无条件
+    /// 截到配额导致退化)。真实词库 + 空 LM(无需 gram):`ren` 的
+    /// head ≪ 100,简拼层应补满到 100;`zhongguo`(整词精确,
+    /// 简拼层为空)不受影响,全拼照旧。
+    #[test]
+    fn abbrev_quota_is_floor_not_cap() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = dict_path.with_file_name("abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        // head 很短时:简拼层补满到 MAX_CANDIDATES(保底≠封顶)
+        let ren = engine
+            .lookup_candidates("ren", &LmContext::empty())
+            .expect("查询失败");
+        assert_eq!(ren.len(), MAX_CANDIDATES, "ren 应补满 100: {}", ren.len());
+        let n_abbrev = ren
+            .iter()
+            .filter(|c| c.spelling == SpellingKind::Abbrev)
+            .count();
+        assert!(
+            n_abbrev > ABBREV_QUOTA,
+            "ren 的简拼层应远超配额(保底不是封顶): {n_abbrev}"
+        );
+        // 严格分层未被破坏
+        if let Some(first_abbrev) = ren.iter().position(|c| c.spelling == SpellingKind::Abbrev) {
+            assert!(
+                ren[..first_abbrev]
+                    .iter()
+                    .all(|c| c.spelling != SpellingKind::Abbrev),
+                "ren 严格分层:简拼候选不得排在精确/模糊候选之前"
+            );
+        }
+
+        // 简拼层为空时:head 照旧,不因配额浪费名额(逐位不变由对拍保证,
+        // 这里断结构:无 Abbrev 候选、条数与无配额时一致)。
+        let zhongguo = engine
+            .lookup_candidates("zhongguo", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            zhongguo.iter().all(|c| c.spelling != SpellingKind::Abbrev),
+            "zhongguo 不应有简拼层"
+        );
+        assert!(!zhongguo.is_empty(), "zhongguo 候选非空");
+    }
+
+    /// `merge_with_abbrev` 的合成单元测试(不依赖真实词库):
+    /// 覆盖「head 装满 / 简拼层为 0 / 两层都短 / 严格分层」四个分支。
+    #[test]
+    fn merge_with_abbrev_quota_branches() {
+        let mk = |word: String, freq: u64, kind: SpellingKind| Candidate {
+            word,
+            pinyin: String::new(),
+            score: 0.0,
+            freq,
+            spelling: kind,
+            echo: false,
+        };
+        let head: Vec<Candidate> = (0..100u64)
+            .map(|i| mk(format!("e{i}"), 10_000 - i, SpellingKind::Exact))
+            .collect();
+        let abbrev: Vec<Candidate> = (0..10u64)
+            .map(|i| mk(format!("a{i}"), 100 - i, SpellingKind::Abbrev))
+            .collect();
+
+        // head 装满 100 + 简拼 10 → 95 + 5,简拼层保底 5 条且排在最后
+        let (total, out) = merge_with_abbrev(head.clone(), abbrev.clone());
+        assert_eq!(total, 110);
+        assert_eq!(out.len(), MAX_CANDIDATES);
+        assert_eq!(
+            out.iter().filter(|c| c.spelling == SpellingKind::Abbrev).count(),
+            ABBREV_QUOTA
+        );
+        assert_eq!(out[95].word, "a0", "简拼层第 1 名应落在第 96 位");
+        assert!(out[..95].iter().all(|c| c.spelling == SpellingKind::Exact));
+        // head 的前 95 条逐位保留(被挤掉的是第 96~100 名)
+        assert!(out[..95].iter().zip(head.iter()).all(|(a, b)| a.word == b.word));
+
+        // 简拼层为 0 → head 用满 100,一个名额不浪费
+        let (_, out) = merge_with_abbrev(head.clone(), Vec::new());
+        assert_eq!(out.len(), MAX_CANDIDATES);
+        assert!(out.iter().all(|c| c.spelling == SpellingKind::Exact));
+
+        // 两层都短(总条数 ≤100)→ 原样拼接,简拼层不被配额截断
+        let (_, out) = merge_with_abbrev(head[..20].to_vec(), abbrev.clone());
+        assert_eq!(out.len(), 30, "总数不足 100 时不许截断");
+        assert_eq!(
+            out.iter().filter(|c| c.spelling == SpellingKind::Abbrev).count(),
+            10
+        );
+
+        // head 短 + 简拼层长(总数 >100)→ 简拼层补满 100,不按配额封顶
+        let big_abbrev: Vec<Candidate> = (0..90u64)
+            .map(|i| mk(format!("b{i}"), 100 - i, SpellingKind::Abbrev))
+            .collect();
+        let (total, out) = merge_with_abbrev(head[..20].to_vec(), big_abbrev);
+        assert_eq!(total, 110);
+        assert_eq!(out.len(), MAX_CANDIDATES);
+        assert_eq!(
+            out.iter().filter(|c| c.spelling == SpellingKind::Abbrev).count(),
+            80,
+            "head 20 条时简拼层应补满到 100(保底不是封顶)"
+        );
+        assert!(out[..20].iter().all(|c| c.spelling == SpellingKind::Exact));
     }
 }
