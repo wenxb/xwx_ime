@@ -1,0 +1,12 @@
+[package]
+name    = "xwx_engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace     = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace   = true
+rusqlite  = { version = "0.31", features = ["bundled"] }
+memmap2   = "0.9"

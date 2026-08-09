@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+   xwx 输入的 component XML。
+   安装时用 install.sh 把 `__XWX_EXEC__` 替换成实际二进制路径后，
+   放到 ~/.local/share/ibus/component/xwx.xml 即可被 ibus-daemon 扫描。
+   字段与引擎的 XML 输出模式保持一致（engine name = xwx，
+   组件 name = 引擎进程占用的 D-Bus 服务名）。
+-->
+<component>
+  <name>org.freedesktop.IBus.Engine.xwx</name>
+  <description>XWX 拼音输入法（Rust 实现）</description>
+  <version>0.1.0</version>
+  <license>MIT</license>
+  <author>xwx</author>
+  <homepage></homepage>
+  <exec>__XWX_EXEC__ --ibus</exec>
+  <textdomain></textdomain>
+  <engines>
+    <engine>
+      <name>xwx</name>
+      <longname>XWX 拼音</longname>
+      <description>XWX 拼音输入法（Rust 实现）</description>
+      <language>zh_CN</language>
+      <license>MIT</license>
+      <author>xwx</author>
+      <icon></icon>
+      <layout>us</layout>
+      <rank>0</rank>
+      <hotkeys></hotkeys>
+      <symbol></symbol>
+      <setup></setup>
+      <layout_variant></layout_variant>
+      <layout_option></layout_option>
+      <version>0.1.0</version>
+      <textdomain></textdomain>
+      <icon_prop_key></icon_prop_key>
+    </engine>
+  </engines>
+</component>

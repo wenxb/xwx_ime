@@ -1,0 +1,63 @@
+[workspace]
+members = [
+    "crates/xwx_engine",
+    "crates/xwx_ibus",
+]
+resolver = "2"
+
+[package]
+name        = "xwx_ime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "XWX 拼音输入法（IBus 引擎）"
+
+[[bin]]
+name = "xwx_ime"
+path = "src/main.rs"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["xwx"]
+license = "MIT"
+
+[workspace.dependencies]
+# shared across crates
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+tokio       = { version = "1", features = ["full"] }
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror   = "1"
+xwx_engine  = { path = "crates/xwx_engine" }
+xwx_ibus    = { path = "crates/xwx_ibus" }
+
+[dependencies]
+xwx_engine.workspace   = true
+xwx_ibus.workspace     = true
+tokio.workspace        = true
+tracing.workspace      = true
+tracing-subscriber.workspace = true
+zbus      = { version = "4", features = ["tokio"] }
+zvariant  = { version = "4", features = ["gvariant"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# ---- deb 打包（cargo deb）----
+# XML 必须进 /usr/share/ibus/component/（IBus 不扫用户目录）。
+# 打包前运行 `just deb`：先生成 exec=/usr/bin/xwx_ime 的
+# XML 到 data/debian/xwx.xml，再 cargo deb 打进系统目录。
+[package.metadata.deb]
+section       = "utils"
+priority      = "optional"
+maintainer    = "xwx <xwx@localhost>"
+extended-description = "XWX 拼音输入法（Rust 实现的 IBus 引擎）。"
+copyright     = "2026 xwx"
+recommends    = "ibus"
+maintainer-scripts = "data/debian"
+assets = [
+    ["data/debian/xwx.xml", "usr/share/ibus/component/xwx.xml", "644"],
+    ["target/release/xwx_ime", "usr/bin/xwx_ime", "755"],
+]

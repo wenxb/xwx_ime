@@ -1,0 +1,11 @@
+[package]
+name = "gram_probe"
+version = "0.1.0"
+edition = "2021"
+
+# 独立项目，不加入主 workspace（根 Cargo.toml 的 members 不含本目录；
+# 这里再显式声明一个空 workspace 表，避免 cargo 从父目录误继承 workspace）。
+[workspace]
+
+[dependencies]
+memmap2 = "0.9"

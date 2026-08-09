@@ -1,0 +1,30 @@
+# ---- Cargo / Rust ----
+/target/
+
+# ---- 生成的数据产物（不应当入库）----
+# 词库二进制：scripts/dict_to_bin.py 从 SQLite/Rime 构建而来，应通过
+# `just install` / 发布物分发，而不是进 git。
+data/dict.bin
+data/*.sqlite3
+
+# 语言模型（文本或未来的 mmap 二进制格式），由语料训练生成
+data/bigram.txt
+data/bigram.bin
+
+# 打 deb 时 `just deb` 生成的 component XML（构建产物）；
+# 手写的模板 data/xwx.xml、钩子 data/debian/postinst 保留入库。
+data/debian/xwx.xml
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# 评测样本:scripts/build_eval.py 从 dict.bin 生成(4MB),
+# 与词库绑定,换词库要重新生成,不入库。
+scripts/eval_samples.jsonl
+
+# ---- 编辑器 / 系统垃圾 ----
+*.swp
+*.swo
+*~
+.DS_Store
