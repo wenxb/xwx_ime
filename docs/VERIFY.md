@@ -21,10 +21,11 @@
 ```bash
 cd ~/Desktop/xwx_ime
 
-# 1. 数据文件就位（dict.bin 已装过；abbrev.bin 是简拼副索引，缺了简拼全废）
-ls -la ~/.local/share/xwx/
-#   需要: dict.bin  abbrev.bin  wanxiang-lts-zh-hans.gram
-# abbrev.bin 若不在：
+# 1. 数据文件就位（三个都要有）
+for f in dict.bin abbrev.bin wanxiang-lts-zh-hans.gram; do
+  printf '%-32s ' "$f"; [ -f ~/.local/share/xwx/$f ] && echo OK || echo 缺失
+done
+# abbrev.bin 若缺（简拼副索引，缺了第 18~21 条全废）：
 python3 scripts/abbrev_to_bin.py && cp data/abbrev.bin ~/.local/share/xwx/
 
 # 2. 装组件 XML 到用户目录（不用 sudo，整段可直接复制；须在项目根执行）
@@ -32,13 +33,20 @@ cargo build --release -p xwx_ime
 mkdir -p ~/.local/share/ibus/component
 BIN=$(cargo metadata --no-deps --format-version 1 \
       | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')/release/xwx_ime
-sed "s#__XWX_EXEC__#$BIN#g" data/xwx.xml > ~/.local/share/ibus/component/xwx.xml
+"$BIN" --xml > ~/.local/share/ibus/component/xwx.xml
 grep exec ~/.local/share/ibus/component/xwx.xml    # 核一眼路径对不对
 ```
 
-> `--ibus` 已经写在 XML 模板里了，`$BIN` 只填二进制路径，别再加一次。
+> `--xml` 会**自动把当前二进制路径填进 `<exec>`**（`main.rs` 用 `current_exe()`），
+> 不需要 `sed` 替换模板。上面这条已实跑验证，输出是
+> `<exec>/mnt/hdd/target/xwx_ime/release/xwx_ime --ibus</exec>`。
+>
 > target 目录被 `.cargo/config.toml` 指到了 `/mnt/hdd/target/xwx_ime`，
-> 所以上面用 `cargo metadata` 查而不是写死 `./target`。
+> 所以用 `cargo metadata` 查而不是写死 `./target`。
+>
+> ⚠ 别写成 `--xml --exec <路径>`：`--exec` 后面的参数会被当成**输出文件名**
+> （`main.rs:46` 的 `out_path` 判定是「不以 `--` 开头的第一个参数」），
+> XML 会被写进那个文件而不是 stdout。
 
 ### ⚠ 和 fcitx5 的冲突
 
