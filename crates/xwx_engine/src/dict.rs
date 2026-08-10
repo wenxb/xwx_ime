@@ -884,10 +884,15 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// 测试词库的条目组:(拼音, [(词, freq)])。
+    type TestGroups<'a> = Vec<(&'a [u8], Vec<(&'a str, u32)>)>;
+    /// 测试简拼副索引的条目组:(首字母 key, [(词, 全拼, freq)])。
+    type TestAbbrevGroups<'a> = Vec<(&'a [u8], Vec<(&'a str, &'a str, u32)>)>;
+
     /// 按 dict.bin v1 布局手工构造一个迷你词库（拼音已按字节序排好）。
     fn build_test_bin(version: u32) -> Vec<u8> {
         // (拼音, [(词, freq)])，顺序即拼音字节序：hao < ni < "ni hao"
-        let groups: Vec<(&[u8], Vec<(&str, u32)>)> = vec![
+        let groups: TestGroups = vec![
             (b"hao", vec![("好", 80)]),
             (b"ni", vec![("你", 300), ("妮", 200), ("尼", 20)]),
             (b"ni hao", vec![("你好", 400)]),
@@ -1004,7 +1009,7 @@ mod tests {
         let store = DictStore::Sqlite(SqliteDict::open_in_memory().expect("内存词库失败"));
         store.upsert("你好", "ni hao", 10).expect("upsert 应成功");
         assert_eq!(store.lookup("ni hao").expect("查询失败").len(), 1);
-        assert!(store.lookup_prefix("ni").expect("查询失败").len() >= 1);
+        assert!(!store.lookup_prefix("ni").expect("查询失败").is_empty());
     }
 
     /// 按 abbrev.bin v1 布局手工构造一个迷你简拼副索引(key 已按字节序排好)。
@@ -1012,7 +1017,7 @@ mod tests {
     /// 词条区格式:word_len u8 + word + pinyin_len u8 + pinyin + freq u32 LE。
     fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
         // (首字母 key, [(词, 全拼, freq)]):bjdx < zgr
-        let groups: Vec<(&[u8], Vec<(&str, &str, u32)>)> = vec![
+        let groups: TestAbbrevGroups = vec![
             (b"bjdx", vec![("北京大学", "bei jing da xue", 211845)]),
             (b"zgr", vec![
                 ("中国人", "zhong guo ren", 451625),

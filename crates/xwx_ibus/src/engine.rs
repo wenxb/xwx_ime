@@ -56,11 +56,11 @@ impl XwxEngineServer {
         match output {
             SessionOutput::Noop => false,
             SessionOutput::Commit(text) => {
-                self.commit(&ctxt, &text).await;
+                self.commit(ctxt, &text).await;
                 true
             }
             SessionOutput::Updated(u) => {
-                self.refresh_ui(&ctxt, &u).await;
+                self.refresh_ui(ctxt, &u).await;
                 true
             }
         }

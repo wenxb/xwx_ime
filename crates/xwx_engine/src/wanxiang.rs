@@ -482,12 +482,10 @@ impl WanxiangLM {
         // pos[j] = 第 j 个字符的字节起点（j = 0..=ctx_chars）
         const MAX_WINDOW: usize = 8; // 调用方已保证 ≤5，给足余量
         let mut pos = [0usize; MAX_WINDOW + 1];
-        let mut i = 0;
-        for ch in ctx_tail.chars().take(n) {
+        for (i, ch) in ctx_tail.chars().take(n).enumerate() {
             let mut tmp = [0u8; 4];
             let len = encode_cp_into(ch as u32, &mut tmp);
             pos[i + 1] = pos[i] + len;
-            i += 1;
         }
 
         let mut hits = [(0i32, 0usize); 8]; // kMaxResults
