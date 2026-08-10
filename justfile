@@ -10,6 +10,7 @@
 #   just deb      打 .deb 包
 
 set shell := ["bash", "-uc"]
+set ignore-comments := true
 
 # target 目录由 cargo 决定（尊重 .cargo/config.toml 的 target-dir）
 target_dir := `cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'`
