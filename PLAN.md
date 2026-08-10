@@ -11,8 +11,9 @@
 > **换人/换会话接手先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)**
 > （定过又推翻的判断、刻意代价、指标的坑、协作约定）。
 >
-> **当前状态**：测试 **131 passed / 1 ignored**、clippy **全绿**、工作区干净。
-> 简拼（纯 + 混合）与中文标点已可用，全拼行为无退化。
+> **当前状态**：测试 **149 passed / 1 ignored**、clippy **全绿**、工作区干净。
+> 简拼（纯 + 混合）、中文标点、可编辑输入缓冲、Shift 大写均已可用，
+> 全拼行为无退化（gear 审计的两个 P0 都已清）。
 
 最后更新：2026-08-10
 
@@ -200,11 +201,44 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 
 ---
 
+### B1 可编辑输入缓冲 + ascii_composer 的 Shift
+- [x] **B1 输入缓冲加光标** — 此前 `pinyin` 是 append-only `String`，
+      长串中间打错一个字母只能全删重打。现在 `Char` 在 caret 处插入、
+      `Backspace` 删 caret 前一个字符、`Left`/`Right` 移动 caret，
+      preedit 光标也从「恒等于串尾」改为跟随 caret
+
+  > **`SessionUpdate` 里有两个光标，别混**：`cursor` = 候选窗高亮下标，
+  > `caret` = 预编辑串文本光标。
+  >
+  > `Left`/`Right` 到边界时**吃掉按键而不透传**（串为空时才透传）：
+  > 串非空时用户焦点在编辑拼音串，透传会去移动应用文本框自己的光标。
+  > `Backspace` 在 caret=0 时同理。librime/搜狗也是吃掉。
+  >
+  > 候选跟着**整串**走而不是跟着 caret 走：caret 不在串尾时按空格上屏，
+  > 出的仍是完整串的首选而不是前半截。
+  >
+  > **上屏后 caret 必须归 0**——留下越界 caret 是这类改动最容易 panic 的地方。
+- [x] **ascii_composer 的 Shift / CapsLock**（gear P0）—— 此前 Shift+G 被无条件
+      转小写进拼音串，`GPU`/`API` 打不出来。根因是 `translate_keyval(keyval)`
+      **拿不到 `state`**，Shift 信息在 `engine.rs` 那层就丢了
+
+  > 改法：签名加 `state`；新增 `InputEvent::Verbatim(char)`
+  > =「直接上屏，不进拼音串、不做全角映射」。
+  > **没复用 `Char`** 的理由：它已同时承担「拼音字母」与「标点上屏」两种语义。
+  >
+  > Shift 与 CapsLock 按 **XOR** 处理（叠加抵消回小写，常规终端语义）。
+  > 拼音串非空时 Shift+字母 → 先上屏高亮候选再追加大写（`nihao`+G → 「你好G」），
+  > 与标点那轮同一形状：只进 `committed_tail`、不进 UserLM、不动 `last_word`。
+  >
+  > **英文模式改为在 ibus 层直接透传、不进翻译层**（`gear-audit.md` 当初建议
+  > 在会话层放行）：翻译层一归一化就丢了原始 Shift/CapsLock 信息，
+  > 而英文模式下应用需要看到原始按键。
+  > ⚠ 这条路径在 D-Bus 边界上，**单测覆盖不到，需集成环境验证**。
+
+---
+
 ## 四、待做
 
-- [ ] **B1 输入缓冲加光标** — `InputSession.pinyin` 目前是 append-only `String`，
-      `Left`/`Right` 直接 `Noop` 透传（`session.rs:257-258` 自认 TODO）。
-      长串中间打错一个字母只能全删重打
 - [ ] **B2 音节分隔符 `'`** — `xi'an` 消歧。优先级低：对拍显示 librime **不用** `'`
       也能把「西安」排进 top-5，所以它是兜底手段而非必需品
 
@@ -219,11 +253,12 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 
 ### gear 清单里的其他缺口（按审计的优先级）
 - [x] ~~**punctuator（P0）**~~ — 已完成，见第三节
-- [ ] **ascii_composer 的 Shift（P0）** — Shift+G 变成小写 `g` 进拼音串，打不出 `GPU`
+- [x] ~~**ascii_composer 的 Shift（P0）**~~ — 已完成，见第三节
 
-  > 现在 `translate_keyval` 用 `0x21..=0x7e` 整段放行 ASCII 可打印字符。
-  > 做 Shift 时注意：没有全角映射的 `=` `+` `-` `#` `%` `&` `*` `@` `|`
-  > 也会进 `Char(c)`，要确认它们在中文模式下仍然透传给应用、没被吃掉。
+  > `translate_keyval` 用 `0x21..=0x7e` 整段放行 ASCII 可打印字符，
+  > 所以没有全角映射的 `=` `+` `-` `#` `%` `&` `*` `@` `|` 也会进 `Char(c)`，
+  > 但在会话层落到 catch-all 透传分支、**不会**被塞进拼音串。
+  > 已有测试 `unmapped_ascii_symbols_still_passthrough` 钉住这条。
 - [ ] **造词 / unity_table_encoder（P1）** — UserLM 只调频不造词，
       上屏 N 次的自造短语永远学不会
 - [ ] **selector 的 `,`/`.` 翻页（P1）** — 需与 punctuator 一起设计（`,` 既是标点又是翻页键）
@@ -312,7 +347,9 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 | B3 ① 后 | 101（90 / 3 / 8）全绿，0 failed |
 | B3 ②③ 后 | 111（100 / 3 / 8） |
 | 配额 + 残余字母 + A1 兜底后 | 117（106 / 3 / 8） |
-| 可达性分桶 + 标点后 | **131（119 / 4 / 8）** |
+| 可达性分桶 + 标点后 | 131（119 / 4 / 8） |
+| B1 可编辑缓冲后 | 141（129 / 4 / 8） |
+| ascii_composer Shift 后 | **149（136 / 5 / 8）** |
 
 ```bash
 cargo test --workspace --offline                              # 必须在项目根跑
