@@ -11,10 +11,14 @@
 > **换人/换会话接手先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)**
 > （定过又推翻的判断、刻意代价、指标的坑、协作约定）。
 >
-> **当前状态**：测试 **181 passed / 1 ignored**、clippy **全绿**、工作区干净。
-> 简拼（纯 + 混合）、中文标点、可编辑输入缓冲、Shift 大写、造词、
-> `,`/`.` 翻页、`'` 分隔符、Ctrl+Delete 删候选均已可用，全拼行为无退化。
-> **gear 审计只剩 recognizer 一项**（P1，邮箱/网址识别）。
+> **当前状态**：测试 **207 passed / 1 ignored**、clippy **全绿**、工作区干净。
+> **gear 审计已清零**——简拼（纯 + 混合）、中文标点、可编辑输入缓冲、
+> Shift 大写、造词、`,`/`.` 翻页、`'` 分隔符、Ctrl+Delete 删候选、
+> 邮箱/网址识别全部可用，全拼行为无退化。
+>
+> ⚠ **但这是引擎与会话层的绿，不是实机可用的证据**——
+> IBus 那几条路径（英文模式透传、`UpdateLookupTable` 等信号）在 D-Bus
+> 边界上，`cargo test` 摸不到。**下一步该做实机验证**，见第四节。
 
 最后更新：2026-08-10
 
@@ -268,6 +272,30 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
       用户造词条目连同词条删掉。屏蔽表键用 `拼音key\u{1}词` 拼接串
       （初版用元组，标准库无 `Borrow<(&str,&str)>` 被迫线性扫描，
       500 条时把长串拖到 3.0ms）
+### recognizer（gear 审计最后一项）
+- [x] **邮箱 / 网址不再被切成拼音** — 此前 `www` 出「万维网/呜呜呜」、
+      `abc` 出「安伯尘」、`mailto` 出「买/卖/埋」，打网址得先切英文模式重打
+
+  > 手写匹配（不引入正则 crate）。email 逐字照搬 librime 的
+  > `^[A-Za-z][-_.0-9A-Za-z]*@.*$`；url 取显式前缀子句
+  > （`www.` / `https?:` / `ftp[.:]` / `mailto:` / `file:`）。
+  > librime 的 `uppercase` 那条**不需要**——Shift 那轮已覆盖。
+  >
+  > **回溯靠 `refresh()` 每次用完整拼音串重判**，所以「继续打字不反悔」
+  > 与「Backspace 退回」都是天然结果，不需要额外状态机。
+  > 识别态只是「别再切它」：候选被一条原文回声取代，拼音候选整批消失；
+  > 上屏走 `commit_raw` 语义（不学习、不造词）。
+  > 识别态字符直通臂放在标点/翻页臂**之前**，`.` `@` `:` `/` 才不会被吃掉。
+- [x] **裁决：裸域名 `^[a-z]+[.].+$` 有意不做** — 它会把 `ni.hao` 这类
+      正常「拼音+句号+拼音」吞成网址，而句号在中文输入里的频率远高于裸域名。
+      librime 靠 tag 机制区分，我们没有。已在模块文档标注并加测试
+      `bare_domain_stays_pinyin_per_ruling` 钉住，**免得后人当成漏了去补**
+
+  > ⚠ 初版有个**只有端到端测试才抓得到的 bug**：单键断言全绿，
+  > 但 `http://x.com` 实际得到 `"http:、、xcom"`（`/` 被映射成顿号）、
+  > `mailto:a@b.c` 得到 `"买:a@b.c"`。**比不做还糟。**
+  > 教训与测试形状见 `HANDOFF.md`「交互功能要有逐字符敲一遍的端到端测试」。
+
 - [x] ~~**charset_filter（P2）**~~ — **销掉，收益实测为零**。整个语料的候选里
       CJK 扩展 A/B/C 区一个字都没有（99.83% 常用区，其余是回声候选的 ASCII）。
       词库是 rime-ice，本身没收录扩展区字——审计标 P2 是照搬 librime 的清单，
@@ -277,6 +305,37 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 ---
 
 ## 四、待做
+
+### ⚠ 实机验证（现在最该做的一件事）
+
+**207 passed 证明的是引擎与会话层，不是 IBus 集成。**
+这几条路径在 D-Bus 边界上，`cargo test` 结构上摸不到：
+英文模式透传（`engine.rs` 的 `process_key_event` 直接 `return false`）、
+`UpdatePreeditText` / `UpdateLookupTable` / `CommitText` 三个信号、
+`FocusOut` 触发的造词结算。
+
+功能已经堆了一大摞（标点、大写、光标、造词、翻页、分隔符、删候选、识别），
+**全都在会话/协议层**——越堆越该实机跑一遍。装进 ibus 后按这个清单敲：
+
+| # | 敲什么 | 应该看到 |
+|---|---|---|
+| 1 | `nihao` 空格 | 「你好」上屏 |
+| 2 | `nihao,` | 「你好，」（全角逗号，不是半角） |
+| 3 | `nihao` 后打 `.` | **翻到第 2 页**（不是出句号） |
+| 4 | 承上，第 2 页打 `,` | **回第 1 页**；再打 `,` 出「，」 |
+| 5 | Shift+G Shift+P Shift+U | `GPU` |
+| 6 | `zhongguor` | 「中国人」第 1 |
+| 7 | `xi'an` | 「西安」第 1 |
+| 8 | `nihao` → ← ← → 插 `x` | preedit 变 `nihxao`，**光标停在插入点** |
+| 9 | 逐字选「张」「三」「丰」，再打 `zhangsanfeng` | 「张三丰」在候选里 |
+| 10 | 承上，切到**另一个应用**逐字选两字 | **不该**和前面的粘成一个词 |
+| 11 | 高亮某候选按 Ctrl+Delete，重打同拼音 | 该候选消失 |
+| 12 | `zhangsan@gmail.com` 回车 | 原样上屏，全程无拼音候选 |
+| 13 | `http://x.com` 回车 | 原样上屏（**曾出过 `http:、、xcom`**） |
+| 14 | Ctrl+空格 切英文，Shift+G | 应用收到大写 `G`，输入法不拦 |
+
+第 3、4、10、13 是最容易出问题的：前两条涉及键位抢占，
+第 10 跨进程、第 13 是端到端序列。
 
 - [x] ~~**B2 音节分隔符 `'`**~~ — 已完成，见第三节
 
@@ -359,20 +418,7 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 - [x] ~~**editor 的 Ctrl+Delete 删候选（P1）**~~ — 已完成，见第三节
 - [x] ~~**造词 / unity_table_encoder（P1）**~~ — 已完成，见第三节
 - [x] ~~**charset_filter（P2）**~~ — **销掉**，收益实测为零，见第三节
-- [ ] **recognizer（P1）** — 中文模式里输邮箱/网址会被逐字母切成拼音。
-      **gear 清单里最后一个未做项**
-
-> librime 的配置在 `/usr/share/rime-data/default.yaml:52-56`：
-> ```yaml
-> recognizer:
->   patterns:
->     email: "^[A-Za-z][-_.0-9A-Za-z]*@.*$"
->     uppercase: "[A-Z][-_+.'0-9A-Za-z]*$"
->     url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|^[a-z]+[.].+$"
-> ```
-> 注意 `uppercase` 那条现在**已被 ascii_composer 的 Shift 覆盖**（打 `GPU`
-> 走 `Verbatim`，不进拼音串），所以真正要做的是 email 与 url 两类。
-> **不许新增 crate 依赖**（正则库要自己手写匹配，或用最小状态机）。
+- [x] ~~**recognizer（P1）**~~ — 已完成，见第三节。**gear 清单至此清零**
 
 ---
 
@@ -459,7 +505,8 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 | B1 可编辑缓冲后 | 141（129 / 4 / 8） |
 | ascii_composer Shift 后 | 149（136 / 5 / 8） |
 | 造词后 | 160（147 / 5 / 8） |
-| 翻页 + `'` 分隔符 + 删候选后 | **181（168 / 5 / 8）** |
+| 翻页 + `'` 分隔符 + 删候选后 | 181（168 / 5 / 8） |
+| recognizer 后 | **207（194 / 5 / 8）** |
 
 ```bash
 cargo test --workspace --offline                              # 必须在项目根跑
