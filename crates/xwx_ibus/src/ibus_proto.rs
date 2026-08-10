@@ -106,6 +106,12 @@ pub enum ProtoError {
 ///
 /// - 大小写字母都归一为小写（拼音输入惯例，Shift+字母仍是拼音）；
 /// - 数字键翻译为 `Select(n)`（`Select(0)` 在会话里代表第 10 个候选）；
+/// - ASCII 可打印标点翻译为 `InputEvent::Char(c)`(原始半角字符)。
+///   注意:**这里只负责放行,输出全角还是半角由会话层按中/英模式
+///   决定**——中文模式下会话层把它上屏为全角标点(见
+///   `xwx_engine::punctuator`),英文模式下会话层返回 `Noop`,
+///   IBus 层据此返回 `false`,daemon 把按键透传给应用,应用收到
+///   原始半角字符(键不会被吃掉);
 /// - 不识别的键返回 `None`（调用方应把按键透传给应用）。
 pub fn translate_keyval(keyval: u32) -> Option<InputEvent> {
     match keyval {
@@ -125,6 +131,10 @@ pub fn translate_keyval(keyval: u32) -> Option<InputEvent> {
         keyval::UPPER_A..=0x5a | keyval::LOWER_A..=0x7a => {
             Some(InputEvent::Char((keyval as u8 as char).to_ascii_lowercase()))
         }
+        // ASCII 可打印标点(0x21..=0x7e 去掉字母数字):原样放行,
+        // 含 `'`——它是 B2 音节分隔符的预留键,会话层当前对它 Noop
+        // 透传,行为与本轮之前逐位一致(见 punctuator.rs 模块文档)。
+        0x21..=0x7e => Some(InputEvent::Char(keyval as u8 as char)),
         _ => None,
     }
 }
@@ -414,6 +424,30 @@ mod tests {
         );
         assert_eq!(translate_keyval(0xff00).unwrap(), InputEvent::Space, "KP_Space 按空格处理");
         assert!(translate_keyval(0xffe9).is_none(), "Shift 等修饰键不处理");
+    }
+
+    #[test]
+    fn translate_keyval_punctuation() {
+        // 标点键放行(原样半角字符,输出全角与否由会话层按模式决定)
+        assert_eq!(translate_keyval(0x2c), Some(InputEvent::Char(',')), "逗号");
+        assert_eq!(translate_keyval(0x2e), Some(InputEvent::Char('.')), "句号");
+        assert_eq!(translate_keyval(0x3b), Some(InputEvent::Char(';')), "分号");
+        assert_eq!(translate_keyval(0x3a), Some(InputEvent::Char(':')), "冒号");
+        assert_eq!(translate_keyval(0x3f), Some(InputEvent::Char('?')), "问号");
+        assert_eq!(translate_keyval(0x21), Some(InputEvent::Char('!')), "叹号");
+        assert_eq!(translate_keyval(0x5c), Some(InputEvent::Char('\\')), "反斜杠");
+        assert_eq!(translate_keyval(0x3c), Some(InputEvent::Char('<')), "小于号");
+        assert_eq!(translate_keyval(0x3e), Some(InputEvent::Char('>')), "大于号");
+        assert_eq!(translate_keyval(0x24), Some(InputEvent::Char('$')), "美元号");
+        assert_eq!(translate_keyval(0x5e), Some(InputEvent::Char('^')), "抑扬符");
+        assert_eq!(translate_keyval(0x5f), Some(InputEvent::Char('_')), "下划线");
+        assert_eq!(translate_keyval(0x7e), Some(InputEvent::Char('~')), "波浪号");
+        // `'`(0x27)也放行——它是 B2 音节分隔符预留键,会话层对它 Noop
+        // 透传,与本轮之前「translate 返回 None 透传」的可观察行为一致
+        assert_eq!(translate_keyval(0x27), Some(InputEvent::Char('\'')), "单引号(B2 预留)");
+        // DEL 与控制字符仍不识别
+        assert!(translate_keyval(0x7f).is_none(), "DEL 不处理");
+        assert!(translate_keyval(0x09).is_none(), "Tab 不处理");
     }
 
     #[test]

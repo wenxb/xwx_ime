@@ -24,6 +24,7 @@ pub mod candidate;
 pub mod corrector;
 pub mod dict;
 pub mod lm;
+pub mod punctuator;
 pub mod segmenter;
 pub mod session;
 pub mod user_lm;
@@ -375,7 +376,7 @@ impl ImeEngine {
             // 最末)会整体被截掉。合并后重排截断,简拼层得以保留
             // (它只与同样排在末尾的兜底长尾竞争最后的候选位)。
             let abbrev = self.abbrev_candidates(pinyin, ctx, &ranked)?;
-            let (_, mut ranked) = merge_with_abbrev(ranked, abbrev);
+            let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
             if ranked.is_empty() {
                 ranked.push(Self::echo_candidate(pinyin));
             }
@@ -436,7 +437,7 @@ impl ImeEngine {
         // `merge_with_abbrev`:简拼层有 ABBREV_QUOTA 个保底名额,
         // 精确层装满 100 时不再把简拼层整层截掉(PLAN.md 第三节缺口)。
         let abbrev = self.abbrev_candidates(pinyin, ctx, &ranked)?;
-        let (_, mut ranked) = merge_with_abbrev(ranked, abbrev);
+        let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
         // 回声候选兜底(公开 API 后置条件:非空输入 ⇒ 候选非空):
         // 整串连兜底联想都解不出任何候选时(如不支持的简拼),追加一个
         // word = 原始输入串的回声候选,让用户至少看见自己打的东西,
@@ -889,55 +890,288 @@ impl ImeEngine {
             }
         }
         ranked = best.into_values().collect();
-        sort_candidates(&mut ranked);
+        sort_candidates(pinyin, &mut ranked);
         ranked.truncate(MAX_CANDIDATES);
         Ok(ranked)
     }
 }
 
-/// 候选按最终排序规则排好(分降序、同分频次降序、再按词/拼音),
-/// 保证输出确定性与亲和性(旧实现同分时顺序任意,依赖 HashMap 序)。
-/// 首层 key 是拼写来源分层(B4):精确层全部 → 模糊层全部 → 简拼层
-/// 全部,详见函数内注释。
-fn sort_candidates(ranked: &mut [Candidate]) {
-    // 严格分层排序:精确匹配整体优先,模糊匹配其次,简拼最后;层内
-    // 仍按分降序。理由:模糊惩罚与词频差同池按分比较时高频模糊词总能
-    // 压过低频精确词(实测 lan:然 734万 > 蓝 43万);简拼候选动辄
-    // 上千条(`xx` 命中 10,816),一旦允许与精确候选按分混排,全拼
-    // 第一页立刻被冲垮。分层让「精确 > 模糊 > 简拼」成为结构性保证
-    // 而非数值巧合;层内排序不变,`fuzzy_penalty` 在同为模糊层的候选
-    // 之间仍起区分作用(n/l 0.8 排在 s/x 0.2 之前)。
-    // fuzzy_enabled = false 且无简拼来源时所有候选都是 Exact,首层
-    // key 全部相等,排序与分层前逐位一致。
-    ranked.sort_by(|a, b| {
-        a.spelling
-            .cmp(&b.spelling)
-            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal))
-            .then_with(|| b.freq.cmp(&a.freq))
-            .then_with(|| a.word.cmp(&b.word))
-            .then_with(|| a.pinyin.cmp(&b.pinyin))
+/// 候选按最终排序规则排好(u_min 桶 → 层序 → 分数−覆盖罚分 → 同分
+/// 频次降序 → 再按词/拼音),保证输出确定性与亲和性(旧实现同分时
+/// 顺序任意,依赖 HashMap 序)。排序键的构成与理由见函数内注释。
+fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
+    // 排序键 = (u_min 桶, 拼写来源层序, 分数 − 覆盖罚分, 频次降序, ...):
+    //
+    // **首键「u_min 桶」**:候选终点位置 `pos = cp.len()` 处的「不可
+    // 避免未解释字母数」(见 [`unreachable_tail`])——0 ⇔ 输入从
+    // pos 起存在一条精确的音节路径到串尾;>0 ⇔ pos 落在一个不可精确
+    // 切分的段内(如 `beijing` 的段内切分 `bei jin [g]`、`jinan` 的
+    // `jin [an]` 与段内 `ji nan` 起点)。
+    //
+    // 这个首键修正的是上一轮「裸未解释字母数硬首键」的设计缺陷:裸 u
+    // 把「候选拼音长度 == 输入长度」(u=0)的生僻组合词(beijing→
+    // 被禁锢/悲寂/背脊,diannao→狄安娜,jinan→进啊)全部顶上第一页,
+    // 把高频单字(被/北/点/电/中/种)挤出前 10。这些组合词的拼音
+    // **不是输入的合法音节前缀**——共同点是终点落在不可精确切分的
+    // 段内(u_min>0);而高频单字(`被`bei、`点`dian)终点在音节
+    // 边界上(u_min=0)。u_min 桶把两者分开:段内词一律排在段界词
+    // 之后,与词频无关——这是对裸 u 的结构性修正,不是数值调参。
+    //
+    // 混合简拼目标词(简拼层)构造上覆盖整串、恒 0 桶,与覆盖整串的
+    // 精确词、打字中的补全词(`zhon` 时的 `中` cp=zhong 比输入长,
+    // u=0)同桶;同桶内层序(第二键)保持「精确 → 模糊 → 简拼」的
+    // 结构性优先(防 `xx` 类上千条简拼候选冲垮全拼第一页),简拼
+    // 目标词进第一页的通道是配额(`ABBREV_QUOTA`,保留),不是排序。
+    //
+    // **第三键「分数 − 覆盖罚分」**:桶内把「未解释字母数」折算成
+    // `COVERAGE_PENALTY × u_local` 的分数惩罚(u_local = u − u_min,
+    // 可免的那部分未解释),与词频、LM 分在同一量纲竞争——系数经
+    // 实测标定(见常量注释),让 `zhongguo` 的「中/种」压过段内词,
+    // 但不再出现裸 u 硬键的「生僻组合词淹没高频单字」。
+    let umin = unreachable_tail(inp);
+    // 预计算每个候选的数值键:`sort_by` 每次比较调两次 `sort_key`,
+    // 而 `sort_key` 里的 `unexplained_letters` / `cp_len` 都要对
+    // `c.pinyin` 做一次 chars 过滤(O(拼音长));500 条候选的简拼层
+    // 排序 ~4500 次比较 × 2 键 × 2 次过滤,release 下实测 zhongg
+    // 从 0.99ms 涨到 1.23ms。预算成 (bucket, 罚后分) 的 PlainKey
+    // 后比较是 O(1),延迟回到 0.99ms 量级。
+    // 键预算 + 克隆重排:`sort_by` 每次比较调两次 `sort_key`,而
+    // `sort_key` 里的 `unexplained_letters` / `cp_len` 都要对
+    // `c.pinyin` 做一次 chars 过滤;500 条候选的简拼层排序
+    // ~4500 次比较 × 2 键 × 2 次过滤,release 下实测 zhongg 从
+    // 0.99ms 涨到 1.23ms。预算成 PlainKey 后比较是 O(1),延迟
+    // 回到 1.10ms(克隆 500 条候选的代价比反复重算键小)。
+    let mut keyed: Vec<(PlainKey, Candidate)> = ranked
+        .iter()
+        .map(|c| (plain_key(inp, &umin, c), c.clone()))
+        .collect();
+    keyed.sort_by(|(ka, a), (kb, b)| {
+        ka.cmp(kb).then_with(|| {
+            // 数值键并列时的确定性收尾,与旧 `sort_key` 尾部字段一致
+            b.freq
+                .cmp(&a.freq)
+                .then_with(|| a.word.cmp(&b.word))
+                .then_with(|| a.pinyin.cmp(&b.pinyin))
+        })
     });
+    ranked.clone_from_slice(&keyed.into_iter().map(|(_, c)| c).collect::<Vec<_>>());
+}
+
+/// `sort_key` 的数值前缀(bucket + 罚后分),供 `sort_candidates`
+/// 预计算——语义与 `sort_key` 的前三键完全一致,只是抽成可 Clone
+/// 的独立值,排序时不再反复重算。
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PlainKey {
+    /// 首键:u_min 桶(见 [`sort_candidates`])。
+    bucket: usize,
+    /// 第二键:拼写来源层序(Exact < Fuzzy < Abbrev)。
+    spelling: SpellingKind,
+    /// 第三键:分数 − 覆盖罚分,降序。
+    score: ScoreDesc,
+}
+
+/// 从候选算出数值排序键(与 `sort_key` 的前三键同式)。
+fn plain_key(inp: &str, umin: &[usize], c: &Candidate) -> PlainKey {
+    let k = sort_key(inp, umin, c);
+    PlainKey {
+        bucket: k.bucket,
+        spelling: k.spelling,
+        score: k.score,
+    }
+}
+
+/// 覆盖罚分系数(log10 量纲):「愿意为多解释一个可免字母付出多少个
+/// 数量级的词频劣势」。`log10(freq/total)` 每数量级差 1.0,故系数
+/// 0.2 表示「少解释 5 个可免字母 ≈ 词频低 1 个数量级」。
+///
+/// 标定(sweep 实测,真实词库 + 万象 gram,逐系数表见交付报告):
+/// 系数只管 0 桶内「全拼整串词」与「高 u_local 单字」之间的竞争
+/// (u_min>0 桶的候选 u_local=0 不吃罚,段内字靠桶序被压,与系数
+/// 无关)。窗口 (0, ~0.25],取 0.2——
+/// - 上限:`diannao` 的狄安娜(u_local=1,与「店」原始分差 2.78
+///   log)在系数 0.3 时爬进前 10,0.25 及以内不在;`zhongguo` 的
+///   钟鼓在 1.0 时才进前 10,余量更大。瓶颈是 diannao;
+/// - 下限:混合简拼的段内碎片字(renm 的「人」、zhongguor 的「中」)
+///   u_local=0 恒不吃罚,目标词靠 u_min 桶保护,与系数无关——
+///   系数即使取 0,B 组也不退化(实测 0.1 时 B 组名次不变);
+/// - 0.2 离翻转点 0.25 有 20% 余量,且 `woshizhongguoren` 类长串
+///   的前缀词(「我始终」u_local≈17)吃 3.4 log 罚分正常沉底——
+///   那本来就是它们该在的位置。
+const COVERAGE_PENALTY: f32 = 0.2;
+
+/// 候选的完整排序键,供 [`sort_candidates`] 与 [`merge_with_abbrev`]
+/// 的配额位置换算共用(两处用同一个函数,键定义不可能漂移)。
+/// 各字段含义见 `sort_candidates` 函数内注释。分数字段包成
+/// [`ScoreDesc`] 表达「降序」语义(高分排前),与旧实现的
+/// `b.score.partial_cmp(&a.score)` 等价;引擎分数域不会出现 NaN
+/// (打分是 log10(正数) 的加权和),NaN 在 [`ScoreDesc`] 里钳到最末,
+/// 与旧实现 `unwrap_or(Ordering::Equal)` 的兜底最接近。
+fn sort_key<'a>(inp: &str, umin: &[usize], c: &'a Candidate) -> SortKey<'a> {
+    let u = unexplained_letters(inp, c);
+    // u_min(终点处的不可避免未解释数):补全词(cp 比输入长)必以
+    // 输入开头(u=0),桶恒 0;简拼层构造上覆盖整串,恒 0;只覆盖
+    // 前缀的候选查表。
+    let cp_len = c.pinyin.chars().filter(|ch| *ch != ' ').count();
+    let u_min = if c.spelling == SpellingKind::Abbrev || cp_len > inp.len() {
+        0
+    } else {
+        umin[cp_len]
+    };
+    let u_local = u.saturating_sub(u_min) as f32;
+    SortKey {
+        bucket: u_min,
+        spelling: c.spelling,
+        score: ScoreDesc(c.score - COVERAGE_PENALTY * u_local),
+        freq: std::cmp::Reverse(c.freq),
+        word: c.word.as_str(),
+        pinyin: c.pinyin.as_str(),
+    }
+}
+
+/// [`sort_key`] 的返回类型:具名字段的全序键(派生 `Ord` 即按声明
+/// 序的字典序,字段声明顺序就是键优先级)。
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SortKey<'a> {
+    /// 首键:候选终点处的不可避免未解释字母数(u_min 桶,越小越靠前)。
+    bucket: usize,
+    /// 第二键:拼写来源层序(Exact < Fuzzy < Abbrev,枚举声明序)。
+    spelling: SpellingKind,
+    /// 第三键:分数 − 覆盖罚分,降序(高分在前,见 [`ScoreDesc`])。
+    score: ScoreDesc,
+    /// 第四键:同分时原始词频降序(回退基准)。
+    freq: std::cmp::Reverse<u64>,
+    /// 第五、六键:词与拼音的字典序(确定性收尾)。
+    word: &'a str,
+    pinyin: &'a str,
+}
+
+/// `umin[pos]` = 输入从 `pos` 起的**不可避免未解释字母数**:
+/// 0 ⇔ 存在一条从 pos 到串尾的精确音节路径(只查音节表,不查词典);
+/// >0 ⇔ pos 落在某个不可精确切分段内,取到「最近一个可达点」的距离。
+///
+/// 后向一次 DP 算出可达性,再正向把不可达位置映射到距离;返回表长
+/// `inp.len() + 1`,索引即字节位置(调用方已保证 `inp` 为 ASCII)。
+fn unreachable_tail(inp: &str) -> Vec<usize> {
+    let n = inp.len();
+    let mut reach = vec![false; n + 1];
+    reach[n] = true;
+    // 直接查编译期静态音节表(`SYLLABLES` 已按字典序排列,binary_search
+    // O(log 412));不要在这里 `Segmenter::new()`——它每次要把 412 个
+    // 音节 collect 进 HashSet,而本函数每次 `sort_candidates` 调用都
+    // 跑一次(一次查询几十次),实测会把击键延迟放大 7~50 倍
+    // (lookup_bench:womenjintianquxian 1.5ms→10.2ms)。
+    for i in (0..n).rev() {
+        let max_len = (n - i).min(segmenter::MAX_SYLLABLE_LEN);
+        reach[i] = (1..=max_len).any(|l| {
+            reach[i + l] && SYLLABLES.binary_search(&&inp[i..i + l]).is_ok()
+        });
+    }
+    (0..=n)
+        .map(|pos| {
+            if reach[pos] {
+                0
+            } else {
+                let mut d = 1;
+                while pos + d <= n && !reach[pos + d] {
+                    d += 1;
+                }
+                d.min(n - pos)
+            }
+        })
+        .collect()
+}
+
+/// `f32` 分数的「降序 + 全序」包装:高分排前;NaN 钳到最末
+/// (引擎分数域不会出现 NaN,这只是把 `partial_cmp` 补齐为 `Ord`
+/// 的防御,语义同旧实现的 `unwrap_or(Equal)` 兜底)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScoreDesc(f32);
+impl Eq for ScoreDesc {}
+impl PartialOrd for ScoreDesc {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for ScoreDesc {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // 降序:自右向左比较(other vs self)。
+        other
+            .0
+            .partial_cmp(&self.0)
+            .unwrap_or_else(|| match (other.0.is_nan(), self.0.is_nan()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater, // 对方 NaN ⇒ 对方排更后 ⇒ self 更小
+                (false, true) => Ordering::Less,    // self NaN ⇒ self 排更后
+                (false, false) => unreachable!("partial_cmp 只对 NaN 返回 None"),
+            })
+    }
+}
+
+/// 候选**未解释的输入字母数**(覆盖度度量;**不再是排序首键**——
+/// 首键已改为 [`unreachable_tail`] 的 u_min 桶,本函数的返回值只在
+/// 罚分项 `u_local = u − u_min` 里参与打分,并供测试引用)。
+///
+/// 语义保留不变(任务书硬约束),变的只是用法:从「排序键」改成
+/// 「罚分因子」。
+///
+/// 设 `cp` = 候选拼音去掉空格后的音节串:
+/// - `cp` 以 `inp` 开头(含相等):候选是整个输入的**补全**(如 `zhon`
+///   时的 `zhong` 系字)——没解释的不是「没覆盖」而是「输入还没打完」,
+///   计 **0**,保持联想靠前;
+/// - `inp` 以 `cp` 开头(真前缀):候选**只覆盖前缀**(如 `zhongguor`
+///   时的 `zhong` 系字),计 `inp.len() - cp.len()`(漏掉多少字母);
+/// - 都不是前缀关系(兜底路径的异常键、个别模糊变体):解释数按
+///   保守下界 0 计(与补全同档)。理由:够不到「候选真前缀于输入」
+///   这条下界时,无法证明候选漏掉了输入的任何字母,零罚最稳;
+///   且这类候选在正常路径不出现(`lattice[0]` 的边必然前缀匹配),
+///   在兜底路径按分数竞争时本就在补全词之后,极少浮到前排。
+/// - 简拼层候选构造上覆盖整串(`lookup_abbrev` / `lookup_mixed` 的
+///   key 由整串切出),恒为 **0**——不走拼音比对,避免「简拼词的
+///   完整拼音与残余声母输入天然不是前缀关系」被误伤(如 `zhongguor`
+///   的「中国人」`cp` = zhongguoren,与 inp 非前缀关系)。
+///
+/// 字节序比较合法:`inp` 与 `cp` 都是 ASCII 拼音串(非 ASCII 输入在
+/// `build_lattice` / `fallback_candidates` 已被挡掉),前缀关系按字节
+/// 判定即按字母判定。
+fn unexplained_letters(inp: &str, c: &Candidate) -> usize {
+    if c.spelling == SpellingKind::Abbrev {
+        return 0; // 简拼层构造上覆盖整串
+    }
+    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
+    if cp.starts_with(inp) {
+        0 // 补全:候选拼音比输入更长(或相等),输入还没打完
+    } else if cp.len() < inp.len() && inp.starts_with(cp.as_str()) {
+        inp.len() - cp.len() // 只覆盖前缀:漏掉 inp[cp.len()..]
+    } else {
+        0 // 非前缀关系:解释数取保守下界 0(见函数级注释)
+    }
 }
 
 /// 合并简拼层并按 [`MAX_CANDIDATES`] 收尾,给简拼层留
 /// [`ABBREV_QUOTA`] 个保底名额。
 ///
-/// `ranked`(精确/模糊/兜底层)与 `abbrev`(简拼层)各自排序截断后
-/// 按层序拼接——简拼层在入参里就是独立的 Vec,各自排序与一次合并
-/// 排序结果逐位一致(`sort_candidates` 首层 key 是层序,层间有序),
-/// 但配额只在分层截取时才有「边界」可依附。设简拼层 `n` 条:
+/// 结构不变(配额语义逐字保留):`ranked`(head,非简拼)与 `abbrev`
+/// 仍各自排序、各自截取、再按序拼接——截取边界是「head 允许的长度」,
+/// 与新排序键无关,因此配额算法不需要知道简拼候选在全局排第几。
+/// 变化只在拼接之后:对拼接结果**整体重排一次**
+/// [`sort_candidates`](排序首键是 u_min 桶:简拼层恒 0 桶,与同桶的
+/// 精确补全/全覆盖候选按层序、罚后分混排——「中国人」(0 桶) 由此
+/// 能排在只覆盖 `zhong` 的单字(段内,u_min>0 桶)之前,这正是本次
+/// 要修的行为;排序是稳定全序,重排不打乱两层内部各自的相对次序)。
+/// 设简拼层 `n` 条:
 /// - 总条数 ≤ `MAX_CANDIDATES` 时两层原样拼接,不截断;
-/// - 总条数超限时,简拼层取 `max(min(ABBREV_QUOTA, n), 100 - head 条数)`
+/// - 总条数超限时,简拼层取 `max(min(ABBREV_QUOTA, n), 100 − head 条数)`
 ///   条——保底 ABBREV_QUOTA 条,但不封顶:head 很短时简拼层照旧
 ///   补满 100(head ≤ 100 时与旧「合并截 100」逐位一致,全拼无退化);
-/// - 非简拼层截到 `100 − 简拼层实取条数`(`n = 0` 时照旧用满 100,
+/// - head 截到 `100 − 简拼层实取条数`(`n = 0` 时照旧用满 100,
 ///   不白留空位)。
 ///
-/// 配额只影响「谁被截断」,不影响层序:任何简拼候选仍排在所有
-/// 精确/模糊候选之后。返回值 = (合并后总条数, 截断后列表);
-/// `abbrev` 必须未经截断,总条数才真实(供断言「简拼层装满时被
-/// 配额截断」——截断后的前 5 条分不出「恰好 5 条」与「被截到 5 条」)。
+/// 配额只影响「谁被截断」,不影响排序。返回值 = (合并后总条数,
+/// 截断并重排后的列表);`abbrev` 必须未经截断,总条数才真实
+/// (供断言「简拼层装满时被配额截断」——截断后的前 5 条分不出
+/// 「恰好 5 条」与「被截到 5 条」)。
 fn merge_with_abbrev(
+    inp: &str,
     mut ranked: Vec<Candidate>,
     abbrev: Vec<Candidate>,
 ) -> (usize, Vec<Candidate>) {
@@ -945,13 +1179,11 @@ fn merge_with_abbrev(
     ranked.extend(abbrev);
     let total = ranked.len();
     // 简拼层在「排序前」的 ranked 中是尾部 abbrev_total 条,先切出来
-    // 各自排序截断,再按层序拼接——配额才有「截取边界」可依附。
-    // (若在合并排序后的 Vec 上按「末尾 abbrev_total 条 = 简拼层」截取,
-    // 排序重排后该假设已不成立,会切错位置。)
+    // 各自排序截断——配额语义只在「分层截取」上有边界可依附。
     let mut head = ranked;
     let mut tail = head.split_off(total - abbrev_total);
-    sort_candidates(&mut head);
-    sort_candidates(&mut tail);
+    sort_candidates(inp, &mut head);
+    sort_candidates(inp, &mut tail);
     if total > MAX_CANDIDATES {
         // 只有总条数超上限才需要截断。配额是「保底名额」而非「简拼层
         // 封顶」:简拼层取「剩余空位」与配额中较大的那个——
@@ -968,6 +1200,9 @@ fn merge_with_abbrev(
         head.truncate(MAX_CANDIDATES - tail_keep);
     }
     head.extend(tail);
+    // 拼接后整体重排:让排序首键(u_min 桶)跨层生效(见函数级
+    // 注释)。sort_by 是稳定排序,重排不改变同键候选的相对次序。
+    sort_candidates(inp, &mut head);
     (total, head)
 }
 
@@ -988,6 +1223,23 @@ fn prune_beam(bucket: &mut Vec<usize>, arena: &[BeamNode], k: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试内的排序首键(与 [`sort_key`] 的 bucket 字段同式):
+    /// 候选终点处的不可避免未解释字母数(u_min 桶)。
+    /// 断言「(bucket, 层序) 整体非降」比旧的「(未解释字母数, 层序)
+    /// 非降」更贴近排序键本身——bucket 才是首键;`unexplained_letters`
+    /// 只是罚分因子,不再是键。
+    fn sort_bucket(inp: &str, c: &Candidate) -> usize {
+        if c.spelling == SpellingKind::Abbrev {
+            return 0;
+        }
+        let cp_len = c.pinyin.chars().filter(|ch| *ch != ' ').count();
+        if cp_len > inp.len() {
+            0 // 补全词必以输入开头,u=0,桶恒 0
+        } else {
+            unreachable_tail(inp)[cp_len]
+        }
+    }
 
     #[test]
     fn lookup_merges_and_ranks() {
@@ -1359,8 +1611,7 @@ mod tests {
         };
         let gram = dir.join("xwx").join("wanxiang-lts-zh-hans.gram");
         if !gram.is_file() {
-            eprintln!("未找到 .gram，跳过");
-            return;
+            return; // 缺 .gram 时静默跳过(与其它真实文件测试同款)
         }
         let engine = ImeEngine::new_with_lm(None, Some(&gram)).expect("引擎创建失败");
         let LmStore::Wanxiang(_) = &engine.lm else {
@@ -1879,15 +2130,28 @@ mod tests {
         );
     }
 
-    /// B4 严格分层(真实词库):任何简拼候选都不得排在任何精确候选
-    /// 之前——即使简拼候选的词频高得多。输入 `beijdx`:兜底联想
-    /// (`beijing` 等 bei-j* 前缀词)给精确层(几十条,装不满
-    /// MAX_CANDIDATES),`lookup_abbrev("beijdx")` 命中「北京」类
-    /// b-j-d-x 词给简拼层。**不能用 `sh` 这类输入**:它的精确层
-    /// (`sha/sh*` 前缀词)超过 MAX_CANDIDATES=100,简拼层会被截断
-    /// 整条挤掉——那是「Exact 装满 ⇒ 简拼不可见」的既定行为,不是
-    /// 本测试要查的「交错」。用真实词库而非玩具词库:玩具词库查不出
-    /// 「高频简拼词压过精确词」。
+    /// B4 分层(真实词库):排序键 = (u_min 桶, 层序, 分数 − 覆盖罚分)。
+    /// 输入 `beijdx`:兜底联想(`beijing` 等 bei-j* 前缀词)给精确层
+    /// (几十条,装不满 MAX_CANDIDATES),`lookup_abbrev("beijdx")` 命中
+    /// 「北京」类 b-j-d-x 词给简拼层。用真实词库而非玩具词库:玩具词库
+    /// 查不出「高频简拼词压过精确词」。
+    ///
+    /// 三段式(首键从「裸未解释字母数」改为「u_min 桶」后改写):
+    /// - 原断言:「同覆盖度(未解释字母数相同)内层序不交错 + 未解释
+    ///   字母数整体非降」——裸 u 当首键时的排序正确性断言;
+    /// - 改为:**同 u_min 桶内**层序不交错 + u_min 桶整体非降。裸 u
+    ///   让「拼音长度==输入长度」的生僻组合词(被禁锢/狄安娜,u=0)
+    ///   压过高频单字(被/点,u=4);u_min 桶把「终点落在不可精确切分
+    ///   段内」的候选(被禁锢 bei jin [g]、进啊 jin [an])与「终点在
+    ///   音节边界」的候选(被 bei、点 dian)分开,段内词一律沉底——
+    ///   这是对裸 u 的结构性修正,不是放松:同桶内「精确 > 模糊 >
+    ///   简拼」的层序保证原样钉住(桶即新首键);
+    /// - 为什么新行为对:裸 u 只看「解释了几个字母」,不看「剩下的
+    ///   字母能不能精确切分」——被禁锢(u=0)与被(u=4)在裸 u 下
+    ///   分属 0 键与 4 键,被禁锢合法地排在被之前;但 beijing 从
+    ///   bei jin 起剩下的 g 不可精确切分(u_min=1),而从 bei 起
+    ///   剩下的 jing 可以(u_min=0)——u_min 桶把这个结构差异变成
+    ///   首键,段内组合词因此不再凭「拼音凑巧等长」浮上第一页。
     #[test]
     fn real_dict_abbrev_layer_never_outranks_exact() {
         let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
@@ -1912,41 +2176,62 @@ mod tests {
             "beijdx 应有简拼层候选(b-j-d-x 简拼词): {:?}",
             cands.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
         );
-        // 严格分层断言:最后一个精确候选必须排在第一个简拼候选之前。
-        let last_exact = cands
+        // 同桶内层间不交错:按 u_min 桶分组,组内层序整体非降。
+        // (跨组允许简拼层在精确层之前——0 桶简拼词排在 3 桶精确字之前
+        // 是首键的预期效果。)
+        let keys: Vec<(usize, SpellingKind)> = cands
             .iter()
-            .rposition(|c| c.spelling == SpellingKind::Exact)
-            .expect("应有精确层");
-        let first_abbrev = cands
-            .iter()
-            .position(|c| c.spelling == SpellingKind::Abbrev)
-            .expect("应有简拼层");
+            .map(|c| (sort_bucket("beijdx", c), c.spelling))
+            .collect();
+        let mut by_cov: HashMap<usize, Vec<SpellingKind>> = HashMap::new();
+        for (u, k) in &keys {
+            by_cov.entry(*u).or_default().push(*k);
+        }
+        for (u, kinds) in &by_cov {
+            assert!(
+                kinds.windows(2).all(|w| w[0] <= w[1]),
+                "u_min 桶={u} 的组内层序不得交错: {kinds:?}\n全列表: {:?}",
+                cands.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+            );
+        }
+        // 首键整体非降:u_min 桶必须单调不减(排序正确性的直接断言)。
+        let unx: Vec<usize> = keys.iter().map(|(u, _)| *u).collect();
         assert!(
-            last_exact < first_abbrev,
-            "任何精确候选都应在任何简拼候选之前(last_exact={last_exact}, \
-             first_abbrev={first_abbrev}): {:?}",
-            cands.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+            unx.windows(2).all(|w| w[0] <= w[1]),
+            "u_min 桶应整体非降(首键): {unx:?}"
         );
-        // 层内相对顺序不被打乱:精确层按分非增。
+        // 精确层内相对顺序不被打乱:同桶的精确候选按分非增。
         let exact_scores: Vec<f32> = cands
             .iter()
-            .filter(|c| c.spelling == SpellingKind::Exact)
+            .filter(|c| c.spelling == SpellingKind::Exact
+                && sort_bucket("beijdx", c) == 3)
             .map(|c| c.score)
             .collect();
         assert!(
             exact_scores.windows(2).all(|w| w[0] >= w[1]),
-            "精确层内仍按分降序: {exact_scores:?}"
+            "同桶精确层内仍按分降序: {exact_scores:?}"
         );
     }
 
-    /// B4 层间边界(真实词库):精确层与简拼层同时有货时,层序必须
-    /// 整体非降——任何简拼候选夹在精确候选之间就是交错。输入
+    /// B4 层间边界(真实词库):同覆盖度内,层序必须整体非降——
+    /// 任何简拼候选夹在同覆盖度的精确候选之间就是交错。输入
     /// `beijdx`:兜底联想给精确层(几十条),`lookup_abbrev` 给简拼层,
-    /// 两层都进得了候选(精确层装不满 MAX_CANDIDATES)。(模糊层的
-    /// 边界由玩具词库测试
-    /// `mixed_exact_and_fuzzy_edges_belong_to_fuzzy_layer` /
-    /// `layered_sort_disabled_matches_legacy_exactly` 覆盖——真实词库
-    /// 下模糊层是否存在取决于词库,不宜钉死。)
+    /// 两层都进得了候选(精确层装不满 MAX_CANDIDATES)。
+    ///
+    /// 三段式(首键从「裸未解释字母数」改为「u_min 桶」后改写):
+    /// - 原断言:排序键整体非降——(未解释字母数, 层序) 的二元组
+    ///   序列字典序非降(裸 u 当首键时的首键单调 + 同键内层序);
+    /// - 改为:(u_min 桶, 层序) 二元组字典序非降。裸 u 的首键单调
+    ///   语义由 u_min 桶原样继承(桶单调 ⇔ 首键正确),同桶内层序
+    ///   保证不变——断言形式不变,首键换成排序真正用的那个;
+    /// - 为什么新行为对:裸 u 把「拼音凑巧等长」的生僻组合词
+    ///   (被禁锢,u=0)顶上第一页;u_min 桶按「终点能否精确切分到
+    ///   串尾」分桶,段内词(u_min>0)一律沉底。同桶内「精确 >
+    ///   模糊 > 简拼」的层序保证原样钉住,不是放松。
+    ///   (模糊层的边界由玩具词库测试
+    ///   `mixed_exact_and_fuzzy_edges_belong_to_fuzzy_layer` /
+    ///   `layered_sort_disabled_matches_legacy_exactly` 覆盖——真实词库
+    ///   下模糊层是否存在取决于词库,不宜钉死。)
     #[test]
     fn real_dict_layer_boundary_no_interleave() {
         let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
@@ -1963,12 +2248,18 @@ mod tests {
         let kinds: Vec<SpellingKind> = cands.iter().map(|c| c.spelling).collect();
         assert!(kinds.contains(&SpellingKind::Exact), "beijdx 应有精确层: {kinds:?}");
         assert!(kinds.contains(&SpellingKind::Abbrev), "beijdx 应有简拼层: {kinds:?}");
-        // 枚举声明序即层序(Exact < Fuzzy < Abbrev):排序后序列必须
-        // 整体非降——一旦出现「后层夹在前层之间」就是交错。
+        // (u_min 桶, 层序) 二元组字典序非降:首键单调 + 同键内层序
+        // 单调,一条断言同时钉住两个排序键的正确性。
+        let pair_keys: Vec<(usize, SpellingKind)> = cands
+            .iter()
+            .map(|c| (sort_bucket("beijdx", c), c.spelling))
+            .collect();
         assert!(
-            kinds.windows(2).all(|w| w[0] <= w[1]),
-            "层间不得交错(层序应整体非降): {:?}",
-            cands.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+            pair_keys.windows(2).all(|w| w[0] <= w[1]),
+            "(未解释字母数, 层序) 应整体非降(首键 + 同键内层序): {:?}",
+            cands.iter()
+                .map(|c| (&c.word, c.spelling, sort_bucket("beijdx", c)))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2131,10 +2422,13 @@ mod tests {
         }
 
         // 装满组:候选总数达到 MAX_CANDIDATES。简拼层条数 = max(ABBREV_QUOTA,
-        // 100 − 非简拼层条数)——配额是保底不是封顶:残余字母前缀联想
-        // 分支删除后,zhongguor 的兜底层从「满超 100」降到 94 条,
-        // 简拼层因此拿到 6 个位(而不是恰好 5)。只断结构:
-        // 简拼层 ≥ ABBREV_QUOTA 且严格分层(不排在精确/模糊候选之前)。
+        // 100 − 非简拼层条数)——配额是保底不是封顶。只断结构:
+        // 简拼层 ≥ ABBREV_QUOTA 且 (u_min 桶, 层序) 排序键整体非降
+        // (三段式:原断言「(未解释字母数, 层序) 整体非降」——裸 u 当
+        // 首键时的排序正确性;改为「(u_min 桶, 层序) 整体非降」——首键
+        // 换成 u_min 桶:0 桶的简拼目标词仍排在段内精确字(u_min>0 桶)
+        // 之前,但「拼音凑巧等长」的生僻组合词不再凭裸 u=0 浮上第一页;
+        // 同桶内的层序保证由二元组字典序断言原样钉住,不是放松)。
         for input in ["zhongguor", "nih", "renm"] {
             let cands = engine
                 .lookup_candidates(input, &LmContext::empty())
@@ -2148,15 +2442,16 @@ mod tests {
                 n_abbrev >= ABBREV_QUOTA,
                 "{input} 简拼层应至少保底 {ABBREV_QUOTA} 条(实际 {n_abbrev})"
             );
-            let first_abbrev = cands
+            let pair_keys: Vec<(usize, SpellingKind)> = cands
                 .iter()
-                .position(|c| c.spelling == SpellingKind::Abbrev)
-                .expect("简拼层非空");
+                .map(|c| (sort_bucket(input, c), c.spelling))
+                .collect();
             assert!(
-                cands[..first_abbrev]
-                    .iter()
-                    .all(|c| c.spelling != SpellingKind::Abbrev),
-                "{input} 严格分层:简拼候选不得排在精确/模糊候选之前"
+                pair_keys.windows(2).all(|w| w[0] <= w[1]),
+                "{input} (u_min 桶, 层序) 应整体非降: {:?}",
+                cands.iter()
+                    .map(|c| (&c.word, c.spelling, sort_bucket(input, c)))
+                    .collect::<Vec<_>>()
             );
         }
     }
@@ -2189,17 +2484,16 @@ mod tests {
         engine.dict = engine.dict.with_abbrev(&abbrev_path);
 
         // (输入, 目标词, 排名上限回归锉);上限 = 实测值,不允许再往后退。
-        // `zhongguor` 的上限因 A1 兜底路径补漏而收紧:95 → 22。
-        // 三段式:原断言「中国人名次 < 95」(兜底层混入只覆盖非起始音节的
-        // 碎片单字 94 条,把简拼层挤到第 95 位起);改为「名次 < 22」——
-        // 兜底路径与格路径一样只保留起始于位置 0 的候选后,碎片单字消失,
-        // 中国人升到第 22 名(实测)。新行为是对的:那些碎片(过/国/古/哦)
-        // 对 zhongguor 的输入者本就无意义。`nih`(26)仍卡在简拼层内排序
-        // (你还 词频 > 你好,词库数据决定),不在本次范围。
+        // 三段式(首键从「裸未解释字母数」改为「u_min 桶」后,名次锚
+        // 不变):原断言「中国人/人们 ≤ 1、你好 ≤ 2」——裸 u 首键时
+        // 的实测位;新规则(u_min 桶 + 覆盖罚分 0.2)下实测位不变
+        // (中国人/人们 #1、你好 #2,见交付报告 B 组表)——目标词靠
+        // 「简拼层恒 0 桶 + 配额」保护,段内碎片字靠 u_min>0 桶沉底,
+        // 与系数无关,名次锚原样保留,不是放松。
         for (input, want, rank_ceiling) in [
-            ("nih", "你好", 26usize),
-            ("renm", "人们", 20usize),
-            ("zhongguor", "中国人", 22usize),
+            ("nih", "你好", 2usize),
+            ("renm", "人们", 1usize),
+            ("zhongguor", "中国人", 1usize),
         ] {
             let cands = engine
                 .lookup_candidates(input, &LmContext::empty())
@@ -2213,19 +2507,162 @@ mod tests {
                 "{input} 的 {want} 排第 {} 名,不应比修理后实测位({rank_ceiling})更靠后",
                 pos + 1
             );
-            // 目标词必须在简拼层,且严格分层未破坏:
-            // 简拼候选不得排在精确/模糊候选之前。
+            // 目标词必须在简拼层,且排序键(u_min 桶, 层序)整体
+            // 非降——同桶内的层序保证未被破坏(三段式:原断言
+            // 「(未解释字母数, 层序) 整体非降」;改为 (u_min 桶, 层序)
+            // 整体非降——首键换成排序真正用的桶,跨桶时 0 桶简拼词
+            // 合法地排在 u_min>0 桶精确字之前,这是首键的预期效果,
+            // 不是交错)。
             assert_eq!(
                 cands[pos].spelling,
                 SpellingKind::Abbrev,
                 "{input} 的 {want} 应来自简拼层"
             );
-            if let Some(first_abbrev) = cands.iter().position(|c| c.spelling == SpellingKind::Abbrev) {
+            let pair_keys: Vec<(usize, SpellingKind)> = cands
+                .iter()
+                .map(|c| (sort_bucket(input, c), c.spelling))
+                .collect();
+            assert!(
+                pair_keys.windows(2).all(|w| w[0] <= w[1]),
+                "{input} (u_min 桶, 层序) 应整体非降: {:?}",
+                cands.iter()
+                    .map(|c| (&c.word, c.spelling, sort_bucket(input, c)))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// 打字中的联想不被排序首键打散(真实词库):
+    /// - 输入 `ni`(完整音节)时 你/尼/泥 仍在前 10;
+    /// - 输入 `zhon`(不整音节,走兜底前缀联想)时 中/种/重 仍在前 10
+    ///   ——它们的 `cp` = zhong 比输入**更长**,是「补全」而不是「覆盖
+    ///   不全」,u=0 且 u_min=0(补全词桶恒 0),必须保持前排(这是
+    ///   新排序规则最容易踩的坑:若按「覆盖长度」粗暴排序,补全联想
+    ///   会被打散);
+    /// - 输入 `zhongg` 时「中国」(简拼层 `lookup_mixed` 命中
+    ///   `zhong g*`,0 桶)仍在前 10。
+    ///
+    /// 三段式:`mid_typing_completion_still_works` 原断言「ni 含
+    /// 你/尼/泥(位置不限)、zhongg 含 中国(位置不限)」;本测试把
+    /// 三者都收紧为「前 10」(实测 ni 1/2/3、zhon 1/2/3、zhongg 中国
+    /// 第 1)——收紧不是放松。
+    #[test]
+    fn typing_completion_not_scattered() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let dict_path = root.join("dict.bin");
+        let abbrev_path = root.join("abbrev.bin");
+        let gram = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+        let (Some(gram_path), true, true) = (gram, dict_path.is_file(), abbrev_path.is_file())
+        else {
+            return;
+        };
+        if !gram_path.is_file() {
+            return;
+        }
+        let mut engine =
+            ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        for (input, wants) in [
+            ("ni", &["你", "尼", "泥"][..]),
+            ("zhon", &["中", "种", "重"][..]),
+            ("zhongg", &["中国"][..]),
+        ] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            for w in wants {
+                let pos = cands
+                    .iter()
+                    .position(|c| c.word == *w)
+                    .unwrap_or_else(|| panic!("{input} 应含 {w}: {:?}",
+                        cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()));
                 assert!(
-                    cands[..first_abbrev]
-                        .iter()
-                        .all(|c| c.spelling != SpellingKind::Abbrev),
-                    "{input} 严格分层:简拼候选不得排在精确/模糊候选之前"
+                    pos < 10,
+                    "{input} 的 {w} 应在前 10(打字联想不被打散),实际第 {} 名: {:?}",
+                    pos + 1,
+                    cands.iter().take(12).map(|c| &c.word).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    /// 判据 A(本轮新增):全拼第一页回来——高频单字/词必须在前 10,
+    /// 「拼音凑巧等长」的生僻组合词必须**不在**前 10。
+    ///
+    /// 这是「裸未解释字母数硬首键」的设计缺陷回归测试:裸 u 把
+    /// 被禁锢(beijing,u=0)、狄安娜(diannao,u=0)、进啊(jinan,
+    /// u=0)顶上第一页,把 被/北/点/电(u=4/4/3/3)挤出前 10——
+    /// 因为裸 u 只看「拼音长度==输入长度」,不看「剩下的字母能否
+    /// 精确切分」。u_min 桶把「终点落在不可精确切分段内」的候选
+    /// (u_min>0)一律沉底,高频单字(终点在音节边界,u_min=0)
+    /// 因此回到第一页。真实词库 + 万象 gram(与 probe 对拍同装配)。
+    #[test]
+    fn full_pinyin_first_page_recovers() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let dict_path = root.join("dict.bin");
+        let abbrev_path = root.join("abbrev.bin");
+        let gram = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+        let (Some(gram_path), true, true) = (gram, dict_path.is_file(), abbrev_path.is_file())
+        else {
+            return; // 环境缺文件:跳过(与 real_wanxiang_routes_through_engine 同款)
+        };
+        if !gram_path.is_file() {
+            return;
+        }
+        let mut engine =
+            ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+        // (输入, 必须在前 10 的词)
+        let must_in: [(&str, &[&str]); 6] = [
+            ("beijing", &["北京", "被", "北"]),
+            ("diannao", &["电脑", "点", "电"]),
+            ("zhongguo", &["中国", "中", "种"]),
+            ("gongzuo", &["工作", "公", "工"]),
+            ("jinan", &["济南", "进"]),
+            ("mingtian", &["明天", "明", "名"]),
+        ];
+        for (input, wants) in must_in {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            let top10: Vec<&str> = cands.iter().take(10).map(|c| c.word.as_str()).collect();
+            for w in wants {
+                assert!(
+                    top10.contains(w),
+                    "{input} 的 {w} 应在前 10(全拼第一页回来),实际前 10: {top10:?}"
+                );
+            }
+        }
+
+        // (输入, 不得在前 10 的生僻组合词)
+        let must_out: [(&str, &[&str]); 3] = [
+            ("beijing", &["被禁锢", "悲寂", "背脊"]),
+            ("diannao", &["狄安娜", "蒂安娜"]),
+            ("jinan", &["进啊"]),
+        ];
+        for (input, bads) in must_out {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            let top10: Vec<&str> = cands.iter().take(10).map(|c| c.word.as_str()).collect();
+            for w in bads {
+                assert!(
+                    !top10.contains(w),
+                    "{input} 的生僻组合词 {w} 不应在前 10(裸 u 硬首键回归),实际前 10: {top10:?}"
                 );
             }
         }
@@ -2307,15 +2744,21 @@ mod tests {
             n_abbrev > ABBREV_QUOTA,
             "ren 的简拼层应远超配额(保底不是封顶): {n_abbrev}"
         );
-        // 严格分层未被破坏
-        if let Some(first_abbrev) = ren.iter().position(|c| c.spelling == SpellingKind::Abbrev) {
-            assert!(
-                ren[..first_abbrev]
-                    .iter()
-                    .all(|c| c.spelling != SpellingKind::Abbrev),
-                "ren 严格分层:简拼候选不得排在精确/模糊候选之前"
-            );
-        }
+        // 排序键未被破坏:(u_min 桶, 层序) 整体非降(三段式:原断言
+        // 「(未解释字母数, 层序) 整体非降」;改为 (u_min 桶, 层序) 整体
+        // 非降——同桶内的层序保证原样钉住,跨桶时 0 桶简拼词合法排在
+        // u_min>0 桶精确字之前)。
+        let pair_keys: Vec<(usize, SpellingKind)> = ren
+            .iter()
+            .map(|c| (sort_bucket("ren", c), c.spelling))
+            .collect();
+        assert!(
+            pair_keys.windows(2).all(|w| w[0] <= w[1]),
+            "ren (u_min 桶, 层序) 应整体非降: {:?}",
+            ren.iter()
+                .map(|c| (&c.word, c.spelling, sort_bucket("ren", c)))
+                .collect::<Vec<_>>()
+        );
 
         // 简拼层为空时:head 照旧,不因配额浪费名额(逐位不变由对拍保证,
         // 这里断结构:无 Abbrev 候选、条数与无配额时一致)。
@@ -2330,7 +2773,11 @@ mod tests {
     }
 
     /// `merge_with_abbrev` 的合成单元测试(不依赖真实词库):
-    /// 覆盖「head 装满 / 简拼层为 0 / 两层都短 / 严格分层」四个分支。
+    /// 覆盖「head 装满 / 简拼层为 0 / 两层都短 / 层序收尾」四个分支。
+    /// 本测试所有候选的 `pinyin` 字段都是空串:空 `cp` 是任何输入的
+    /// 前缀 ⇒ 「未解释字母数」首键恒 0(补全),整体排序退化为
+    /// 「层序 + 分数 + …」,配额截取后拼接即终态——同键(同覆盖度)
+    /// 下简拼层仍整体排在精确层之后(分层降为第二键,不是拆掉)。
     #[test]
     fn merge_with_abbrev_quota_branches() {
         let mk = |word: String, freq: u64, kind: SpellingKind| Candidate {
@@ -2349,7 +2796,7 @@ mod tests {
             .collect();
 
         // head 装满 100 + 简拼 10 → 95 + 5,简拼层保底 5 条且排在最后
-        let (total, out) = merge_with_abbrev(head.clone(), abbrev.clone());
+        let (total, out) = merge_with_abbrev("", head.clone(), abbrev.clone());
         assert_eq!(total, 110);
         assert_eq!(out.len(), MAX_CANDIDATES);
         assert_eq!(
@@ -2362,12 +2809,12 @@ mod tests {
         assert!(out[..95].iter().zip(head.iter()).all(|(a, b)| a.word == b.word));
 
         // 简拼层为 0 → head 用满 100,一个名额不浪费
-        let (_, out) = merge_with_abbrev(head.clone(), Vec::new());
+        let (_, out) = merge_with_abbrev("", head.clone(), Vec::new());
         assert_eq!(out.len(), MAX_CANDIDATES);
         assert!(out.iter().all(|c| c.spelling == SpellingKind::Exact));
 
         // 两层都短(总条数 ≤100)→ 原样拼接,简拼层不被配额截断
-        let (_, out) = merge_with_abbrev(head[..20].to_vec(), abbrev.clone());
+        let (_, out) = merge_with_abbrev("", head[..20].to_vec(), abbrev.clone());
         assert_eq!(out.len(), 30, "总数不足 100 时不许截断");
         assert_eq!(
             out.iter().filter(|c| c.spelling == SpellingKind::Abbrev).count(),
@@ -2378,7 +2825,7 @@ mod tests {
         let big_abbrev: Vec<Candidate> = (0..90u64)
             .map(|i| mk(format!("b{i}"), 100 - i, SpellingKind::Abbrev))
             .collect();
-        let (total, out) = merge_with_abbrev(head[..20].to_vec(), big_abbrev);
+        let (total, out) = merge_with_abbrev("", head[..20].to_vec(), big_abbrev);
         assert_eq!(total, 110);
         assert_eq!(out.len(), MAX_CANDIDATES);
         assert_eq!(
@@ -2387,5 +2834,22 @@ mod tests {
             "head 20 条时简拼层应补满到 100(保底不是封顶)"
         );
         assert!(out[..20].iter().all(|c| c.spelling == SpellingKind::Exact));
+
+        // 首键跨层生效(合成锚):同分时「只覆盖前缀的精确候选」必须排在
+        // 「覆盖整串的简拼候选」之后——pinyin 非空时 u_min 桶不再恒 0
+        // (inp=abcdef:「只覆盖前缀」cp=abc,从 3 起 "def" 不可切,
+        // u_min>0 桶),简拼层(恒 0 桶)压过段内精确候选。
+        let cover_head = vec![
+            Candidate { word: "只覆盖前缀".into(), pinyin: "abc".into(),
+                score: 0.0, freq: 1, spelling: SpellingKind::Exact, echo: false },
+        ];
+        let cover_abbrev = vec![
+            Candidate { word: "覆盖整串".into(), pinyin: "abc def".into(),
+                score: 0.0, freq: 1, spelling: SpellingKind::Abbrev, echo: false },
+        ];
+        let (_, out) = merge_with_abbrev("abcdef", cover_head, cover_abbrev);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].word, "覆盖整串", "0 桶简拼应压过段内(u_min>0 桶)精确: {out:?}");
+        assert_eq!(out[1].word, "只覆盖前缀");
     }
 }

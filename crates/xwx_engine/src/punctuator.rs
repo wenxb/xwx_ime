@@ -1,0 +1,134 @@
+//! 中文标点映射(librime `punctuator` 组件的最小等价物)。
+//!
+//! 映射表逐字节核对自 `/usr/share/rime-data/symbols.yaml` 的
+//! `half_shape` 段(luna_pinyin 经 `punctuator: import_preset: symbols`
+//! 引入,见 `luna_pinyin.schema.yaml:91-92`)。librime 里多候选映射
+//! (`'<' : [ 《, 〈, ... ]`)会弹出选单,这里只取**首项 / `commit` 项**
+//! 直接上屏——选单属于 selector 的职责,本轮先把「中文模式打逗号句号
+//! 出半角」这个 P0(gear-audit.md punctuator 行)修掉。
+//!
+//! ## 本轮刻意的取舍(后续轮次的设计约束,勿当成遗漏)
+//!
+//! - **`'`(单引号)不在表内**,保持透传:`PLAN.md` 的 B2 把 `'` 预留为
+//!   **音节分隔符**(`xi'an` 消歧)。现在把它实现成标点会和 B2 冲突,
+//!   等 B2 定稿再一起设计。
+//! - **成对标点不做交替状态**:librime 对 `"` 用配对状态机交替输出
+//!   “/”;这里按任务书固定输出开符 “。`[`/`]`/`{`/`}` 不是 pair
+//!   语义而是多候选列表,取首项 「/」/『/』(开闭各自一键,天然可用)。
+//!   交替状态需要在会话里加一个配对标志位,改动小但要有自己的测试,
+//!   本轮不夹带。
+//! - **`,` / `.` 的翻页功能本轮不做**(gear-audit.md:「selector 的
+//!   `,`/`.` 翻页需与 punctuator 一起设计」)。翻页现有
+//!   PageUp/PageDown 可用;真要加时按 librime 的解法——有候选菜单时
+//!   翻页、否则当标点——会话层两个分支都已现成。
+//! - **数字例外不做**(librime `is_after_number`:3.14、12:30 中的
+//!   `.`/`:` 保持半角):拼音串只收字母,数字不进会话层,「前一字符
+//!   是数字」要看已上屏文本,属于后续增强。
+//! - **ASCII 模式(英文模式)不经过本表**:会话层在英文模式下对标点
+//!   返回 `Noop`,键沿既有透传链(IBus 返回 false)落到应用,
+//!   应用收到原始半角字符。
+
+/// 中文模式下半角标点键应上屏的文本。
+///
+/// 返回 `None` 表示该字符不在标点表内(调用方按既有逻辑处理:
+/// 字母进拼音串,`'` 等其余字符透传给应用)。
+///
+/// 返回 `&str` 而非 `char`:librime 表里有三个一键多字符的映射
+/// (`_` → `——` 两个 U+2014;`^` → `……` 两个 U+2026;`"` 是 pair
+/// 语义),统一按文本上屏最自然。
+pub fn fullwidth_punct(c: char) -> Option<&'static str> {
+    let mapped: &'static str = match c {
+        // —— 任务书点名的核心集合 ——
+        ',' => "\u{FF0C}",        // , FULLWIDTH COMMA
+        '.' => "\u{3002}",        // 。 IDEOGRAPHIC FULL STOP
+        ';' => "\u{FF1B}",        // ;
+        ':' => "\u{FF1A}",        // :
+        '?' => "\u{FF1F}",        // ?
+        '!' => "\u{FF01}",        // !
+        '\\' => "\u{3001}",       // 、 IDEOGRAPHIC COMMA(librime 首项)
+        '<' => "\u{300A}",        // 《
+        '>' => "\u{300B}",        // 》
+        '(' => "\u{FF08}",        // (
+        ')' => "\u{FF09}",        // )
+        '~' => "\u{FF5E}",        // ~ FULLWIDTH TILDE
+        '$' => "\u{FFE5}",        // ¥ FULLWIDTH YEN SIGN
+        '_' => "\u{2014}\u{2014}", // —— EM DASH ×2(librime 字面值)
+        '^' => "\u{2026}\u{2026}", // …… HORIZONTAL ELLIPSIS ×2(librime 字面值)
+
+        // —— 与任务书不冲突的其余常用键(librime 同表首项) ——
+        '/' => "\u{3001}",        // 、(librime half_shape 首项;
+                                  //   注意与 full_shape 不同,那里首项是 /)
+        '"' => "\u{201C}",        // “(librime pair 的开符;闭符 ”
+                                  //   本轮没有键能产出,见模块文档)
+        '[' => "\u{300C}",        // 「
+        ']' => "\u{300D}",        // 」
+        '{' => "\u{300E}",        // 『
+        '}' => "\u{300F}",        // 』
+        '`' => "\u{FF40}",        // ` FULLWIDTH GRAVE ACCENT(librime
+                                  //   half_shape 首项是 ASCII ` 本身,这里
+                                  //   取全角,与整表「中文模式出全角」
+                                  //   的语义一致)
+
+        // 显式排除:'(B2 音节分隔符预留,见模块文档)
+        _ => return None,
+    };
+    Some(mapped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 表驱动:任务书点名的每个标点逐条断言(字符集级,字节级见下)。
+    #[test]
+    fn required_mappings() {
+        let cases: &[(char, &str)] = &[
+            (',', "\u{FF0C}"),         // ,
+            ('.', "\u{3002}"),         // 。
+            (';', "\u{FF1B}"),         // ;
+            (':', "\u{FF1A}"),         // :
+            ('?', "\u{FF1F}"),         // ?
+            ('!', "\u{FF01}"),         // !
+            ('\\', "\u{3001}"),        // 、
+            ('<', "\u{300A}"),         // 《
+            ('>', "\u{300B}"),         // 》
+            ('(', "\u{FF08}"),         // (
+            (')', "\u{FF09}"),         // )
+            ('~', "\u{FF5E}"),         // ~
+            ('$', "\u{FFE5}"),         // ¥
+            ('_', "\u{2014}\u{2014}"), // ——
+            ('^', "\u{2026}\u{2026}"), // ……
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                fullwidth_punct(*input),
+                Some(*expected),
+                "标点 {input:?} 应映射为 {expected:?}"
+            );
+        }
+    }
+
+    /// 多字符映射必须逐字节等于 librime symbols.yaml 的字面值:
+    /// `_` → U+2014×2,`^` → U+2026×2(该文件经 hexdump 实读确认,
+    /// 不是 6 个半角句点、也不是单个省略号)。
+    #[test]
+    fn multi_char_mappings_match_librime_bytes() {
+        assert_eq!(fullwidth_punct('_'), Some("\u{2014}\u{2014}"));
+        assert_eq!(fullwidth_punct('^'), Some("\u{2026}\u{2026}"));
+    }
+
+    /// 单引号是 B2 音节分隔符的预留键,绝不能进标点表。
+    #[test]
+    fn apostrophe_is_not_punct() {
+        assert_eq!(fullwidth_punct('\''), None, "' 预留给 B2 音节分隔符");
+    }
+
+    /// 字母/数字/空白不在标点表内(字母进拼音串,数字是选词键,
+    /// 空格是确认键——各有既有语义,别被标点逻辑劫持)。
+    #[test]
+    fn letters_digits_space_are_not_punct() {
+        for c in "abcdefghijklmnopqrstuvwxyz0123456789 ".chars() {
+            assert_eq!(fullwidth_punct(c), None, "{c:?} 不应进标点表");
+        }
+    }
+}

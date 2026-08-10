@@ -11,13 +11,21 @@ use serde::{Deserialize, Serialize};
 
 /// 候选的拼写来源(B4:取代旧 `fuzzy: bool` 的两层划分)。
 ///
-/// 排序按枚举声明序**严格分层**:精确层全部 → 模糊层全部 → 简拼层全部
+/// 排序键是 **(u_min 桶, 层序, 分数 − 覆盖罚分)**:本枚举的声明序
 /// (`#[derive(PartialOrd, Ord)]` 的枚举比较就是声明序,`Exact < Fuzzy <
-/// Abbrev`)。层内仍按分排序,见 `lib.rs` 的 `sort_candidates`。
+/// Abbrev`)是**第二键**——同一 u_min 桶内仍是精确层全部 → 模糊层
+/// 全部 → 简拼层全部;首键「u_min 桶」(候选终点处的不可避免未解释
+/// 字母数)让「终点能精确切分到串尾」的候选跨层提前——既包括覆盖
+/// 整串的简拼词(`zhongguor` 的「中国人」,恒 0 桶),也包括终点在
+/// 音节边界的高频单字(`beijing` 的「被」`bei`,0 桶)——而把
+/// 「拼音凑巧等长但剩下字母不可精确切分」的生僻组合词(被禁锢
+/// `bei jin [g]`、狄安娜)压到段内桶。层内仍按分排序,见 `lib.rs`
+/// 的 `sort_candidates`、`unreachable_tail` 与 `unexplained_letters`。
 ///
-/// 不用「连续 credibility 混排」的理由:简拼候选动辄上千条(`xx` 命中
-/// 10,816),一旦允许与精确候选按分混排,全拼第一页立刻被冲垮
-/// (见 `docs/design-batch1.md` B4 与 `PLAN.md` 第三节)。
+/// 不用「连续 credibility 混排」的理由不变:简拼候选动辄上千条(`xx`
+/// 命中 10,816),一旦允许与精确候选按分混排,全拼第一页立刻被冲垮
+/// (见 `docs/design-batch1.md` B4 与 `PLAN.md` 第三节)——所以分层
+/// 语义保留,只是降为第二键,不是拆掉。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpellingKind {
     /// 精确匹配(输入串就是该词的完整拼音)。

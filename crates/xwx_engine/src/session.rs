@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use crate::punctuator::fullwidth_punct;
 use crate::{Candidate, EngineError, ImeEngine, LmContext};
 
 /// 候选窗口每页显示的候选数（搜狗等主流输入法默认 9 个）。
@@ -187,8 +188,35 @@ impl InputSession {
                 self.refresh()?;
                 Ok(SessionOutput::Updated(self.update()))
             }
-            // —— 标点等其它可打印字符 ——
-            // TODO: 拼音串非空时全角标点直接上屏（如 ", " -> "，"）。
+            // —— 中文标点(librime punctuator 的等价物;映射表及成对标点不交替、
+            //    `'` 不进表、`,`/`.` 翻页留待与 selector 一起设计等取舍,
+            //    见 punctuator.rs 模块文档) ——
+            // 拼音串非空时,先按「空格上屏」的同一语义提交当前高亮候选
+            // (无候选则原样上屏拼音串,与 Space 分支逐字对齐),紧接着上屏
+            // 全角标点——用户打 `nihao,` 得到「你好,」;拼音串为空时直接
+            // 上屏全角标点。英文模式不到这里(上面第一个 Char 分支已拦截,
+            // 返回 Noop 沿透传链让应用收到原始半角字符)。
+            InputEvent::Char(c) if fullwidth_punct(c).is_some() => {
+                let punct = fullwidth_punct(c).expect("守卫已检查");
+                if self.pinyin.is_empty() {
+                    Ok(SessionOutput::Commit(self.commit_raw(punct.to_string())))
+                } else {
+                    let head = match self.candidates.get(self.cursor).cloned() {
+                        Some(c) => self.commit_word(&c),
+                        None => self.commit_raw(self.pinyin.clone()),
+                    };
+                    // 与 Space 分支的唯一差别:commit_* 已把会话复位,
+                    // 这里只把标点追加进上屏尾部并拼到上屏文本后面。
+                    // 标点用 push_tail 而非 record_committed:既不触发学习
+                    // (标点不是词,不进 UserLM——对应 librime 标点不进 memory),
+                    // 也不动 last_word(刚上屏的「你好」仍是后续打分的有效
+                    // bigram 上文,不被标点抹掉)。
+                    self.push_tail(punct);
+                    Ok(SessionOutput::Commit(format!("{head}{punct}")))
+                }
+            }
+            // —— 其余可打印字符(含 `'`——B2 音节分隔符预留,见
+            //    punctuator.rs 模块文档):透传给应用 ——
             InputEvent::Char(_) => Ok(SessionOutput::Noop),
 
             // —— 数字选词 ——
@@ -339,6 +367,16 @@ impl InputSession {
         // 词对;原始字母/标点(None)不学——它不是词,与下方
         // `last_word` 置 `None` 是同一判断。
         self.engine.learn_committed(self.last_word.as_deref(), word);
+        self.push_tail(text);
+        self.last_word = word.map(str::to_string);
+    }
+
+    /// 只把文本追加进有界上屏尾部,不触发学习、不动 `last_word`。
+    ///
+    /// 用于中文标点(见 `handle` 的标点分支):标点要被后续打分的
+    /// 字符级窗口(`committed_tail`)看见,但它不是词——不进 UserLM
+    /// 学习,也不该把刚上屏的词从 `last_word` 里抹掉。
+    fn push_tail(&mut self, text: &str) {
         self.committed_tail.push_str(text);
         let excess = self
             .committed_tail
@@ -346,10 +384,9 @@ impl InputSession {
             .count()
             .saturating_sub(COMMITTED_TAIL_LIMIT);
         if excess > 0 {
-            // 从头丢 `excess` 个完整字符（`char` 边界，不碰字节）。
+            // 从头丢 `excess` 个完整字符(`char` 边界,不碰字节)。
             self.committed_tail = self.committed_tail.chars().skip(excess).collect();
         }
-        self.last_word = word.map(str::to_string);
     }
 
     /// 直接上屏第 `index` 个候选（全局下标，跨页有效）。
@@ -676,5 +713,156 @@ mod tests {
             std::str::from_utf8(s.committed_tail.as_bytes()).is_ok(),
             "截断后必须是合法 UTF-8（char 边界截断）"
         );
+    }
+
+    // —— punctuator(中文标点)——
+
+    #[test]
+    fn punct_commits_fullwidth_when_idle() {
+        // 中文模式、拼音串为空:标点键直接上屏全角标点。
+        let mut s = session_with_dict();
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "\u{FF0C}"),
+            "空闲时 `,` 应上屏全角逗号: {out:?}"
+        );
+        assert!(!s.is_active(), "上屏后会话应保持空闲");
+        assert_eq!(s.last_word, None, "标点不是词,last_word 应为 None");
+        assert_eq!(s.committed_tail, "\u{FF0C}", "标点应计入上屏尾部");
+    }
+
+    #[test]
+    fn punct_commits_highlighted_candidate_then_fullwidth() {
+        // 中文模式、拼音串非空(`nihao`):`,` 先按空格语义上屏高亮候选
+        // (首选整词「你好」,与 commit_at_commits_global_index 同一词典),
+        // 再追加全角逗号——用户得到「你好,」。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "你好\u{FF0C}"),
+            "`nihao,` 应上屏「你好,」: {out:?}"
+        );
+        assert!(!s.is_active(), "上屏后会话应复位");
+        // 「你好」是词(last_word),标点紧随之后不覆盖它
+        assert_eq!(s.last_word.as_deref(), Some("你好"));
+        assert_eq!(s.committed_tail, "你好\u{FF0C}");
+    }
+
+    #[test]
+    fn punct_with_no_real_candidate_commits_raw_then_fullwidth() {
+        // 拼音串非空但没有真实候选:与 Space 分支同一兜底语义——
+        // 上屏原始输入串(空词库下唯一候选是回声候选,词即原始串),
+        // 再追加全角句号。
+        let engine = Arc::new(ImeEngine::new(None).expect("内存引擎创建失败"));
+        let mut s = InputSession::new(engine);
+        for c in "zgr".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Char('.')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "zgr\u{3002}"),
+            "无真实候选时应上屏「原始串 + 。」: {out:?}"
+        );
+        assert!(!s.is_active(), "上屏后会话应复位");
+        assert_eq!(s.last_word, None, "回声/原始串不是词");
+    }
+
+    #[test]
+    fn punct_table_driven_session_level() {
+        // 会话层面把整张标点表跑一遍(映射本身在 punctuator.rs 单测,
+        // 这里断言「中文模式空闲时,每个标点键都上屏对应全角文本」)。
+        let cases: &[(char, &str)] = &[
+            (',', "\u{FF0C}"),
+            ('.', "\u{3002}"),
+            (';', "\u{FF1B}"),
+            (':', "\u{FF1A}"),
+            ('?', "\u{FF1F}"),
+            ('!', "\u{FF01}"),
+            ('\\', "\u{3001}"),
+            ('<', "\u{300A}"),
+            ('>', "\u{300B}"),
+            ('(', "\u{FF08}"),
+            (')', "\u{FF09}"),
+            ('~', "\u{FF5E}"),
+            ('$', "\u{FFE5}"),
+            ('_', "\u{2014}\u{2014}"),
+            ('^', "\u{2026}\u{2026}"),
+            ('/', "\u{3001}"),
+            ('"', "\u{201C}"),
+            ('[', "\u{300C}"),
+            (']', "\u{300D}"),
+            ('{', "\u{300E}"),
+            ('}', "\u{300F}"),
+            ('`', "\u{FF40}"),
+        ];
+        for (input, expected) in cases {
+            let mut s = session_with_dict();
+            let out = s.handle(InputEvent::Char(*input)).expect("不应失败");
+            assert!(
+                matches!(out, SessionOutput::Commit(ref t) if t == expected),
+                "标点 {input:?} 应上屏 {expected:?},实际 {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn punct_passthrough_in_english_mode() {
+        // 英文模式:标点键返回 Noop——IBus 层对 Noop 返回 false,daemon
+        // 把按键透传给应用,应用收到原始半角字符(键没有被吃掉)。
+        let mut s = session_with_dict();
+        s.handle(InputEvent::ToggleAscii).expect("切换不应失败");
+        assert!(s.english_mode());
+        for c in [',', '.', ';', '$', '~'] {
+            let out = s.handle(InputEvent::Char(c)).expect("不应失败");
+            assert!(
+                matches!(out, SessionOutput::Noop),
+                "英文模式下 {c:?} 应透传(Noop): {out:?}"
+            );
+        }
+        // 切回中文模式后标点恢复全角上屏
+        s.handle(InputEvent::ToggleAscii).expect("切换不应失败");
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(ref t) if t == "\u{FF0C}"));
+    }
+
+    #[test]
+    fn apostrophe_passthrough_reserved_for_b2() {
+        // `'` 是 B2 音节分隔符(xi'an 消歧)的预留键,本轮明确不进
+        // 标点表,保持既有透传行为——中文模式下也是 Noop。
+        let mut s = session_with_dict();
+        let out = s.handle(InputEvent::Char('\'')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Noop),
+            "' 应透传(B2 预留): {out:?}"
+        );
+        // 拼音串非空时同样透传(不进拼音串、不触发标点上屏)
+        s.handle(InputEvent::Char('x')).expect("不应失败");
+        s.handle(InputEvent::Char('i')).expect("不应失败");
+        let out = s.handle(InputEvent::Char('\'')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Noop),
+            "拼音串非空时 ' 仍应透传: {out:?}"
+        );
+    }
+
+    #[test]
+    fn digits_still_select_candidates_not_punct() {
+        // 数字键仍是选词,不被标点逻辑劫持(数字经 `translate_keyval`
+        // 翻成 Select(n),会话层行为不应因标点分支的引入而变化)。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Select(1)).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "你好"),
+            "数字 1 应选第 1 个候选「你好」: {out:?}"
+        );
+        // 拼音串为空时数字键照旧 Noop(无候选可选)
+        let out = s.handle(InputEvent::Select(1)).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Noop));
     }
 }
