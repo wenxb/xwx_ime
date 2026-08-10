@@ -79,6 +79,19 @@ pub trait Dictionary: Send + Sync {
     /// 专门的拼音前缀索引。
     fn lookup_prefix(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError>;
 
+    /// 带条数上限的前缀联想:语义与 [`Dictionary::lookup_prefix`] 相同,
+    /// 但最多返回 `limit` 条。供「声母前缀按音节枚举展开」逐音节查询用
+    /// (见 `ImeEngine::fallback_candidates`):`lookup_prefix` 的全局上限
+    /// `MAX_LOOKUP_RESULTS` 在逐音节配额下太大(单字母声母十几个韵母,
+    /// 每个都取 500 条会把合并池撑到几千条、全是低频长尾),逐音节
+    /// 限流后总查询量才可控。`limit >= MAX_LOOKUP_RESULTS` 时与
+    /// `lookup_prefix` 等价(各实现内部仍按全局上限早停)。
+    fn lookup_prefix_limited(
+        &self,
+        pinyin: &str,
+        limit: usize,
+    ) -> Result<Vec<Candidate>, DictError>;
+
     /// 全表词频总和（打分归一化分母，见 `lib.rs` 的 `log10(freq/总词频)`）。
     ///
     /// 默认 0 = 空词库/未实现：调用方按「词频项为 0」处理，不除零、不产生
@@ -232,6 +245,14 @@ impl Dictionary for SqliteDict {
     }
 
     fn lookup_prefix(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError> {
+        self.lookup_prefix_limited(pinyin, MAX_LOOKUP_RESULTS as usize)
+    }
+
+    fn lookup_prefix_limited(
+        &self,
+        pinyin: &str,
+        limit: usize,
+    ) -> Result<Vec<Candidate>, DictError> {
         let conn = self.conn.lock().map_err(|_| DictError::LockPoisoned)?;
         let mut stmt = conn.prepare(
             "SELECT word, pinyin, freq FROM entries
@@ -241,8 +262,9 @@ impl Dictionary for SqliteDict {
         )?;
         // 转义 LIKE 通配符，防止用户输入 %/_ 影响查询。
         let escaped = pinyin.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let limit = (limit as i64).min(MAX_LOOKUP_RESULTS);
         let rows = stmt.query_map(
-            params![escaped, MAX_LOOKUP_RESULTS],
+            params![escaped, limit],
             |row| {
                 Ok(Candidate {
                     word: row.get(0)?,
@@ -755,7 +777,16 @@ impl Dictionary for MmapDict {
 
     /// 前缀联想：拼音数组按字节序排好，`[下界, 首个不匹配)` 就是答案区间。
     fn lookup_prefix(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError> {
+        self.lookup_prefix_limited(pinyin, MAX_LOOKUP_RESULTS as usize)
+    }
+
+    fn lookup_prefix_limited(
+        &self,
+        pinyin: &str,
+        limit: usize,
+    ) -> Result<Vec<Candidate>, DictError> {
         let pb = pinyin.as_bytes();
+        let limit = limit.min(MAX_LOOKUP_RESULTS as usize);
         let start = self.lower_bound(pb)?;
         let mut out: Vec<Candidate> = Vec::new();
         for i in start..self.pinyin_count {
@@ -769,7 +800,7 @@ impl Dictionary for MmapDict {
                 .to_owned();
             for (word, freq) in self.parse_entries(self.entries_off + rec.ent_off, rec.ent_len)? {
                 out.push(Candidate::new(word, py.clone(), freq));
-                if out.len() >= MAX_LOOKUP_RESULTS as usize {
+                if out.len() >= limit {
                     return Ok(out);
                 }
             }
@@ -838,6 +869,17 @@ impl Dictionary for DictStore {
         match self {
             Self::Sqlite(d) => d.lookup_prefix(pinyin),
             Self::Mmap(d) => d.lookup_prefix(pinyin),
+        }
+    }
+
+    fn lookup_prefix_limited(
+        &self,
+        pinyin: &str,
+        limit: usize,
+    ) -> Result<Vec<Candidate>, DictError> {
+        match self {
+            Self::Sqlite(d) => d.lookup_prefix_limited(pinyin, limit),
+            Self::Mmap(d) => d.lookup_prefix_limited(pinyin, limit),
         }
     }
 

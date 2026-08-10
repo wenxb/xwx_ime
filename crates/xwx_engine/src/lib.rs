@@ -112,6 +112,35 @@ const MAX_EDGE_SYLLABLES: usize = 12;
 /// 退化成指数级。
 const MAX_CHAINS_PER_START: usize = 64;
 
+/// 声母前缀枚举展开时,每个音节的前缀联想条数上限。
+///
+/// 「只打了声母/半个音节」的输入(`zh`/`x`/`q`/`zhon`)不是合法音节,
+/// 旧的兜底对它做一次整串字节前缀联想:词典按字节序排列,`zh` 的命中
+/// 区间以 `zha*` 开头,凑满 `MAX_LOOKUP_RESULTS`(500)即早停——
+/// 于是候选被字典序锁死在韵母 `a`,`zhe`/`zhong` 的高频字(这/中)
+/// 根本进不了候选(参照实现:libime 的 `PinyinFinal::Invalid` 在 trie 上
+/// 枚举全部韵母;librime 的 script_translator 在拼写层就切开了音节)。
+///
+/// 修法(不改存储层):对「不是合法音节、但是某些音节的前缀」的串,用
+/// 编译期静态音节表枚举它的所有音节补全(`zh` → `zha, zhai, zhan, ...`),
+/// 每个音节做一次**带配额**的前缀联想,合并后按分排序——每个韵母下的
+/// 高频字都有机会进候选,而不是被字节序最小者独占。
+///
+/// 配额取值理由:
+/// - 字节序偏置只在「字典序最前的那几个音节」上,只要每个音节都拿到
+///   **非零**条数,偏置即被打破;24 条对单音节字(`zhi` 系 20+ 同音字)
+///   的头部够用;
+/// - 同音节内的词条按**词频降序**取(mmap 词块本身就是按 freq 降序
+///   存的),24 条保证「在/区/钱」这类同音节头部字不会被同音字的
+///   数量堆出去(实测配额 16 时 `qu` 系的「区」(该音节第 20 条)
+///   进不了前 30,24 可以);
+/// - 总查询量的上界:枚举音节数 ≤ 37(`z`:9 个 z 系 + 28 个 zh 系),
+///   合并池 ≤ 37 × 24 ≈ 900 条,仍在旧路径单次 500 条的 2 倍以内,
+///   排序/打分开销同量级;
+/// - 再大(如 64)收益趋零:候选位只有 100 个,字频排序后前 24 条
+///   之外的词本就到不了第一页,只是白做多倍打分。
+const SYLLABLE_ENUM_QUOTA: usize = 24;
+
 /// 切分格上的一条词边：覆盖 `pinyin[start..end]`，对应该区间查到的一个词。
 #[derive(Debug)]
 struct LatticeEdge {
@@ -997,6 +1026,10 @@ impl ImeEngine {
             return Ok(Vec::new());
         }
         let mut merged: Vec<Candidate> = Vec::new();
+        // 本次兜底是否走了「声母前缀按音节枚举展开」分支:
+        // 决定下面要不要做第二遍按 word 去重(见排序前的注释)。
+        // 只在枚举路径置 true,其余路径为 false,去重行为与旧版一致。
+        let mut enum_expand_used = false;
 
         let segmented = (1..=pinyin.len())
             .rev()
@@ -1015,7 +1048,40 @@ impl ImeEngine {
         }
         if merged.is_empty() {
             // 一个音节都没切出来（首音节还没打完）：整串前缀联想
-            merged.extend(self.dict.lookup_prefix(pinyin)?);
+            // 声母前缀按音节枚举展开(常量 `SYLLABLE_ENUM_QUOTA` 的注释有
+            // 完整背景):`pinyin` 本身不是合法音节、但是某些音节的前缀时
+            // (`zh`/`x`/`zhon`),字节前缀联想会被字典序锁死在排序最前的
+            // 韵母上(`zh` 捞满 500 条全是 `zha*`,`zhe`/`zhong` 的高频字
+            // 进不了候选)。改为用静态音节表枚举所有音节补全,逐音节带
+            // 配额查询再合并——每个韵母下的高频字都有机会露面。
+            //
+            // 生效范围被 `is_syllable` 守卫严格限制:合法音节(`zhe`)与
+            // 可切分的串(`ni`/`beijing`)走不到这个分支(上面的
+            // `segmented` 分支已拿到候选),全拼行为逐字节不变。
+            if !pinyin.is_empty() && !self.segmenter.is_syllable(pinyin) {
+                let syllables: Vec<&str> = segmenter::SYLLABLES
+                    .iter()
+                    .copied()
+                    .filter(|s| s.starts_with(pinyin))
+                    .collect();
+                let enum_taken = !syllables.is_empty();
+                if enum_taken {
+                    // `z`/`c`/`s` 不需要特判:它们同时是 `zh`/`ch`/`sh`
+                    // 的前缀,`starts_with` 天然把两套音节都枚进来。
+                    enum_expand_used = true;
+                    for syl in syllables {
+                        merged.extend(
+                            self.dict.lookup_prefix_limited(syl, SYLLABLE_ENUM_QUOTA)?,
+                        );
+                    }
+                } else {
+                    // 连任何音节的前缀都不是(`hello`/`zzzz` 这类纯字母
+                    // 乱串):退回整串字节前缀联想,维持旧兜底语义。
+                    merged.extend(self.dict.lookup_prefix(pinyin)?);
+                }
+            } else {
+                merged.extend(self.dict.lookup_prefix(pinyin)?);
+            }
         }
 
         let state = self.lm.state_from_context(ctx);
@@ -1048,6 +1114,29 @@ impl ImeEngine {
             }
         }
         ranked = best.into_values().collect();
+        if enum_expand_used {
+            // 枚举展开的第二遍去重(键 = word):逐音节查询会把多音字的
+            // 每个读音都捞出来(如「这」同时挂在 zhe/zhei 下),同一个字
+            // 会以多条 (word, 不同拼音) 出现、占掉多个候选位。这里按 word
+            // 保最高分——词频相同的同字条目分数相同,保谁的唯一差异是
+            // `Candidate.pinyin`(拼音注解),对排序与展示无影响。
+            //
+            // 只对枚举路径生效:精确/简拼路径里同 word 不同拼音的候选
+            // 不互替(如 `chong` 的「重」与 `zhong` 的「重」是两种切法
+            // 的各自补全,旧行为两个都保留),不能动——`enum_expand_used`
+            // 为 false 时本分支一次都不进,既有行为逐字节不变。
+            let mut best_by_word: HashMap<String, Candidate> =
+                HashMap::with_capacity(ranked.len());
+            for c in ranked.drain(..) {
+                let entry = best_by_word
+                    .entry(c.word.clone())
+                    .or_insert_with(|| c.clone());
+                if c.score > entry.score {
+                    *entry = c;
+                }
+            }
+            ranked = best_by_word.into_values().collect();
+        }
         sort_candidates(pinyin, &mut ranked);
         ranked.truncate(MAX_CANDIDATES);
         Ok(ranked)
@@ -3099,5 +3188,200 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].word, "覆盖整串", "0 桶简拼应压过段内(u_min>0 桶)精确: {out:?}");
         assert_eq!(out[1].word, "只覆盖前缀");
+    }
+
+    /// 声母前缀按音节枚举展开(玩具词库,不依赖 dict.bin):
+    /// 「只有声母、还没打韵母」的输入(`zh`)不能再被字节序锁死在
+    /// 排序最前的韵母上——`zhe`/`zhong` 的字必须进入候选,哪怕字典序
+    /// 上 `zha*` 排在它们前面且数量足够把全局 500 条上限占满。
+    ///
+    /// 观测点的选择(功能坏掉时必须变红):内存 SqliteDict 的
+    /// `lookup_prefix` 按 **freq 降序**返回,不重现 mmap 的字节序锁死,
+    /// 所以「这/中出现在候选里」在旧实现下也成立(它们词频虽低但
+    /// 仍会排在 500 条以内)。真正只有枚举路径才产生的可观测量是
+    /// **逐音节配额限流**:`zha` 系灌 `SYLLABLE_ENUM_QUOTA + 6` 条,
+    /// 枚举路径下它在合并池里至多占 `SYLLABLE_ENUM_QUOTA` 条;旧路径
+    /// (单次前缀联想,无配额)下全部进。断这个,负向控制
+    /// (把枚举分支强制关掉)下本测试变红。
+    #[test]
+    fn initial_only_prefix_recovers_all_finals() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        // zha 系灌 SYLLABLE_ENUM_QUOTA + 6 个,词频递减;数量 > 配额。
+        for i in 0..(SYLLABLE_ENUM_QUOTA + 6) as u32 {
+            let w = char::from_u32(0x4E00 + i).unwrap().to_string();
+            engine
+                .dict
+                .upsert(&w, "zha", 10_000 - i as u64)
+                .expect("插入失败");
+        }
+        // 其他韵母下的字:枚举后必须**出现**在候选里。
+        engine.dict.upsert("这", "zhe", 50).expect("插入失败");
+        engine.dict.upsert("中", "zhong", 40).expect("插入失败");
+
+        let cands = engine
+            .lookup_candidates("zh", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            cands.iter().any(|c| c.word == "这"),
+            "zh 应召回 zhe 系的「这」: {:?}",
+            cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+        );
+        assert!(
+            cands.iter().any(|c| c.word == "中"),
+            "zh 应召回 zhong 系的「中」: {:?}",
+            cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+        );
+        // 关键断言(只有枚举路径才成立的观测量):zha 系被逐音节配额
+        // 限流,不得超过 SYLLABLE_ENUM_QUOTA 条。旧路径(无配额单次
+        // 前缀联想)下 20 条全进,此断言变红。
+        let n_zha = cands.iter().filter(|c| c.pinyin == "zha").count();
+        assert!(
+            n_zha <= SYLLABLE_ENUM_QUOTA,
+            "zha 系应被逐音节配额限流(>{SYLLABLE_ENUM_QUOTA} 即枚举未生效): {n_zha}"
+        );
+    }
+
+    /// 「合法音节不走枚举分支」守卫(玩具词库):`zhe` 本身是合法
+    /// 音节,走正常路径,候选里**不得**混入 `zha`/`zhong` 的字——
+    /// 枚举只对「不是合法音节的前缀串」生效。
+    #[test]
+    fn legal_syllable_not_touched_by_enum_expansion() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("这", "zhe", 100).expect("插入失败");
+        engine.dict.upsert("扎", "zha", 1000).expect("插入失败");
+        engine.dict.upsert("中", "zhong", 900).expect("插入失败");
+
+        let cands = engine
+            .lookup_candidates("zhe", &LmContext::empty())
+            .expect("查询失败");
+        assert!(cands.iter().any(|c| c.word == "这"), "zhe 应有「这」");
+        assert!(
+            cands.iter().all(|c| c.pinyin == "zhe"),
+            "合法音节 zhe 不得混入其他音节的候选(枚举越界): {:?}",
+            cands.iter().map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+        );
+    }
+
+    /// `z`/`c`/`s` 双前缀(玩具词库):它们既是 z/c/s 系音节的声母,
+    /// 又是 zh/ch/sh 系音节的前缀——枚举必须**两套都枚进来**
+    /// (`starts_with` 天然覆盖,不需要特判;这条测试钉住它,防后人
+    /// 「优化」成只枚一套)。
+    ///
+    /// 观测点(负向控制下变红):只用「在/中出现」断不住(内存库的
+    /// freq 降序前缀联想在旧实现下也能捞到它们)。真正能区分的是
+    /// **逐音节限流的形状**:z 系灌 `SYLLABLE_ENUM_QUOTA + 5` 条高频
+    /// zai 字,若走了枚举,zh 系的「中」必定占位(z 系被配额压住);
+    /// 若没走枚举(单次前缀联想),zai 系 21 条高频字会按 freq 把
+    /// 「中」(freq 仅 1)挤到候选列表截断线之外——MAX_CANDIDATES=100
+    /// 救不了它,因为这里总条数 < 100、不打满,但 zai 系 21 条全在
+    /// 「中」前面。断「中」必须落在前 `SYLLABLE_ENUM_QUOTA + 1` 名内。
+    #[test]
+    fn single_letter_initial_covers_both_sibilant_families() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        // z 系灌 SYLLABLE_ENUM_QUOTA + 5 条高频 zai 字:足够在「无配额
+        // 单次前缀联想」下把低频「中」压到很靠后,又不触发 100 条截断。
+        for i in 0..(SYLLABLE_ENUM_QUOTA + 5) as u32 {
+            let w = char::from_u32(0x4E00 + i).unwrap().to_string();
+            engine
+                .dict
+                .upsert(&w, "zai", 10_000 - i as u64)
+                .expect("插入失败");
+        }
+        engine.dict.upsert("中", "zhong", 1).expect("插入失败");
+
+        let cands = engine
+            .lookup_candidates("z", &LmContext::empty())
+            .expect("查询失败");
+        let pos_zhong = cands
+            .iter()
+            .position(|c| c.word == "中")
+            .unwrap_or_else(|| panic!("z 应召回 zh 系的「中」: {:?}",
+                cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()));
+        assert!(
+            pos_zhong <= SYLLABLE_ENUM_QUOTA,
+            "枚举路径下 zai 系被配额({SYLLABLE_ENUM_QUOTA})限流,「中」不应排第 {} 名这么靠后: {:?}",
+            pos_zhong + 1,
+            cands.iter().take(30).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+    /// 多音字按 word 去重(玩具词库):逐音节枚举会把同一汉字的每个
+    /// 读音都捞出来(「这」挂在 zhe 与 zhei 两个 key 下),同一个字
+    /// 不得以多条 (word, 不同拼音) 重复占位。
+    #[test]
+    fn enum_expansion_dedups_polyphonic_char_by_word() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("这", "zhe", 100).expect("插入失败");
+        engine.dict.upsert("这", "zhei", 100).expect("插入失败");
+
+        let cands = engine
+            .lookup_candidates("zh", &LmContext::empty())
+            .expect("查询失败");
+        let n = cands.iter().filter(|c| c.word == "这").count();
+        assert_eq!(n, 1, "「这」只能出现一次(zhe/zhei 两条应合并): {:?}",
+            cands.iter().map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>());
+    }
+
+    /// 验收判据 A(真实词库,缺 dict.bin 时跳过):`zh`/`x`/`q`/`zhon`/`sh`
+    /// 的前 10 必须被「各韵母下的高频字」占据,而不是字典序最小韵母的
+    /// 一串同音字。断言方式分两层:
+    /// - 召回层(硬):任务书点名的高频字必须在候选列表里出现
+    ///   (`zh` 的中/这/着,`x` 的先/新/学,`q` 的钱/区/强);
+    /// - 结构层(硬):`zh` 的前 10 不得全是 `zha` 系(修复前的症状),
+    ///   `x` 不得全是 `xi` 系,`q` 不得全是 `qi` 系,`zhon` 的前 10
+    ///   应以 zhong 系为主。
+    ///
+    /// 不设「前 10 必须有哪几个字」的硬指标——具体名次由词频数据
+    /// 决定(任务书原话:不设「必须几个」的硬指标)。
+    #[test]
+    fn real_dict_initial_only_prefix_first_page() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !dict_path.is_file() {
+            return;
+        }
+        let engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+
+        // 召回层:点名高频字必须召回(不钉名次)。
+        for (input, wants) in [
+            ("zh", &["中", "这", "着"][..]),
+            ("x", &["先", "新", "学"][..]),
+            ("q", &["钱", "区", "强"][..]),
+            ("zhon", &["中", "种", "重"][..]),
+        ] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            for w in wants {
+                assert!(
+                    cands.iter().any(|c| c.word == *w),
+                    "{input} 应召回「{w}」(修复前被字典序锁死在首韵母上): 前 10 {:?}",
+                    cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+                );
+            }
+        }
+
+        // 结构层:前 10 不得被字典序最小韵母独占(修复前的直接症状)。
+        let zh = engine
+            .lookup_candidates("zh", &LmContext::empty())
+            .expect("查询失败");
+        let top10: Vec<&str> = zh.iter().take(10).map(|c| c.word.as_str()).collect();
+        assert!(
+            !top10.iter().all(|w| ["扎", "炸", "眨", "诈", "乍", "喳", "渣", "闸", "栅", "榨"].contains(w)),
+            "zh 前 10 不得全是 zha 系(字节序锁死回归): {top10:?}"
+        );
+        // zhon 前 10 应以 zhong 系为主(它是 zhong 的前缀)。
+        let zhon = engine
+            .lookup_candidates("zhon", &LmContext::empty())
+            .expect("查询失败");
+        let n_zhong = zhon
+            .iter()
+            .take(10)
+            .filter(|c| c.pinyin == "zhong")
+            .count();
+        assert!(
+            n_zhong >= 5,
+            "zhon 前 10 应以 zhong 系为主(实际 {n_zhong}/10): {:?}",
+            zhon.iter().take(10).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+        );
     }
 }
