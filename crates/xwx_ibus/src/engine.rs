@@ -136,7 +136,8 @@ impl XwxEngineServer {
         let was_active = {
             let mut session = self.session.lock().await;
             let active = session.is_active();
-            session.reset();
+            // 焦点切换是造词的真边界：跨应用的上屏片段不该粘成一个词。
+            session.reset_for_focus_change();
             active
         };
         if was_active {

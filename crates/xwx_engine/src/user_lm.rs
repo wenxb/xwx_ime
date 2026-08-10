@@ -33,7 +33,7 @@ use std::sync::{Arc, RwLock};
 
 use tracing::{info, warn};
 
-use crate::lm::{BigramLM, LmError};
+use crate::lm::{BigramLM, LmError, MixedLM};
 
 /// 用户模型默认文件名(落在 `$XDG_DATA_HOME/xwx/` 下)。
 pub const USER_LM_FILE_NAME: &str = "user_bigram.txt";
@@ -46,6 +46,11 @@ pub const USER_LM_FILE_NAME: &str = "user_bigram.txt";
 pub const FLUSH_LEARN_THRESHOLD: u32 = 64;
 /// 用户模型一元词条数硬上限(超限触发全局衰减,见模块文档)。
 pub const MAX_USER_UNIGRAMS: usize = 20_000;
+/// 造词条目数硬上限(与一元词条同一衰减策略,见模块文档)。
+pub const MAX_USER_ENTRIES: usize = 10_000;
+/// 落盘文件里造词节的分节标记行(加载时据此切换解析;旧文件没有
+/// 这一行,整文件按 bigram 格式解析 → 词条表为空,向后兼容)。
+const ENTRIES_SECTION_MARK: &str = "# xwx-user-entries";
 
 /// 用户模型对「没学过」的词给的中性分(log10)。
 ///
@@ -65,6 +70,13 @@ struct UserTables {
     bigrams: HashMap<String, HashMap<String, u64>>,
     /// 上屏次数总和 Σc(w)(一元概率归一化分母)。
     unigram_total: u64,
+    /// 造词条目:拼音 key(音节空格分隔,与词典 key 同格式)-> 词列表。
+    ///
+    /// 与 unigrams/bigrams 的分工:计数表管「学过的词该排多靠前」
+    /// (LM 打分),entries 管「词库里根本没有的短语能被查到」(召回)。
+    /// 造出的词同时会进 unigrams(上屏即学),因此它既有候选召回、
+    /// 又有用户层打分增益,两条通道一体衰减。
+    entries: HashMap<String, Vec<String>>,
 }
 
 /// 打分用不可变快照。
@@ -112,6 +124,20 @@ impl UserLmSnapshot {
         // 也不认识)两侧同取兜底,混合分 ≈ -3.4,仍远低于任何命中。
         NEUTRAL_LOG_PROB
     }
+
+    /// 按拼音 key(音节空格分隔,与词典 key 同格式)查造词条目。
+    ///
+    /// 引擎的格构建把它当作词库之外的第二召回源合并(见
+    /// `lib.rs` 的 `collect_chain_edges`);返回的词列表是「用户亲手
+    /// 逐字选出来过的短语」,词库里可能根本没有。查询零锁、零拷贝
+    /// (快照是 `Arc` 共享的整表)。
+    pub fn lookup_entries(&self, pinyin_key: &str) -> &[String] {
+        self.tables
+            .entries
+            .get(pinyin_key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
 }
 
 /// 比较两个快照的计数内容是否一致(测试/调试断言用,不逐键比较表)。
@@ -146,22 +172,26 @@ impl UserLM {
 
     /// 从 `path` 加载用户模型;文件不存在/损坏/不可写目录都优雅退化为
     /// 「空模型 + 记住路径」,绝不 panic——首次运行必然没有这个文件。
+    ///
+    /// 格式向后兼容:文件由 bigram 计数区(旧格式本体)与可选的造词区
+    /// 两段组成,造词区以 [`ENTRIES_SECTION_MARK`] 行开头。旧版本写出的
+    /// 文件没有这一行,整文件按 bigram 解析、词条表为空——与造词功能
+    /// 引入前的语义一致(那时没有用户词条)。
     pub fn open_or_create(path: &Path) -> Self {
         let mut lm = Self::in_memory();
         lm.path = Some(path.to_path_buf());
         match std::fs::File::open(path) {
-            Ok(file) => {
-                let mut bigram = BigramLM::new();
-                match bigram.load(std::io::BufReader::new(file)) {
-                    Ok(()) => lm.replace_tables_from(bigram),
-                    Err(e) => {
-                        // 文件损坏:不 panic、不截断原文件(它是唯一副本,
-                        // flush 才会覆盖);从空模型继续,下次 flush 重写。
-                        warn!(error = %e, path = %path.display(),
-                            "用户语言模型损坏,从空模型重新开始(原文件保留到下次回写)");
-                    }
+            Ok(file) => match Self::load_tables(std::io::BufReader::new(file)) {
+                Ok(t) => {
+                    *lm.tables.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(t);
                 }
-            }
+                Err(e) => {
+                    // 文件损坏:不 panic、不截断原文件(它是唯一副本,
+                    // flush 才会覆盖);从空模型继续,下次 flush 重写。
+                    warn!(error = %e, path = %path.display(),
+                        "用户语言模型损坏,从空模型重新开始(原文件保留到下次回写)");
+                }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 info!(path = %path.display(), "用户语言模型不存在,首次运行从空模型开始");
             }
@@ -170,6 +200,50 @@ impl UserLM {
             }
         }
         lm
+    }
+
+    /// 从文本流加载计数表 + 造词条目(`open_or_create` 的核心,可测)。
+    ///
+    /// 解析复用 [`BigramLM::load`] 处理计数区(bigram 格式细节只有它
+    /// 知道);造词区在分节标记之后逐行解析(`词<TAB>拼音 key`)。
+    /// 词条表大小不参与 bigram 的 vocab 统计(那是 LM 平滑用的,
+    /// 造词区是召回用的,两者职责不同)。
+    fn load_tables(reader: impl std::io::BufRead) -> Result<UserTables, LmError> {
+        let mut bigram_text = String::new();
+        let mut entries: HashMap<String, Vec<String>> = HashMap::new();
+        let mut in_entries = false;
+        for (i, line) in reader.lines().enumerate() {
+            let line = line?;
+            let t = line.trim();
+            if t == ENTRIES_SECTION_MARK {
+                in_entries = true;
+                continue;
+            }
+            if in_entries {
+                if t.is_empty() || t.starts_with('#') {
+                    continue;
+                }
+                let fields: Vec<&str> = t.split('\t').collect();
+                let [word, key] = fields.as_slice() else {
+                    return Err(LmError::BadLine {
+                        line: (i + 1) as u64,
+                        detail: format!("造词区期望「词<TAB>拼音」两字段,实际: {t:?}"),
+                    });
+                };
+                entries.entry((*key).to_string()).or_default().push((*word).to_string());
+            } else {
+                bigram_text.push_str(t);
+                bigram_text.push('\n');
+            }
+        }
+        let mut bigram = BigramLM::new();
+        bigram.load(bigram_text.as_bytes())?;
+        Ok(UserTables {
+            unigrams: bigram.unigrams,
+            bigrams: bigram.bigrams,
+            unigram_total: bigram.unigram_total,
+            entries,
+        })
     }
 
     /// 记录一次候选词上屏:`word` 是当前词,`prev` 是上一个上屏的词
@@ -184,6 +258,7 @@ impl UserLM {
                 unigrams: shared.unigrams.clone(),
                 bigrams: shared.bigrams.clone(),
                 unigram_total: shared.unigram_total,
+                entries: shared.entries.clone(),
             },
         };
         Self::learn_into(&mut t, prev, word);
@@ -208,6 +283,40 @@ impl UserLM {
         }
     }
 
+    /// 记一条造词条目:`(词, 拼音 key)` 可被后续格构建查到。
+    ///
+    /// 由会话层的造词缓冲在「连续候选上屏段 ≥ 2 字」时调用(见
+    /// `session.rs` 的 `coin_buffer`;单字不造词——它要么已在词库,
+    /// 要么靠 unigram 计数调频就够了,造出词条也不会改变它的候选
+    /// 地位)。幂等:同 `(word, key)` 重复记不会产生重复条目(用户
+    /// 反复上屏同一自造词只留一份,排序增益靠 unigram 计数表达,
+    /// 不靠词条重复)。
+    ///
+    /// 返回距上次落盘的净增学习次数(与 [`Self::learn`] 共用同一
+    /// dirty 计数与回写调度——造词与调频是同一份用户数据的两个面)。
+    pub fn add_entry(&self, word: &str, pinyin_key: &str) -> u32 {
+        let mut guard = self.tables.write().unwrap_or_else(|p| p.into_inner());
+        // copy-on-write,与 learn 同一模式:打分线程持有的旧快照不受影响。
+        let mut t: UserTables = match Arc::try_unwrap(std::mem::take(&mut *guard)) {
+            Ok(t) => t,
+            Err(shared) => UserTables {
+                unigrams: shared.unigrams.clone(),
+                bigrams: shared.bigrams.clone(),
+                unigram_total: shared.unigram_total,
+                entries: shared.entries.clone(),
+            },
+        };
+        let words = t.entries.entry(pinyin_key.to_string()).or_default();
+        if !words.iter().any(|w| w == word) {
+            words.push(word.to_string());
+        }
+        if t.entries.len() > MAX_USER_ENTRIES {
+            Self::decay_entries(&mut t);
+        }
+        *guard = Arc::new(t);
+        self.dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    }
+
     /// 全表计数右移一位(÷2 向下取整),丢弃衰减到 0 的条目。
     fn decay_tables(t: &mut UserTables) {
         t.unigrams.retain(|_, c| {
@@ -225,6 +334,38 @@ impl UserLM {
         info!(
             unigrams = t.unigrams.len(),
             "用户模型条数超限,已执行全局计数衰减(÷2)"
+        );
+    }
+
+    /// 造词条目超限时的淘汰:按「词的上屏次数」保高频(与 unigram
+    /// 衰减的「记忆随使用淡化」同一取向——造词条目若对应的 unigram
+    /// 计数已衰减到 0,说明用户早就没再用它,先丢它)。
+    ///
+    /// 与 [`Self::decay_tables`] 的分工:计数表可以整体减半(值是
+    /// 统计量),词条是有无问题不能减半,只能按条驱逐;判据借用
+    /// unigram 计数,两张表因此共享同一条「用得少的先消失」曲线。
+    fn decay_entries(t: &mut UserTables) {
+        // 每个词条的留存分 = 其 unigram 计数(没学过/已衰减到 0 的
+        // 词条得 0 分,最先被淘汰)。
+        let mut scored: Vec<(String, String, u64)> = Vec::new();
+        for (key, words) in &t.entries {
+            for w in words {
+                let c = t.unigrams.get(w).copied().unwrap_or(0);
+                scored.push((key.clone(), w.clone(), c));
+            }
+        }
+        // 按分升序排,丢前一半(同分按 (key, word) 字典序保证确定性)。
+        scored.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+        let drop_n = scored.len() / 2;
+        let drop: std::collections::HashSet<(String, String)> =
+            scored.into_iter().take(drop_n).map(|(k, w, _)| (k, w)).collect();
+        t.entries.retain(|key, words| {
+            words.retain(|w| !drop.contains(&(key.clone(), w.clone())));
+            !words.is_empty()
+        });
+        info!(
+            entries = t.entries.len(),
+            "造词条目超限,已按上屏频次淘汰低频一半"
         );
     }
 
@@ -284,6 +425,26 @@ impl UserLM {
                 text.push('\n');
             }
         }
+        // 造词区:分节标记之后的「词<TAB>拼音 key」行。旧版本读到这里
+        // 之前的文件内容即可正常加载(bigram 区在上),旧文件没有本节
+        // 则词条表为空——双向兼容。排序写出保证同一表内容字节级稳定
+        // (测试与 diff 友好;HashMap 遍历序不定)。
+        if !t.entries.is_empty() {
+            text.push_str(ENTRIES_SECTION_MARK);
+            text.push('\n');
+            let mut rows: Vec<(&str, &str)> = t
+                .entries
+                .iter()
+                .flat_map(|(key, words)| words.iter().map(move |w| (w.as_str(), key.as_str())))
+                .collect();
+            rows.sort_unstable();
+            for (word, key) in rows {
+                text.push_str(word);
+                text.push('\t');
+                text.push_str(key);
+                text.push('\n');
+            }
+        }
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -321,21 +482,40 @@ impl UserLM {
             .len()
     }
 
-    /// 用加载好的 [`BigramLM`] 计数整体替换当前表(加载路径专用;
-    /// `BigramLM` 的字段对 crate 内可见)。
-    fn replace_tables_from(&self, lm: BigramLM) {
-        let t = UserTables {
-            unigrams: lm.unigrams,
-            bigrams: lm.bigrams,
-            unigram_total: lm.unigram_total,
-        };
-        *self.tables.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(t);
+    /// 造词条目数(拼音 key 的条数;测试/日志用)。
+    pub fn entry_len(&self) -> usize {
+        self.tables
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .entries
+            .len()
     }
 
     /// 内部查询打分(供 [`crate::lm::MixedLM`] 调用)。
     pub(crate) fn score_with(&self, snap: &UserLmSnapshot, prev: Option<&str>, word: &str) -> f32 {
         let _ = self; // 打分只依赖快照,不需要锁
         snap.log10_prob(prev, word)
+    }
+}
+
+/// 从引擎聚合的 LM 里取用户层造词条目快照(若有用户层)。
+///
+/// 引擎的格构建(`lib.rs` 的 `collect_chain_edges`)借此把造词条目
+/// 作为词库之外的第二召回源;引擎没挂用户层(测试里 `new(None)`
+/// 的裸引擎、或 probe 对拍进程)时返回 `None`,召回源与引入造词
+/// 之前完全一致——这是「空用户词典下候选列表逐字节不变」的结构性
+/// 保证:无快照 ⇒ 一次都不查。
+pub(crate) fn user_entries_snapshot(lm: &crate::lm::LmStore) -> Option<UserLmSnapshot> {
+    match lm {
+        crate::lm::LmStore::Mixed(m) => Some(m.user().snapshot()),
+        _ => None,
+    }
+}
+
+impl MixedLM {
+    /// 用户层造词条目的打分快照(查询开始时取一次,沿本次查询传递)。
+    pub fn user_entries_snapshot(&self) -> UserLmSnapshot {
+        self.user().snapshot()
     }
 }
 
@@ -464,5 +644,65 @@ mod tests {
         let mtime2 = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(mtime, mtime2, "无学习不应重写文件");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_file_without_entries_section_loads_as_empty_entries() {
+        // 向后兼容(验收判据 A6):造词功能引入**之前**的旧格式文件
+        // (只有 bigram 计数行,没有造词分节标记)必须仍能正常加载,
+        // 且词条表为空——与「那时还没有造词」的语义一致。
+        let dir = std::env::temp_dir().join(format!("xwx_userlm_legacy_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.txt");
+        // 手写一份旧格式(分节标记绝不出现):与引入造词前的 flush
+        // 产物逐字节同构。
+        std::fs::write(&path, "# xwx 用户词频学习模型\n你\t3\n你\t好\t2\n").unwrap();
+        let lm = UserLM::open_or_create(&path);
+        // bigram 行(你,好)的「好」不单独计 unigram:BigramLM 的
+        // unigrams 只收「词<TAB>次数」行,去重后只有「你」一个。
+        assert_eq!(lm.unigram_len(), 1, "旧文件的计数区应正常加载");
+        assert_eq!(lm.entry_len(), 0, "旧文件没有造词区,词条表应为空");
+        assert!(lm.snapshot().lookup_entries("ni hao").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entries_section_survives_roundtrip() {
+        // 新格式:bigram 区 + 造词区同一份文件,写出去再读回来两段都在。
+        let dir = std::env::temp_dir().join(format!("xwx_userlm_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("rt.txt");
+        {
+            let lm = UserLM::open_or_create(&path);
+            lm.learn(Some("今天"), "天气");
+            lm.add_entry("张三丰", "zhang san feng");
+            lm.add_entry("张叁丰", "zhang san feng"); // 同 key 不同词
+            lm.flush().expect("flush 不应失败");
+        }
+        {
+            let lm = UserLM::open_or_create(&path);
+            // learn(Some("今天"), "天气") 记 unigram(天气) + bigram(今天,天气):
+            // unigram key 去重后只有「天气」一个。
+            assert_eq!(lm.unigram_len(), 1, "计数区应读回");
+            let snap = lm.snapshot();
+            let got = snap.lookup_entries("zhang san feng");
+            assert_eq!(got.len(), 2, "同一 key 的两个词都应读回");
+            assert!(got.contains(&"张三丰".to_string()) && got.contains(&"张叁丰".to_string()),
+                "两个词都应在: {got:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_entry_is_idempotent_per_word_key() {
+        // 同一 (word, key) 重复记不重复:用户反复上屏同一自造词
+        // 只留一份(排序增益由 unigram 计数表达,不靠词条重复)。
+        let lm = UserLM::in_memory();
+        for _ in 0..3 {
+            lm.add_entry("张三丰", "zhang san feng");
+        }
+        assert_eq!(lm.entry_len(), 1);
+        assert_eq!(lm.snapshot().lookup_entries("zhang san feng").len(), 1);
     }
 }

@@ -25,6 +25,16 @@ pub const DEFAULT_PAGE_SIZE: usize = 9;
 /// 丢失必要上文。
 pub const COMMITTED_TAIL_LIMIT: usize = 16;
 
+/// 一次造词片段的最大字符数(按 `char` 计,非字节)。
+///
+/// 对应 librime `unity_table_encoder` 对单次编码片段的长度上限:超过
+/// 这个长度的连续上屏段(如对着文档长句逐字敲)不再粘成一个用户词
+/// ——越长越不像是「一个想反复复用的短语」,且造出来的词条要占
+/// 候选位,病态长度(数百字)会让用户词典被一次性大段文本塞满。
+/// 24 字覆盖常见人名/短语/短句(「张三丰」3 字、七言诗句 14 字),
+/// 又不至于让一次失控的长段上屏永久占位。
+pub const MAX_COIN_CHARS: usize = 24;
+
 /// 一次按键的抽象。由上层把 IBus/GDK 键值翻译成这个枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEvent {
@@ -151,6 +161,18 @@ pub struct InputSession {
     last_word: Option<String>,
     /// 英文模式（中英切换）：开启时除 Shift 外的按键直接透传给应用。
     english_mode: bool,
+    /// 造词缓冲:连续的「候选词上屏」暂存区(word + 其拼音)。
+    ///
+    /// 用户逐字/逐词选出来的整段(如 `zhangsanfeng` 分三次选
+    /// 「张」「三」「丰」)在这里累积;段被打断(标点/回车/原始字母/
+    /// Esc/模式切换——它们都经 `commit_raw` 或 `reset`)或缓冲超长时,
+    /// 若段长 ≥ 2 字就造出一条用户词条写入 [`crate::UserLM`]
+    /// (对应 librime `unity_table_encoder` 把上屏整段反查编码落盘)。
+    ///
+    /// 只收非回声的候选词上屏(`commit_word`):回声候选、原始字母、
+    /// 标点、Verbatim 大写都没有合法拼音,不进缓冲(与它们不进
+    /// UserLM 学习是同一判断)。
+    coin_buffer: Vec<(String, String)>,
 }
 
 impl InputSession {
@@ -167,6 +189,7 @@ impl InputSession {
             committed_tail: String::new(),
             last_word: None,
             english_mode: false,
+            coin_buffer: Vec::new(),
         }
     }
 
@@ -310,6 +333,9 @@ impl InputSession {
 
             // —— Esc：清空 ——
             InputEvent::Escape if !self.pinyin.is_empty() => {
+                // 取消当前输入:打断造词缓冲(结算已累积的段),
+                // 保证缓冲不跨「用户明确取消」的边界泄漏。
+                self.break_coin_run();
                 self.reset();
                 Ok(SessionOutput::Updated(self.update()))
             }
@@ -421,6 +447,11 @@ impl InputSession {
     /// (对应 librime 里 raw 类型不进 memory 的行为)。
     fn commit_word(&mut self, c: &Candidate) -> String {
         let word = c.word.clone();
+        if c.echo {
+            self.break_coin_run();
+        } else {
+            self.push_coin(c);
+        }
         let as_word = if c.echo { None } else { Some(word.as_str()) };
         self.record_committed(&word, as_word);
         self.reset();
@@ -430,9 +461,52 @@ impl InputSession {
     /// 上屏任意文本并复位会话。原文计入上屏尾部；
     /// 原始字母/标点不是词，`last_word` 置 `None`。
     fn commit_raw(&mut self, text: String) -> String {
+        // 原始上屏打断造词缓冲(标点/回车/Verbatim 大写都经此路径,
+        // 即「不跨标点造词」「不跨模式切换造词」的落点)。
+        self.break_coin_run();
         self.record_committed(&text, None);
         self.reset();
         text
+    }
+
+    /// 把一次非回声候选上屏推进造词缓冲。
+    ///
+    /// 候选自带的 `pinyin` 字段就是「空格分隔的音节串」(与词典 key
+    /// 同格式),直接入缓冲;段在 [`Self::break_coin_run`] 时才结算。
+    fn push_coin(&mut self, c: &Candidate) {
+        self.coin_buffer.push((c.word.clone(), c.pinyin.clone()));
+        // 长度上限:超限即把当前缓冲结算后清空(防失控长段粘成
+        // 一个词;见 MAX_COIN_CHARS 注释)。结算发生在「打断」语义
+        // 之前——超限本身就是一种打断。
+        let chars: usize = self
+            .coin_buffer
+            .iter()
+            .map(|(w, _)| w.chars().count())
+            .sum();
+        if chars > MAX_COIN_CHARS {
+            self.break_coin_run();
+        }
+    }
+
+    /// 打断造词缓冲:缓冲 ≥ 2 字时把整段造成一条用户词条
+    /// (词 = 各片段拼接,拼音 key = 各片段拼音空格连接),随后清空。
+    ///
+    /// 单片段(长度 1 的缓冲)不造词:它是一次「完整词上屏」,
+    /// 要么词库本来就有它(造了也是重复条目),要么它是单字——
+    /// 单字的候选地位由 unigram 调频表达就够了,造成词条也不会
+    /// 改变它的召回(它本来就以单音节 key 查得到)。
+    fn break_coin_run(&mut self) {
+        if self.coin_buffer.len() >= 2 {
+            let word: String = self.coin_buffer.iter().map(|(w, _)| w.as_str()).collect();
+            let key: String = self
+                .coin_buffer
+                .iter()
+                .map(|(_, p)| p.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.engine.coin_entry(&word, &key);
+        }
+        self.coin_buffer.clear();
     }
 
     /// 把上屏文本追加进有界尾部并更新 `last_word`。
@@ -483,11 +557,27 @@ impl InputSession {
     /// 更新上文再调用本方法；「新句子/焦点切换」的显式清空留给后续步骤
     /// （IBus `focus-out`）接入。
     pub fn reset(&mut self) {
+        // 注意:本方法**不清造词缓冲**——上屏路径(commit_word /
+        // commit_raw)每次都会调用本方法,而造词缓冲恰恰要「跨多次
+        // 上屏累积」才有意义。缓冲的取消由 Escape 分支与 toggle_ascii
+        // 显式打断(见对应分支),不是这里的职责。
         self.pinyin.clear();
         self.caret = 0;
         self.candidates.clear();
         self.cursor = 0;
         self.page = 0;
+    }
+
+    /// 焦点切换（IBus `FocusOut` / `Reset` / `Disable`）的复位。
+    ///
+    /// 与 [`Self::reset`] 的差别：**先结算并打断造词缓冲**。
+    /// 换了输入焦点就是换了上下文，跨焦点的上屏片段不该粘成一个词——
+    /// 在微信里逐字选「张」「三」、切到浏览器逐字选「李」「四」，
+    /// 不该造出「张三李四」。librime 的 memory 同样把焦点切换当作
+    /// 真正的边界（见 `docs/gear-audit.md` 第 3 节）。
+    pub fn reset_for_focus_change(&mut self) {
+        self.break_coin_run();
+        self.reset();
     }
 
     /// 切换中英文模式。
@@ -1350,5 +1440,297 @@ mod tests {
             );
             assert_eq!(s.pinyin(), "ni", "{c:?} 不应改动拼音串");
         }
+    }
+
+    // —— 造词(unity_table_encoder 的等价物)——
+
+    /// 造词测试的引擎装配:内存引擎 + 内存用户层,词库塞入
+    /// 指定的单字/词(供逐字选择),返回 (engine, session)。
+    fn session_for_coin(entries: &[(&str, &str, u64)]) -> (Arc<ImeEngine>, InputSession) {
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        for (w, py, f) in entries {
+            engine.dict.upsert(w, py, *f).expect("插入失败");
+        }
+        let s = InputSession::new(Arc::clone(&engine));
+        (engine, s)
+    }
+
+    /// 逐个打出 `input` 并选中「按词精确匹配目标」的候选上屏。
+    ///
+    /// 候选列表里同拼音可能有多个字,按 word 精确定位再上屏
+    /// (模拟用户逐字选择)。目标词必须在候选里,否则 panic。
+    fn type_and_commit(s: &mut InputSession, input: &str, target: &str) {
+        for ch in input.chars() {
+            s.handle(InputEvent::Char(ch)).expect("按键失败");
+        }
+        // 用引擎直接查候选列表定位目标词的全局下标(与会话内部
+        // 一致:同一引擎、同一输入、空上下文),再 commit_at 上屏
+        // (等价于用户翻到该候选并选中)。
+        let cands = s
+            .engine
+            .lookup_candidates(input, &crate::LmContext::empty())
+            .expect("查询失败");
+        let idx = cands
+            .iter()
+            .position(|c| c.word == target)
+            .unwrap_or_else(|| panic!("{input} 的候选里应有 {target}"));
+        let committed = s.commit_at(idx).expect("目标下标应有候选");
+        assert_eq!(committed, target, "应上屏 {target}");
+    }
+
+    #[test]
+    fn char_by_char_selection_coins_phrase() {
+        // 验收判据 A1:逐字选「张」「三」「丰」上屏后,再打同样拼音,
+        // 「张三丰」应作为用户词条出现在候选里。
+        let (engine, mut s) = session_for_coin(&[
+            ("张", "zhang", 100),
+            ("三", "san", 100),
+            ("丰", "feng", 100),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+        assert_eq!(user.entry_len(), 0, "初始无造词条目");
+
+        type_and_commit(&mut s, "zhang", "张");
+        type_and_commit(&mut s, "san", "三");
+        type_and_commit(&mut s, "feng", "丰");
+        // 三次上屏后缓冲仍在累积(等下个事件才知道段是否结束);
+        // 这里显式结算(测试是 crate 内,可直接调 break_coin_run)。
+        s.break_coin_run();
+        assert_eq!(user.entry_len(), 1, "三次连续选词应造出一个词条");
+
+        // 再打同样的整串拼音:「张三丰」应在候选里。
+        let cands = engine
+            .lookup_candidates("zhangsanfeng", &crate::LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            cands.iter().any(|c| c.word == "张三丰"),
+            "造词后「张三丰」应能被查到: {:?}",
+            cands.iter().take(8).map(|c| &c.word).collect::<Vec<_>>()
+        );
+        // 拼音 key 应为三段拼接。
+        let c = cands.iter().find(|c| c.word == "张三丰").expect("应存在");
+        assert_eq!(c.pinyin, "zhang san feng");
+    }
+
+    #[test]
+    fn coining_does_not_cross_punctuation() {
+        // 验收判据 A2:选「你」「好」后打逗号,再选「世」「界」,
+        // 不该造出「你好世界」——标点打断造词缓冲。
+        let (engine, mut s) = session_for_coin(&[
+            ("你", "ni", 100),
+            ("好", "hao", 100),
+            ("世", "shi", 100),
+            ("界", "jie", 100),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        type_and_commit(&mut s, "ni", "你");
+        type_and_commit(&mut s, "hao", "好");
+        // 打逗号(空闲标点上屏):应打断造词缓冲,造出「你好」而非积累。
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(_)), "逗号应上屏");
+        assert_eq!(user.entry_len(), 1, "逗号应结算「你好」词条");
+
+        type_and_commit(&mut s, "shi", "世");
+        type_and_commit(&mut s, "jie", "界");
+        // 光标移出/另一个打断来结算「世界」:用回车(原始上屏)打断。
+        s.handle(InputEvent::Char('x')).expect("按键失败");
+        s.handle(InputEvent::Enter).expect("回车失败");
+        assert_eq!(user.entry_len(), 2, "应再结算「世界」词条");
+
+        // 验证:能查到「你好」与「世界」,查不到「你好世界」。
+        let snap = user.snapshot();
+        assert_eq!(snap.lookup_entries("ni hao"), &["你好".to_string()]);
+        assert_eq!(snap.lookup_entries("shi jie"), &["世界".to_string()]);
+        assert!(
+            snap.lookup_entries("ni hao shi jie").is_empty(),
+            "不应造出跨标点的「你好世界」"
+        );
+    }
+
+    #[test]
+    fn coining_does_not_cross_focus_change() {
+        // 焦点切换（IBus FocusOut/Reset/Disable）是造词的真边界：
+        // 在一个应用里逐字选「你」「好」，切到另一个应用逐字选
+        // 「世」「界」，不该粘成「你好世界」。
+        //
+        // 注意 reset() 本身**不打断**造词缓冲（上屏路径每次都调它，
+        // 打断了就永远攒不起来）——焦点切换必须走
+        // reset_for_focus_change()，这个测试就是钉住这个区别的。
+        let (engine, mut s) = session_for_coin(&[
+            ("你", "ni", 100),
+            ("好", "hao", 100),
+            ("世", "shi", 100),
+            ("界", "jie", 100),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        type_and_commit(&mut s, "ni", "你");
+        type_and_commit(&mut s, "hao", "好");
+        // 焦点离开：结算「你好」并打断，后续片段另起一段。
+        s.reset_for_focus_change();
+        assert_eq!(user.entry_len(), 1, "焦点切换应结算「你好」");
+
+        type_and_commit(&mut s, "shi", "世");
+        type_and_commit(&mut s, "jie", "界");
+        s.reset_for_focus_change();
+        assert_eq!(user.entry_len(), 2, "第二段应单独结算「世界」");
+
+        let snap = user.snapshot();
+        assert_eq!(snap.lookup_entries("ni hao"), &["你好".to_string()]);
+        assert_eq!(snap.lookup_entries("shi jie"), &["世界".to_string()]);
+        assert!(
+            snap.lookup_entries("ni hao shi jie").is_empty(),
+            "不应造出跨焦点的「你好世界」"
+        );
+    }
+
+    #[test]
+    fn echo_and_verbatim_do_not_coin() {
+        // 验收判据 A3:回声候选、Verbatim 大写字母不进造词。
+        let (engine, mut s) = session_for_coin(&[("你", "ni", 100)]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        // 回声候选上屏(空词库解不出的串):不进缓冲。
+        for ch in "zgr".chars() {
+            s.handle(InputEvent::Char(ch)).expect("按键失败");
+        }
+        s.handle(InputEvent::Space).expect("空格失败"); // 上屏回声 zgr
+        // Verbatim 大写:不进缓冲。
+        s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+        // 回车原始上屏:不进缓冲。
+        s.handle(InputEvent::Char('a')).expect("按键失败");
+        s.handle(InputEvent::Enter).expect("回车失败");
+        assert_eq!(user.entry_len(), 0, "回声/Verbatim/回车都不应造词");
+    }
+
+    #[test]
+    fn single_complete_word_commit_does_not_duplicate() {
+        // 验收判据 A4:单次上屏的完整词不重复造词——词库已有的词
+        // 上屏不应在用户词典里再造一份。
+        let (engine, mut s) = session_for_coin(&[("你好", "ni hao", 100)]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        type_and_commit(&mut s, "nihao", "你好");
+        assert_eq!(
+            user.entry_len(),
+            0,
+            "单次完整词上屏(缓冲长度 1)不应造词条目"
+        );
+        // 但调频计数照常(既有 learn 通道不受影响)。
+        assert_eq!(user.unigram_len(), 1, "unigram 学习应照常");
+    }
+
+    #[test]
+    fn coined_entry_persists_across_flush_and_reopen() {
+        // 验收判据 A5:造词条目落盘后能读回。
+        let dir = std::env::temp_dir().join(format!("xwx_coin_test_{}", std::process::id()));
+        let path = dir.join("user_bigram.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let lm = crate::UserLM::open_or_create(&path);
+            lm.learn(None, "张");
+            lm.learn(Some("张"), "三");
+            lm.learn(Some("三"), "丰");
+            lm.add_entry("张三丰", "zhang san feng");
+            lm.flush().expect("flush 不应失败");
+            assert!(path.is_file());
+        }
+        {
+            let lm = crate::UserLM::open_or_create(&path);
+            assert_eq!(lm.entry_len(), 1, "重开后造词条目应读回");
+            let snap = lm.snapshot();
+            assert_eq!(
+                snap.lookup_entries("zhang san feng"),
+                &["张三丰".to_string()],
+                "重开后按拼音 key 应能查到造词"
+            );
+            // 计数区也应读回(同一份文件两段)。
+            assert_eq!(lm.unigram_len(), 3, "重开后 unigram 应读回");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn coined_entry_surfaces_via_lattice_like_dict_word() {
+        // 造词条目与词库词条同层同式:它应参与整串解码(覆盖整串),
+        // 不是候选列表末尾的孤岛。词库里没有「张三丰」整词,只有单字;
+        // 造词后整串查询应把「张三丰」排到比「逐字路径」更前的位置
+        // (整词候选分 = 自身 + 0 补全,优于逐字拆解的多次打分)。
+        let (engine, mut s) = session_for_coin(&[
+            ("张", "zhang", 100),
+            ("三", "san", 90),
+            ("丰", "feng", 80),
+        ]);
+        type_and_commit(&mut s, "zhang", "张");
+        type_and_commit(&mut s, "san", "三");
+        type_and_commit(&mut s, "feng", "丰");
+        s.break_coin_run(); // 结算缓冲(测试 crate 内直接调)
+
+        let cands = engine
+            .lookup_candidates("zhangsanfeng", &crate::LmContext::empty())
+            .expect("查询失败");
+        let pos = cands
+            .iter()
+            .position(|c| c.word == "张三丰")
+            .expect("造词后应能查到");
+        assert_eq!(pos, 0, "整词造词候选应排第一(覆盖整串): {:?}",
+            cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>());
+        // 它是 Exact 层(精确匹配),不是回声/简拼。
+        assert_eq!(cands[pos].spelling, crate::SpellingKind::Exact);
+        assert!(!cands[pos].echo);
+    }
+
+    #[test]
+    fn coin_buffer_cap_drops_overlong_run() {
+        // 长度上限:超过 MAX_COIN_CHARS 的连续上屏段被结算后清空,
+        // 不无限粘成一个巨词。逐字上屏 MAX_COIN_CHARS+2 个单字,
+        // 缓冲在超限处结算一次(长度足够则造词),随后从空重新累积。
+        let entries: Vec<(String, String, u64)> = (0..30u32)
+            .map(|i| {
+                (
+                    char::from_u32(0x4E00 + i).unwrap().to_string(),
+                    "a".to_string(),
+                    100 - i as u64,
+                )
+            })
+            .collect();
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        let mut entries_ref: Vec<(&str, &str, u64)> = Vec::new();
+        for (w, py, f) in &entries {
+            entries_ref.push((w.as_str(), py.as_str(), *f));
+        }
+        let _ = &entries_ref; // 用 engine 直接 upsert(借用生命周期)
+        for (w, py, f) in &entries {
+            engine.dict.upsert(w, py, *f).expect("插入失败");
+        }
+        let mut s = InputSession::new(Arc::clone(&engine));
+        let user = engine.user_lm().expect("应有用户层");
+
+        // 逐字上屏 MAX_COIN_CHARS + 2 个字;每个字拼音都是 "a",
+        // 但逐字上屏时输入是单字母 "a",候选第一个就是当前字
+        // (词频降序),逐个选「当前该选的字」太脆弱——改为直接用
+        // commit_at(0) 上屏当前首选,只验证缓冲长度上限行为。
+        for _ in 0..(MAX_COIN_CHARS + 2) {
+            s.handle(InputEvent::Char('a')).expect("按键失败");
+            s.commit_at(0).expect("应有候选");
+        }
+        // 超限结算:缓冲长度 ≤ MAX_COIN_CHARS(结算后重新累积)。
+        let buffered: usize = s.coin_buffer.iter().map(|(w, _)| w.chars().count()).sum();
+        assert!(
+            buffered <= MAX_COIN_CHARS,
+            "缓冲不应超过上限: {buffered}"
+        );
+        // 至少结算过一次超限段(造了词条或缓冲被清)。
+        assert!(user.entry_len() >= 1 || buffered <= 2,
+            "超限应触发结算: entry_len={} buffered={buffered}", user.entry_len());
     }
 }

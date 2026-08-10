@@ -320,6 +320,21 @@ impl ImeEngine {
         }
     }
 
+    /// 记一条造词条目(unity_table_encoder 的等价物:把上屏的整段
+    /// 反查编码后写入用户词典)。
+    ///
+    /// 由 [`InputSession`](crate::session::InputSession) 的造词缓冲在
+    /// 「连续候选上屏段被打断/超长且 ≥ 2 字」时调用。`pinyin_key`
+    /// 是空格分隔的音节串(与词典 key 同格式),由缓冲里各片段的
+    /// 候选拼音拼接而成。无用户层时是 no-op(与 `learn_committed`
+    /// 同一取舍)。落盘复用用户模型的 dirty/flush 调度,不在此同步做。
+    pub(crate) fn coin_entry(&self, word: &str, pinyin_key: &str) {
+        let Some(user) = self.user_lm() else {
+            return;
+        };
+        user.add_entry(word, pinyin_key);
+    }
+
     /// 当前词库词条总数（启动日志/统计用；内存空词库时为 0）。
     pub fn dict_count(&self) -> u64 {
         match &self.dict {
@@ -606,12 +621,17 @@ impl ImeEngine {
         if !pinyin.is_ascii() {
             return Ok(lattice);
         }
+        // 造词条目快照:一次查询取一次(Arc 克隆 O(1)),与 LM 打分
+        // 使用的用户计数快照同源(同一份 Arc,不同字段)。引擎没挂
+        // 用户层时为 None,下面的合并一次都不发生。
+        let user_entries = crate::user_lm::user_entries_snapshot(&self.lm);
         let mut cache: HashMap<String, Vec<Candidate>> = HashMap::new();
         for start in 0..n {
             let mut budget = MAX_CHAINS_PER_START;
             let mut chain: Vec<&str> = Vec::new();
             self.collect_chain_edges(
                 pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
+                user_entries.as_ref(),
             )?;
         }
         Ok(lattice)
@@ -628,6 +648,7 @@ impl ImeEngine {
         lattice: &mut Vec<Vec<LatticeEdge>>,
         cache: &mut HashMap<String, Vec<Candidate>>,
         budget: &mut usize,
+        user_entries: Option<&crate::user_lm::UserLmSnapshot>,
     ) -> Result<(), EngineError> {
         let n = pinyin.len();
         if chain.len() >= MAX_EDGE_SYLLABLES || *budget == 0 {
@@ -671,11 +692,28 @@ impl ImeEngine {
                         fuzzy_penalty: *fuzzy_penalty,
                     });
                 }
+                // 造词条目合并(仅精确键):与词典条目同区间同层,
+                // 后续打分/排序/截断完全同式。freq 取 0(经既有
+                // `freq.max(1)` 兜底拿到词典最低档词频分);排序增益
+                // 由 LM 混合层的用户计数给出,不靠词频造假。
+                if *fuzzy_penalty == 0.0 {
+                    if let Some(snap) = user_entries {
+                        for w in snap.lookup_entries(key) {
+                            lattice[start].push(LatticeEdge {
+                                end,
+                                word: w.clone(),
+                                pinyin: key.clone(),
+                                freq: 0,
+                                fuzzy_penalty: 0.0,
+                            });
+                        }
+                    }
+                }
             }
 
             // 深度优先：延长链（下一音节从 `end` 继续）
             self.collect_chain_edges(
-                pinyin, start, end, chain, lattice, cache, budget,
+                pinyin, start, end, chain, lattice, cache, budget, user_entries,
             )?;
             chain.pop();
         }
