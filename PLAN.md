@@ -8,6 +8,7 @@
 >
 > 详细设计见 [`docs/design-batch1.md`](docs/design-batch1.md)，
 > 组件清单见 [`docs/gear-audit.md`](docs/gear-audit.md)，
+> **实机验证清单见 [`docs/VERIFY.md`](docs/VERIFY.md)**，
 > **换人/换会话接手先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)**
 > （定过又推翻的判断、刻意代价、指标的坑、协作约定）。
 >
@@ -315,27 +316,15 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 `FocusOut` 触发的造词结算。
 
 功能已经堆了一大摞（标点、大写、光标、造词、翻页、分隔符、删候选、识别），
-**全都在会话/协议层**——越堆越该实机跑一遍。装进 ibus 后按这个清单敲：
+**全都在会话/协议层**——越堆越该实机跑一遍。
 
-| # | 敲什么 | 应该看到 |
-|---|---|---|
-| 1 | `nihao` 空格 | 「你好」上屏 |
-| 2 | `nihao,` | 「你好，」（全角逗号，不是半角） |
-| 3 | `nihao` 后打 `.` | **翻到第 2 页**（不是出句号） |
-| 4 | 承上，第 2 页打 `,` | **回第 1 页**；再打 `,` 出「，」 |
-| 5 | Shift+G Shift+P Shift+U | `GPU` |
-| 6 | `zhongguor` | 「中国人」第 1 |
-| 7 | `xi'an` | 「西安」第 1 |
-| 8 | `nihao` → ← ← → 插 `x` | preedit 变 `nihxao`，**光标停在插入点** |
-| 9 | 逐字选「张」「三」「丰」，再打 `zhangsanfeng` | 「张三丰」在候选里 |
-| 10 | 承上，切到**另一个应用**逐字选两字 | **不该**和前面的粘成一个词 |
-| 11 | 高亮某候选按 Ctrl+Delete，重打同拼音 | 该候选消失 |
-| 12 | `zhangsan@gmail.com` 回车 | 原样上屏，全程无拼音候选 |
-| 13 | `http://x.com` 回车 | 原样上屏（**曾出过 `http:、、xcom`**） |
-| 14 | Ctrl+空格 切英文，Shift+G | 应用收到大写 `G`，输入法不拦 |
+**→ 清单在 [`docs/VERIFY.md`](docs/VERIFY.md)**：37 条，每条独立，
+含不动系统、不碰 fcitx5 的跑法（`just install` 要 sudo 且会 `ibus restart`，
+而 fcitx5 会占用 IBus 总线名）。
 
-第 3、4、10、13 是最容易出问题的：前两条涉及键位抢占，
-第 10 跨进程、第 13 是端到端序列。
+最该先验的四条：**翻页 8~10**（`.`/`,` 键位抢占）、**造词 27**（跨进程，
+靠 `FocusOut`）、**网址 33**（端到端序列，初版真的产出过 `http:、、xcom`）、
+**英文模式 16**（ibus 层直接 `return false`，单测覆盖不到）。
 
 - [x] ~~**B2 音节分隔符 `'`**~~ — 已完成，见第三节
 

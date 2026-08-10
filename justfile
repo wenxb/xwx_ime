@@ -51,6 +51,10 @@ install:
     rm -f /tmp/xwx-component.xml
     # 词库（dict.bin，源缺失时跳过；dict_to_bin.py 从 SQLite 生成）
     if test -f data/dict.bin; then install -m 644 data/dict.bin {{xwx_data}}/dict.bin; fi
+    # 简拼副索引（abbrev.bin，scripts/abbrev_to_bin.py 从 dict.bin 生成）。
+    # 缺了不会崩，但简拼（zgr → 中国人）整个失效，只剩全拼。
+    if test -f data/abbrev.bin; then install -m 644 data/abbrev.bin {{xwx_data}}/abbrev.bin; \
+    else echo "提示：data/abbrev.bin 不存在，简拼将不可用。生成：python3 scripts/abbrev_to_bin.py" >&2; fi
     # fcitx5 占用 org.freedesktop.IBus 时给出提示
     if pgrep -x fcitx5 >/dev/null; then echo "警告：fcitx5 正在运行，会占用 IBus 总线名。需要时先 fcitx5 -k 停掉。" >&2; fi
     # 刷新 daemon
