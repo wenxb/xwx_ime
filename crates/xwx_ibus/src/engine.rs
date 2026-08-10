@@ -204,7 +204,18 @@ impl XwxEngineServer {
         {
             return false;
         }
-        let Some(event) = ibus_proto::translate_keyval(keyval) else {
+        // —— 英文模式:按键直接透传给应用 ——
+        // 不进翻译层的关键原因:翻译层会把字母按 Shift/CapsLock 归一
+        // (Shift+G → Verbatim('G'),CapsLock+Shift+G → Char('g')),
+        // 而英文模式下应用需要看到**原始按键**——Shift+G 上屏大写、
+        // CapsLock+Shift+g 上屏小写。透传(返回 false)让 daemon 把
+        // 原始 keyval+state 原样交给应用,一个字都不动。
+        let in_english = self.session.lock().await.english_mode();
+        if in_english {
+            return false;
+        }
+
+        let Some(event) = ibus_proto::translate_keyval(keyval, state) else {
             return false;
         };
         self.handle_key(&ctxt, event).await

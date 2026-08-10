@@ -104,19 +104,33 @@ pub enum ProtoError {
 
 /// 把 IBus 键值翻译成引擎按键事件。
 ///
-/// - 大小写字母都归一为小写（拼音输入惯例，Shift+字母仍是拼音）；
-/// - 数字键翻译为 `Select(n)`（`Select(0)` 在会话里代表第 10 个候选）；
+/// - **Shift / CapsLock 判定在这里做**(修饰键只存在于 `state`,
+///   `keyval` 本身不携带),对应 librime `ascii_composer` 的
+///   Shift+字母 / CapsLock 行为:
+///   - Shift+字母 → [`InputEvent::Verbatim`] 大写(如 `G`),由
+///     会话层直接上屏,不进拼音串(`GPU` 能打出来);
+///   - CapsLock 开(无 Shift)→ `Verbatim` 大写;
+///   - **CapsLock + Shift 叠加 → 小写进拼音串**(常规终端/编辑器
+///     语义:两者都翻转大小写,叠加相互抵消——ibus 在 CapsLock+Shift
+///     下报的 keyval 本来就是小写,这里只是显式归一);
+///   - 都不生效 → 字母归一为小写,`Char` 进拼音串;
+/// - 数字键翻译为 `Select(n)`(`Select(0)` 在会话里代表第 10 个候选);
 /// - ASCII 可打印标点翻译为 `InputEvent::Char(c)`(原始半角字符)。
 ///   注意:**这里只负责放行,输出全角还是半角由会话层按中/英模式
 ///   决定**——中文模式下会话层把它上屏为全角标点(见
 ///   `xwx_engine::punctuator`),英文模式下会话层返回 `Noop`,
 ///   IBus 层据此返回 `false`,daemon 把按键透传给应用,应用收到
 ///   原始半角字符(键不会被吃掉);
-/// - 不识别的键返回 `None`（调用方应把按键透传给应用）。
-pub fn translate_keyval(keyval: u32) -> Option<InputEvent> {
+/// - 不识别的键返回 `None`(调用方应把按键透传给应用)。
+///
+/// `state` 是 IBus 修饰键掩码。**英文模式的拦截不在这里**:调用方
+/// (engine.rs)在英文模式下根本不调本函数,直接把按键透传给应用——
+/// 应用才能收到带 Shift/CapsLock 状态的原始按键(Shift+G 上屏大写、
+/// CapsLock 下 Shift+g 上屏小写);若先经这里归一,原始按键信息就丢了。
+pub fn translate_keyval(keyval: u32, state: u32) -> Option<InputEvent> {
     match keyval {
         keyval::SPACE => Some(InputEvent::Space),
-        // KP_Space：小键盘空格（X11 旧键值），同样按空格处理
+        // KP_Space:小键盘空格(X11 旧键值),同样按空格处理
         0xff00 => Some(InputEvent::Space),
         keyval::RETURN => Some(InputEvent::Enter),
         keyval::ESCAPE => Some(InputEvent::Escape),
@@ -129,11 +143,23 @@ pub fn translate_keyval(keyval: u32) -> Option<InputEvent> {
         keyval::PAGE_DOWN => Some(InputEvent::PageDown),
         keyval::ZERO..=0x39 => Some(InputEvent::Select((keyval - keyval::ZERO) as u8)),
         keyval::UPPER_A..=0x5a | keyval::LOWER_A..=0x7a => {
-            Some(InputEvent::Char((keyval as u8 as char).to_ascii_lowercase()))
+            let shift = state & IBUS_SHIFT_MASK != 0;
+            let caps = state & IBUS_LOCK_MASK != 0;
+            let lower = (keyval as u8 as char).to_ascii_lowercase();
+            // Shift 与 CapsLock 各翻转一次大小写:恰好一个生效时出
+            // 大写(Verbatim 直接上屏);叠加抵消或都不生效时小写进
+            // 拼音串。
+            if shift != caps {
+                Some(InputEvent::Verbatim(lower.to_ascii_uppercase()))
+            } else {
+                Some(InputEvent::Char(lower))
+            }
         }
         // ASCII 可打印标点(0x21..=0x7e 去掉字母数字):原样放行,
         // 含 `'`——它是 B2 音节分隔符的预留键,会话层当前对它 Noop
         // 透传,行为与本轮之前逐位一致(见 punctuator.rs 模块文档)。
+        // 注意:`=` `+` `-` `#` `%` `&` `*` `@` `|` 等没有全角映射的
+        // 字符也走这条路,会话层对它们 Noop 透传(键不会被吃掉)。
         0x21..=0x7e => Some(InputEvent::Char(keyval as u8 as char)),
         _ => None,
     }
@@ -408,46 +434,103 @@ mod tests {
 
     #[test]
     fn translate_keyval_basics() {
+        // 三段式·签名适配:原断言 `translate_keyval(keyval)`(单参),
+        // 改为 `translate_keyval(keyval, state)`(双参,state=0 即
+        // 无修饰键)。除大写那条外行为断言逐字不变——无修饰键时
+        // 翻译结果与旧版完全一致。
         assert_eq!(
-            translate_keyval(keyval::LOWER_A).unwrap(),
+            translate_keyval(keyval::LOWER_A, 0).unwrap(),
             InputEvent::Char('a')
         );
+        // 三段式·语义变更:原断言「大写 keyval 无条件归一为
+        // Char('a')」;改成「无修饰键时大写 keyval 仍归一为
+        // Char('a')」。新行为对的理由:旧版把 Shift+G 也归一成
+        // 小写 g 进拼音串,`GPU` 永远打不出来;现在无修饰键的
+        // 大写 keyval(ibus 某些路径下也会报大写)仍是拼音,
+        // 而 Shift+大写走 Verbatim(见 translate_keyval_shift_caps)。
         assert_eq!(
-            translate_keyval(keyval::UPPER_A).unwrap(),
+            translate_keyval(keyval::UPPER_A, 0).unwrap(),
             InputEvent::Char('a'),
-            "大写字母应归一为小写"
+            "无修饰键时大写 keyval 仍归一为小写"
         );
         assert_eq!(
-            translate_keyval(0x37).unwrap(),
+            translate_keyval(0x37, 0).unwrap(),
             InputEvent::Select(7),
             "数字 7 选第 7 个候选"
         );
-        assert_eq!(translate_keyval(0xff00).unwrap(), InputEvent::Space, "KP_Space 按空格处理");
-        assert!(translate_keyval(0xffe9).is_none(), "Shift 等修饰键不处理");
+        assert_eq!(translate_keyval(0xff00, 0).unwrap(), InputEvent::Space, "KP_Space 按空格处理");
+        assert!(translate_keyval(0xffe9, 0).is_none(), "Shift 等修饰键不处理");
+    }
+
+    #[test]
+    fn translate_keyval_shift_caps() {
+        // Shift+小写 keyval(常见路径:ibus 报小写 keyval + SHIFT_MASK)
+        // → Verbatim 大写,直接上屏,不进拼音串
+        assert_eq!(
+            translate_keyval(keyval::LOWER_A + 6, IBUS_SHIFT_MASK).unwrap(),
+            InputEvent::Verbatim('G'),
+            "Shift+g 应出 Verbatim('G')"
+        );
+        // Shift+大写 keyval(ibus 直接报大写 keyval 的路径)同上
+        assert_eq!(
+            translate_keyval(keyval::UPPER_A + 6, IBUS_SHIFT_MASK).unwrap(),
+            InputEvent::Verbatim('G'),
+            "Shift+G 应出 Verbatim('G')"
+        );
+        // CapsLock 开(无 Shift):小写 keyval → Verbatim 大写
+        assert_eq!(
+            translate_keyval(keyval::LOWER_A + 6, IBUS_LOCK_MASK).unwrap(),
+            InputEvent::Verbatim('G'),
+            "CapsLock 下 g 应出 Verbatim('G')"
+        );
+        // CapsLock + Shift 叠加:小写进拼音串(常规终端/编辑器语义,
+        // 两者各翻转一次相互抵消;ibus 此时报的 keyval 本来就是小写)
+        assert_eq!(
+            translate_keyval(keyval::LOWER_A + 6, IBUS_SHIFT_MASK | IBUS_LOCK_MASK).unwrap(),
+            InputEvent::Char('g'),
+            "CapsLock+Shift+g 应回到小写拼音"
+        );
+        // Shift 不影响非字母键:数字仍是选词,标点仍原样放行
+        assert_eq!(
+            translate_keyval(0x37, IBUS_SHIFT_MASK).unwrap(),
+            InputEvent::Select(7),
+            "Shift+7 仍是选词(选词语义在会话层,不被 Shift 劫持)"
+        );
+        assert_eq!(
+            translate_keyval(0x2c, IBUS_SHIFT_MASK).unwrap(),
+            InputEvent::Char(','),
+            "Shift+逗号仍走标点路径(上屏什么由会话层决定)"
+        );
+        // CapsLock 不影响数字/标点
+        assert_eq!(
+            translate_keyval(0x2e, IBUS_LOCK_MASK).unwrap(),
+            InputEvent::Char('.'),
+            "CapsLock 下句号不变"
+        );
     }
 
     #[test]
     fn translate_keyval_punctuation() {
         // 标点键放行(原样半角字符,输出全角与否由会话层按模式决定)
-        assert_eq!(translate_keyval(0x2c), Some(InputEvent::Char(',')), "逗号");
-        assert_eq!(translate_keyval(0x2e), Some(InputEvent::Char('.')), "句号");
-        assert_eq!(translate_keyval(0x3b), Some(InputEvent::Char(';')), "分号");
-        assert_eq!(translate_keyval(0x3a), Some(InputEvent::Char(':')), "冒号");
-        assert_eq!(translate_keyval(0x3f), Some(InputEvent::Char('?')), "问号");
-        assert_eq!(translate_keyval(0x21), Some(InputEvent::Char('!')), "叹号");
-        assert_eq!(translate_keyval(0x5c), Some(InputEvent::Char('\\')), "反斜杠");
-        assert_eq!(translate_keyval(0x3c), Some(InputEvent::Char('<')), "小于号");
-        assert_eq!(translate_keyval(0x3e), Some(InputEvent::Char('>')), "大于号");
-        assert_eq!(translate_keyval(0x24), Some(InputEvent::Char('$')), "美元号");
-        assert_eq!(translate_keyval(0x5e), Some(InputEvent::Char('^')), "抑扬符");
-        assert_eq!(translate_keyval(0x5f), Some(InputEvent::Char('_')), "下划线");
-        assert_eq!(translate_keyval(0x7e), Some(InputEvent::Char('~')), "波浪号");
+        assert_eq!(translate_keyval(0x2c, 0), Some(InputEvent::Char(',')), "逗号");
+        assert_eq!(translate_keyval(0x2e, 0), Some(InputEvent::Char('.')), "句号");
+        assert_eq!(translate_keyval(0x3b, 0), Some(InputEvent::Char(';')), "分号");
+        assert_eq!(translate_keyval(0x3a, 0), Some(InputEvent::Char(':')), "冒号");
+        assert_eq!(translate_keyval(0x3f, 0), Some(InputEvent::Char('?')), "问号");
+        assert_eq!(translate_keyval(0x21, 0), Some(InputEvent::Char('!')), "叹号");
+        assert_eq!(translate_keyval(0x5c, 0), Some(InputEvent::Char('\\')), "反斜杠");
+        assert_eq!(translate_keyval(0x3c, 0), Some(InputEvent::Char('<')), "小于号");
+        assert_eq!(translate_keyval(0x3e, 0), Some(InputEvent::Char('>')), "大于号");
+        assert_eq!(translate_keyval(0x24, 0), Some(InputEvent::Char('$')), "美元号");
+        assert_eq!(translate_keyval(0x5e, 0), Some(InputEvent::Char('^')), "抑扬符");
+        assert_eq!(translate_keyval(0x5f, 0), Some(InputEvent::Char('_')), "下划线");
+        assert_eq!(translate_keyval(0x7e, 0), Some(InputEvent::Char('~')), "波浪号");
         // `'`(0x27)也放行——它是 B2 音节分隔符预留键,会话层对它 Noop
         // 透传,与本轮之前「translate 返回 None 透传」的可观察行为一致
-        assert_eq!(translate_keyval(0x27), Some(InputEvent::Char('\'')), "单引号(B2 预留)");
+        assert_eq!(translate_keyval(0x27, 0), Some(InputEvent::Char('\'')), "单引号(B2 预留)");
         // DEL 与控制字符仍不识别
-        assert!(translate_keyval(0x7f).is_none(), "DEL 不处理");
-        assert!(translate_keyval(0x09).is_none(), "Tab 不处理");
+        assert!(translate_keyval(0x7f, 0).is_none(), "DEL 不处理");
+        assert!(translate_keyval(0x09, 0).is_none(), "Tab 不处理");
     }
 
     #[test]

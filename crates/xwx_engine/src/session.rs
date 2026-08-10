@@ -30,6 +30,22 @@ pub const COMMITTED_TAIL_LIMIT: usize = 16;
 pub enum InputEvent {
     /// 可打印字符（字母/数字/标点等）。字母会进入拼音串。
     Char(char),
+    /// 直接上屏的字符(不进拼音串、不做全角标点映射)。
+    ///
+    /// 与 [`InputEvent::Char`] 的差别:`Char` 是「交给输入法处理的
+    /// 原始字符」——字母进拼音串、标点按模式映射全角;`Verbatim`
+    /// 是「已经定稿、原样上屏」的字符,目前只有两个来源
+    /// (ibus 层 `translate_keyval`):
+    ///
+    /// - **Shift+字母**(中文模式):归一出大写(`G`),
+    ///   `GPU`/`API`/`CPU` 这类大写缩写能打出来;
+    /// - **CapsLock 开**:字母直接出大写,不进拼音串。
+    ///
+    /// 会话层对它的处理与标点分支同构:拼音串非空时先按空格语义
+    /// 上屏当前高亮候选,再追加该字符(`nihao` 后 Shift+G →
+    /// 「你好G」);为空时直接上屏。字符只进上屏尾部、不进 UserLM
+    /// 学习(单字母不是词),与标点一致。
+    Verbatim(char),
     /// 数字选词：`Select(1)` 选第 1 个候选；`Select(0)` 选第 10 个。
     Select(u8),
     /// 退格键。
@@ -43,7 +59,8 @@ pub enum InputEvent {
     /// 上/下方向键：移动候选高亮。
     Up,
     Down,
-    /// 左/右方向键：TODO 移动拼音串内光标（当前直接透传）。
+    /// 左/右方向键:移动拼音串内光标(B1 已实现,见 `handle`
+    /// 的对应分支;拼音串为空时透传给应用)。
     Left,
     Right,
     /// 翻页。
@@ -198,7 +215,6 @@ impl InputSession {
 
             // —— 字母：进入拼音串 ——
             InputEvent::Char(c) if c.is_ascii_alphabetic() => {
-                // TODO: Shift+字母目前按小写处理；可配置为"直接上屏大写"。
                 // 在 caret 处插入(不是追加):长串中间打错字母可以
                 // 左移光标补插,不用全删重打。caret 处必为 char 边界
                 // (串内只有单字节 ASCII,caret 由本结构体独占维护)。
@@ -233,6 +249,27 @@ impl InputSession {
                     // bigram 上文,不被标点抹掉)。
                     self.push_tail(punct);
                     Ok(SessionOutput::Commit(format!("{head}{punct}")))
+                }
+            }
+            // —— Verbatim:直接上屏的字符(Shift+字母 / CapsLock,
+            //    见 InputEvent::Verbatim 的文档) ——
+            // 处理与上面标点分支同一形状:拼音串非空时先按空格语义
+            // 上屏高亮候选(无候选则原样上屏拼音串),再追加该字符;
+            // 为空时直接上屏。差别只有两点:字符是原样半角(不做
+            // 全角映射),且语义上是「敲了一个英文字母」不是标点——
+            // 但两者都只用 push_tail 进上屏尾部、不学、不动 last_word。
+            InputEvent::Verbatim(c) => {
+                if self.pinyin.is_empty() {
+                    Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
+                } else {
+                    let head = match self.candidates.get(self.cursor).cloned() {
+                        Some(c) => self.commit_word(&c),
+                        None => self.commit_raw(self.pinyin.clone()),
+                    };
+                    // 单字母不是词:不进 UserLM 学习(与标点同一取舍),
+                    // 也不动 last_word(刚上屏的候选仍是有效 bigram 上文)。
+                    self.push_tail(c.encode_utf8(&mut [0u8; 4]));
+                    Ok(SessionOutput::Commit(format!("{head}{c}")))
                 }
             }
             // —— 其余可打印字符(含 `'`——B2 音节分隔符预留,见
@@ -309,7 +346,6 @@ impl InputSession {
             }
             InputEvent::Up | InputEvent::Down => Ok(SessionOutput::Noop),
 
-            // 左右方向键：TODO 移动拼音串内光标，当前透传给应用
             // 左右方向键:移动拼音串内光标(编辑语义)。拼音串非空时
             // 吃掉按键——即使 caret 已到边界(不再移动)也不透传:此时
             // 用户焦点在编辑拼音串,透传给应用会移动应用文本框的光标,
@@ -1169,5 +1205,150 @@ mod tests {
         // 拼音串为空时数字键照旧 Noop(无候选可选)
         let out = s.handle(InputEvent::Select(1)).expect("不应失败");
         assert!(matches!(out, SessionOutput::Noop));
+    }
+
+    // —— ascii_composer 的 Shift / CapsLock(InputEvent::Verbatim)——
+
+    #[test]
+    fn shift_letter_commits_uppercase_when_idle() {
+        // 中文模式、拼音串为空:Shift+G → 上屏 `G`,不进拼音串。
+        let mut s = session_with_dict();
+        let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "G"),
+            "空闲时 Shift+G 应直接上屏 G: {out:?}"
+        );
+        assert!(!s.is_active(), "上屏后会话应保持空闲");
+        assert_eq!(s.last_word, None, "单字母不是词,last_word 应为 None");
+        assert_eq!(s.committed_tail, "G", "应计入上屏尾部(供后续打分的字符窗口)");
+    }
+
+    #[test]
+    fn shift_letters_spell_gpu_across_commits() {
+        // 连打 Shift+G、Shift+P、Shift+U:每次上屏一个字母,
+        // committed_tail 逐次累积成 GPU(应用文本框里就是 GPU)。
+        let mut s = session_with_dict();
+        for (ev, expect) in [
+            (InputEvent::Verbatim('G'), "G"),
+            (InputEvent::Verbatim('P'), "P"),
+            (InputEvent::Verbatim('U'), "U"),
+        ] {
+            let out = s.handle(ev).expect("不应失败");
+            assert!(
+                matches!(out, SessionOutput::Commit(ref t) if t == expect),
+                "应上屏 {expect}: {out:?}"
+            );
+        }
+        assert_eq!(s.committed_tail, "GPU", "三次上屏应累积成 GPU");
+    }
+
+    #[test]
+    fn shift_letter_mid_composition_commits_candidate_then_letter() {
+        // 中文模式、拼音串非空(`nihao`):Shift+G 先按空格语义上屏
+        // 高亮候选(首选整词「你好」),再追加大写字母——得到「你好G」,
+        // 与 `nihao,` → 「你好,」的 punctuator 既定做法一致。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "你好G"),
+            "`nihao` + Shift+G 应上屏「你好G」: {out:?}"
+        );
+        assert!(!s.is_active(), "上屏后会话应复位");
+        // 「你好」是词(last_word),大写字母紧随其后不覆盖它(与标点一致)
+        assert_eq!(s.last_word.as_deref(), Some("你好"));
+        assert_eq!(s.committed_tail, "你好G");
+    }
+
+    #[test]
+    fn shift_letter_mid_composition_no_candidate_commits_raw_then_letter() {
+        // 拼音串非空但没有真实候选(空词库,只有回声候选):与 Space
+        // 分支同一兜底语义——上屏原始输入串,再追加大写字母。
+        let engine = Arc::new(ImeEngine::new(None).expect("内存引擎创建失败"));
+        let mut s = InputSession::new(engine);
+        for c in "zgr".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Verbatim('R')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "zgrR"),
+            "无真实候选时应上屏「原始串 + R」: {out:?}"
+        );
+        assert!(!s.is_active());
+        assert_eq!(s.last_word, None, "回声/原始串不是词");
+    }
+
+    #[test]
+    fn lowercase_letter_still_enters_pinyin() {
+        // 最关键的不许退化项:小写字母仍然进拼音串(别为了修大写
+        // 把正常拼音输入弄坏)。`g` 进拼音串、出候选、空格能上屏。
+        let mut s = session_with_dict();
+        let out = s.handle(InputEvent::Char('g')).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "g", "小写 g 应进拼音串");
+                assert!(!u.candidates.is_empty(), "应有候选(至少是回声)");
+            }
+            other => panic!("期望 Updated,实际 {other:?}"),
+        }
+        assert_eq!(s.pinyin(), "g");
+        assert_eq!(s.caret(), 1);
+    }
+
+    #[test]
+    fn verbatim_does_not_learn() {
+        // 大写字母上屏不是词:不进 UserLM 学习(与标点同一取舍,
+        // 对应 librime 标点/原始输入不进 memory)。
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        let mut s = InputSession::new(Arc::clone(&engine));
+        let user = engine.user_lm().expect("引擎应有用户层");
+        let before = user.unigram_len();
+        let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(ref t) if t == "G"));
+        assert_eq!(
+            user.unigram_len(),
+            before,
+            "Verbatim 单字母上屏不应产生学习"
+        );
+    }
+
+    #[test]
+    fn unmapped_ascii_symbols_still_passthrough() {
+        // `=` `+` `-` `#` `%` `&` `*` `@` `|` 没有全角映射:
+        // translate_keyval 的 0x21..=0x7e 整段放行会把它们送进
+        // Char(c),会话层必须落到 catch-all 透传(Noop)——键不能被
+        // 吃掉,也不能被塞进拼音串。本轮动了 Char 分支的守卫,
+        // 这条测试钉住这个行为不被破坏。
+        let unmapped = ['=', '+', '-', '#', '%', '&', '*', '@', '|'];
+        for c in unmapped {
+            assert!(
+                fullwidth_punct(c).is_none(),
+                "{c:?} 应无全角映射(有映射的是另一条路径)"
+            );
+            // 拼音串为空:透传
+            let mut s = session_with_dict();
+            let out = s.handle(InputEvent::Char(c)).expect("不应失败");
+            assert!(
+                matches!(out, SessionOutput::Noop),
+                "空闲时 {c:?} 应透传(Noop): {out:?}"
+            );
+            assert!(!s.is_active(), "{c:?} 不应进拼音串");
+            // 拼音串非空:同样透传,拼音串不受扰动
+            let mut s = session_with_dict();
+            s.handle(InputEvent::Char('n')).expect("不应失败");
+            s.handle(InputEvent::Char('i')).expect("不应失败");
+            let out = s.handle(InputEvent::Char(c)).expect("不应失败");
+            assert!(
+                matches!(out, SessionOutput::Noop),
+                "拼音串非空时 {c:?} 仍应透传: {out:?}"
+            );
+            assert_eq!(s.pinyin(), "ni", "{c:?} 不应改动拼音串");
+        }
     }
 }
