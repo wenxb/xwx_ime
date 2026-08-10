@@ -62,6 +62,10 @@ pub struct SessionUpdate {
     pub candidates: Vec<Candidate>,
     /// 高亮候选的全局下标（相对 `candidates`）。
     pub cursor: usize,
+    /// 预编辑串(拼音串)内的光标位置:字节偏移,也等于字符位置
+    /// (拼音串只含 ASCII 字母)。**不是候选下标**——那是 `cursor`:
+    /// `cursor` 高亮候选窗里的第几条,`caret` 定位预编辑串里的插入点。
+    pub caret: usize,
     /// 当前页码（0 起）。
     pub page: usize,
     /// 每页候选数。
@@ -105,6 +109,11 @@ pub struct InputSession {
     engine: Arc<ImeEngine>,
     /// 当前拼音串。
     pinyin: String,
+    /// 拼音串内的编辑光标:字节偏移,也等于字符位置(串内只会有
+    /// ASCII 字母——见 `handle` 的 `Char` 分支,只有 `is_ascii_alphabetic`
+    /// 的字符能进来)。不变量:`0 <= caret <= pinyin.len()`,
+    /// 由所有 mutating 路径维护,`reset()` 归 0。
+    caret: usize,
     /// 当前候选（刷新时重新计算）。
     candidates: Vec<Candidate>,
     /// 高亮候选下标。
@@ -133,6 +142,7 @@ impl InputSession {
         Self {
             engine,
             pinyin: String::new(),
+            caret: 0,
             candidates: Vec::new(),
             cursor: 0,
             page: 0,
@@ -146,6 +156,11 @@ impl InputSession {
     /// 当前拼音串。
     pub fn pinyin(&self) -> &str {
         &self.pinyin
+    }
+
+    /// 拼音串内的编辑光标(字节偏移 = 字符位置,串内只有 ASCII)。
+    pub fn caret(&self) -> usize {
+        self.caret
     }
 
     /// 是否处于输入状态（拼音串非空）。
@@ -184,7 +199,12 @@ impl InputSession {
             // —— 字母：进入拼音串 ——
             InputEvent::Char(c) if c.is_ascii_alphabetic() => {
                 // TODO: Shift+字母目前按小写处理；可配置为"直接上屏大写"。
-                self.pinyin.push(c.to_ascii_lowercase());
+                // 在 caret 处插入(不是追加):长串中间打错字母可以
+                // 左移光标补插,不用全删重打。caret 处必为 char 边界
+                // (串内只有单字节 ASCII,caret 由本结构体独占维护)。
+                let c = c.to_ascii_lowercase();
+                self.pinyin.insert(self.caret, c);
+                self.caret += c.len_utf8();
                 self.refresh()?;
                 Ok(SessionOutput::Updated(self.update()))
             }
@@ -260,10 +280,17 @@ impl InputSession {
 
             // —— 退格 ——
             InputEvent::Backspace if !self.pinyin.is_empty() => {
-                self.pinyin.pop();
-                self.cursor = 0;
-                self.page = 0;
-                self.refresh()?;
+                // 删 caret 前一个字符(文本编辑惯例)。caret 在串首时
+                // 无前字符可删,吃掉按键、状态不变——越界删除或透传
+                // 都会破坏用户预期(透传会让应用删掉自己文本框里的字)。
+                if self.caret > 0 {
+                    // caret-1 必为 char 边界(串内只有单字节 ASCII)。
+                    let removed = self.pinyin.remove(self.caret - 1);
+                    self.caret -= removed.len_utf8();
+                    self.cursor = 0;
+                    self.page = 0;
+                    self.refresh()?;
+                }
                 Ok(SessionOutput::Updated(self.update()))
             }
             InputEvent::Backspace => Ok(SessionOutput::Noop),
@@ -283,6 +310,19 @@ impl InputSession {
             InputEvent::Up | InputEvent::Down => Ok(SessionOutput::Noop),
 
             // 左右方向键：TODO 移动拼音串内光标，当前透传给应用
+            // 左右方向键:移动拼音串内光标(编辑语义)。拼音串非空时
+            // 吃掉按键——即使 caret 已到边界(不再移动)也不透传:此时
+            // 用户焦点在编辑拼音串,透传给应用会移动应用文本框的光标,
+            // 与「左右键归输入法管」的心智模型冲突。拼音串为空时透传,
+            // 让应用正常移动自己的光标。
+            InputEvent::Left | InputEvent::Right if !self.pinyin.is_empty() => {
+                if matches!(event, InputEvent::Left) {
+                    self.caret = self.caret.saturating_sub(1);
+                } else {
+                    self.caret = (self.caret + 1).min(self.pinyin.len());
+                }
+                Ok(SessionOutput::Updated(self.update()))
+            }
             InputEvent::Left | InputEvent::Right => Ok(SessionOutput::Noop),
 
             // —— 翻页 ——
@@ -332,6 +372,7 @@ impl InputSession {
             preedit: self.pinyin.clone(),
             candidates: self.candidates.clone(),
             cursor: self.cursor,
+            caret: self.caret,
             page: self.page,
             page_size: self.page_size,
         }
@@ -407,6 +448,7 @@ impl InputSession {
     /// （IBus `focus-out`）接入。
     pub fn reset(&mut self) {
         self.pinyin.clear();
+        self.caret = 0;
         self.candidates.clear();
         self.cursor = 0;
         self.page = 0;
@@ -508,6 +550,269 @@ mod tests {
         match out {
             SessionOutput::Updated(u) => assert!(u.preedit.is_empty()),
             other => panic!("期望 Updated，实际 {other:?}"),
+        }
+    }
+
+    // —— B1:可编辑输入缓冲(caret)——
+
+    #[test]
+    fn left_right_move_caret_within_pinyin() {
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        assert_eq!(s.caret(), 5, "追加输入后 caret 应在串尾");
+
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 3, "左移两位后 caret 应在 3");
+
+        s.handle(InputEvent::Right).expect("不应失败");
+        assert_eq!(s.caret(), 4);
+
+        // 右移到串尾后不再越界;按键仍被吃掉(Updated)
+        s.handle(InputEvent::Right).expect("不应失败");
+        let out = s.handle(InputEvent::Right).expect("不应失败");
+        assert_eq!(s.caret(), 5, "caret 不应越过串尾");
+        assert!(matches!(out, SessionOutput::Updated(_)), "串非空时左右键应被吃掉");
+
+        // 左移出界同理
+        for _ in 0..6 {
+            s.handle(InputEvent::Left).expect("不应失败");
+        }
+        assert_eq!(s.caret(), 0, "caret 不应越过串首");
+        let out = s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 0);
+        assert!(matches!(out, SessionOutput::Updated(_)), "串非空时左右键应被吃掉");
+    }
+
+    #[test]
+    fn left_right_passthrough_when_idle() {
+        let mut s = session_with_dict();
+        // 拼音串为空:左右键透传给应用(让应用移动自己的光标)
+        assert!(matches!(
+            s.handle(InputEvent::Left).expect("不应失败"),
+            SessionOutput::Noop
+        ));
+        assert!(matches!(
+            s.handle(InputEvent::Right).expect("不应失败"),
+            SessionOutput::Noop
+        ));
+    }
+
+    #[test]
+    fn insert_in_middle_refreshes_candidates_for_whole_string() {
+        // 输入 nihao,caret 左移 2 位(停在 3,nih|ao),插入 x →
+        // 缓冲 nihxao,候选必须基于完整新串 nihxao 而不是 caret 前的 nih。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 3);
+
+        let out = s.handle(InputEvent::Char('x')).expect("不应失败");
+        assert_eq!(s.pinyin(), "nihxao");
+        assert_eq!(s.caret(), 4, "插入后 caret 应越过新字符");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "nihxao", "preedit 应为完整新串");
+                assert_eq!(u.caret, 4);
+                assert!(
+                    u.candidates.iter().all(|c| c.pinyin != "你好"),
+                    "nihxao 不是合法拼音,不应再出现「你好」候选"
+                );
+            }
+            other => panic!("期望 Updated,实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backspace_deletes_char_before_caret() {
+        // 输入 nihao,caret 左移 2 位(停在 3),Backspace 删的是 h → niao。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "niao", "应删掉 caret 前的 h");
+        assert_eq!(s.caret(), 2);
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "niao");
+                assert_eq!(u.caret, 2);
+            }
+            other => panic!("期望 Updated,实际 {other:?}"),
+        }
+
+        // caret 停在 2,Backspace 只删 caret 前的字符:再删 i、n 后
+        // caret 到串首,caret 后的 "ao" 不受影响
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "nao");
+        assert_eq!(s.caret(), 1);
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "ao");
+        assert_eq!(s.caret(), 0);
+        match out {
+            SessionOutput::Updated(u) => assert!(u.preedit == "ao" && u.caret == 0),
+            other => panic!("期望 Updated,实际 {other:?}"),
+        }
+        // caret 已在串首:吃掉按键,"ao" 不动(串首无前字符可删)
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "ao", "caret 在串首时 Backspace 不应删任何字符");
+        assert!(matches!(out, SessionOutput::Updated(_)), "按键应被吃掉");
+    }
+
+    #[test]
+    fn backspace_to_empty_resets_caret() {
+        // caret 在串尾连续删到空:串空后 caret 归 0,再按 Backspace 透传
+        let mut s = session_with_dict();
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        assert!(s.pinyin().is_empty());
+        assert_eq!(s.caret(), 0, "删空后 caret 应归 0");
+        match out {
+            SessionOutput::Updated(u) => assert!(u.preedit.is_empty() && u.caret == 0),
+            other => panic!("期望 Updated,实际 {other:?}"),
+        }
+        // 串已空:Backspace 透传给应用(Noop)
+        assert!(matches!(
+            s.handle(InputEvent::Backspace).expect("不应失败"),
+            SessionOutput::Noop
+        ));
+    }
+
+    #[test]
+    fn backspace_at_caret_zero_is_safe_noop() {
+        // caret 在串首按 Backspace:串不变、不 panic、按键被吃掉
+        // (不透传给应用,否则应用会删掉自己文本框里的字)。
+        let mut s = session_with_dict();
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 0);
+
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "ni", "caret 在串首时 Backspace 不应删任何字符");
+        assert_eq!(s.caret(), 0);
+        assert!(
+            matches!(out, SessionOutput::Updated(ref u) if u.preedit == "ni"),
+            "按键应被吃掉且状态不变: {out:?}"
+        );
+    }
+
+    #[test]
+    fn commit_uses_whole_string_not_prefix_before_caret() {
+        // caret 不在串尾时按空格/数字/回车:上屏的都是完整串的结果。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 3);
+        // 空格:完整串 nihao 的首选是「你好」,不是前缀 nih 的任何结果
+        let out = s.handle(InputEvent::Space).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "你好"),
+            "应上屏完整串的首选「你好」: {out:?}"
+        );
+
+        // 数字选词同上
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        let out = s.handle(InputEvent::Select(1)).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "你好"),
+            "数字选词应上屏完整串的第 1 个候选「你好」: {out:?}"
+        );
+
+        // 回车:完整串原样上屏
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        let out = s.handle(InputEvent::Enter).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "nihao"),
+            "回车应上屏完整串 nihao,不是前缀 nih: {out:?}"
+        );
+    }
+
+    #[test]
+    fn caret_resets_on_commit_and_escape() {
+        // 上屏后 caret 归 0
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        let out = s.handle(InputEvent::Space).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(_)));
+        assert_eq!(s.caret(), 0, "上屏后 caret 应归 0");
+        assert!(!s.is_active());
+
+        // Escape 后 caret 归 0
+        let mut s = session_with_dict();
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 1);
+        let out = s.handle(InputEvent::Escape).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert!(u.preedit.is_empty());
+                assert_eq!(u.caret, 0, "Escape 清空后 caret 应归 0");
+            }
+            other => panic!("期望 Updated,实际 {other:?}"),
+        }
+        assert_eq!(s.caret(), 0);
+    }
+
+    #[test]
+    fn commit_at_after_caret_move_still_uses_whole_string() {
+        // commit_at(面板点击路径)在 caret 移动后也应基于完整串的候选。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Left).expect("不应失败");
+        s.handle(InputEvent::Left).expect("不应失败");
+        let word = s.commit_at(0).expect("下标 0 应有候选");
+        assert_eq!(word, "你好", "应提交完整串的首选,不是前缀 nih 的结果");
+        assert_eq!(s.caret(), 0, "上屏后 caret 应归 0");
+    }
+
+    #[test]
+    fn caret_visible_in_session_update() {
+        // SessionUpdate.caret 跟随编辑光标,engine.rs 拿它做 preedit 光标。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Left).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "nihao");
+                assert_eq!(u.caret, 4, "左移后 update 里的 caret 应为 4");
+                assert_eq!(u.cursor, 0, "移动编辑光标不应动候选高亮");
+            }
+            other => panic!("期望 Updated,实际 {other:?}"),
         }
     }
 

@@ -90,7 +90,9 @@ impl XwxEngineServer {
         // 预编辑区：UpdatePreeditText(text, cursor_pos, visible, mode)
         match ibus_proto::ibus_text(&u.preedit) {
             Ok(value) => {
-                let cursor = u.preedit.chars().count() as u32;
+                // preedit 光标跟随会话的编辑光标(caret),不再是串尾:
+                // 用户左移光标在中间插字母时,文本光标要停在插入点。
+                let cursor = u.caret as u32;
                 if let Err(e) = self.update_preedit_text(ctxt, value, cursor, true, 0).await {
                     tracing::warn!(error = %e, "UpdatePreeditText 信号发送失败");
                 }
