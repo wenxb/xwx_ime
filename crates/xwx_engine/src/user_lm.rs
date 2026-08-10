@@ -26,7 +26,7 @@
 //! `$XDG_DATA_HOME/xwx/user_bigram.txt`,用 `XWX_USER_LM_PATH` 覆盖
 //! (解析在 bin 侧 `src/main.rs`,与既有约定同处)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -51,6 +51,32 @@ pub const MAX_USER_ENTRIES: usize = 10_000;
 /// 落盘文件里造词节的分节标记行(加载时据此切换解析;旧文件没有
 /// 这一行,整文件按 bigram 格式解析 → 词条表为空,向后兼容)。
 const ENTRIES_SECTION_MARK: &str = "# xwx-user-entries";
+/// 落盘文件里屏蔽表节的分节标记行(同样向后兼容:旧文件没有这一行,
+/// 屏蔽表为空;`#` 前缀让它落在旧版解析器的注释行分支里——旧版本
+/// 读新文件也只会把它当注释跳过,双向兼容)。
+const BLOCKLIST_SECTION_MARK: &str = "# xwx-user-blocklist";
+
+/// 屏蔽表的存储键:`"拼音 key\u{1}词"`(U+0001 分隔,拼音是 ASCII、
+/// 词是 UTF-8 文本都不会含它)。集中一处构造,保证写入/查询/落盘
+/// 三处的键形一致。
+fn block_key(pinyin_key: &str, word: &str) -> String {
+    let mut k = String::with_capacity(pinyin_key.len() + 1 + word.len());
+    k.push_str(pinyin_key);
+    k.push('\u{1}');
+    k.push_str(word);
+    k
+}
+
+/// 落盘文件的分节(加载时按标记行切换,见 [`UserLM::load_tables`])。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Section {
+    /// bigram 计数区(旧格式本体,默认)。
+    Bigram,
+    /// 造词区(`# xwx-user-entries` 之后)。
+    Entries,
+    /// 屏蔽表区(`# xwx-user-blocklist` 之后)。
+    Blocklist,
+}
 
 /// 用户模型对「没学过」的词给的中性分(log10)。
 ///
@@ -77,6 +103,22 @@ struct UserTables {
     /// 造出的词同时会进 unigrams(上屏即学),因此它既有候选召回、
     /// 又有用户层打分增益,两条通道一体衰减。
     entries: HashMap<String, Vec<String>>,
+    /// 屏蔽表:被用户 Ctrl+Delete 删掉的候选,存 `"拼音 key\u{1}词"` 的
+    /// 拼接字符串(Ctrl+Delete 删候选)。
+    ///
+    /// 与 entries 的对偶:entries 是「词库没有、用户要它出现」,
+    /// blocklist 是「词库有、用户不想再见到」。键带拼音:同一个词
+    /// (如多音字「长」zhang/chang)只屏蔽用户当时打的那一路读音,
+    /// 不误伤另一路。排序前的统一过滤在 `lib.rs` 的候选收口处,
+    /// 查询零锁(快照 `Arc` 共享)。
+    ///
+    /// 用拼接串而非 `(String, String)` 元组:热路径 `is_blocked` 每次
+    /// 查询对每个候选调一次,拼接键只需一次 `String` 分配就能
+    /// `HashSet<String>::contains(&str)` 零拷贝哈希查找;元组键要么
+    /// 两次分配、要么退化成 O(n) 线性扫描(实测 500 条时把长串从
+    /// 1.5ms 拉到 3.0ms)。分隔用 U+0001:拼音是 ASCII、词是 UTF-8
+    /// 文本,都不会含它。
+    blocklist: HashSet<String>,
 }
 
 /// 打分用不可变快照。
@@ -137,6 +179,19 @@ impl UserLmSnapshot {
             .get(pinyin_key)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// 该候选是否被用户屏蔽(Ctrl+Delete 删过)。
+    ///
+    /// 排序前的统一过滤点(`lib.rs` 候选收口)在**每次查询**对每个候选
+    /// 调用一次,因此它必须是 O(1) 哈希查找、不加锁(快照 `Arc` 共享)。
+    /// 拼接键一次分配、`contains(&str)` 零拷贝(见 `blocklist` 字段注释)。
+    pub fn is_blocked(&self, pinyin_key: &str, word: &str) -> bool {
+        let mut k = String::with_capacity(pinyin_key.len() + 1 + word.len());
+        k.push_str(pinyin_key);
+        k.push('\u{1}');
+        k.push_str(word);
+        self.tables.blocklist.contains(&k)
     }
 }
 
@@ -211,29 +266,51 @@ impl UserLM {
     fn load_tables(reader: impl std::io::BufRead) -> Result<UserTables, LmError> {
         let mut bigram_text = String::new();
         let mut entries: HashMap<String, Vec<String>> = HashMap::new();
-        let mut in_entries = false;
+        let mut blocklist: HashSet<String> = HashSet::new();
+        // 分节解析:bigram 计数区(默认)→ 造词区 / 屏蔽表区(标记行切换)。
+        let mut section = Section::Bigram;
         for (i, line) in reader.lines().enumerate() {
             let line = line?;
             let t = line.trim();
             if t == ENTRIES_SECTION_MARK {
-                in_entries = true;
+                section = Section::Entries;
                 continue;
             }
-            if in_entries {
-                if t.is_empty() || t.starts_with('#') {
-                    continue;
+            if t == BLOCKLIST_SECTION_MARK {
+                section = Section::Blocklist;
+                continue;
+            }
+            match section {
+                Section::Entries => {
+                    if t.is_empty() || t.starts_with('#') {
+                        continue;
+                    }
+                    let fields: Vec<&str> = t.split('\t').collect();
+                    let [word, key] = fields.as_slice() else {
+                        return Err(LmError::BadLine {
+                            line: (i + 1) as u64,
+                            detail: format!("造词区期望「词<TAB>拼音」两字段,实际: {t:?}"),
+                        });
+                    };
+                    entries.entry((*key).to_string()).or_default().push((*word).to_string());
                 }
-                let fields: Vec<&str> = t.split('\t').collect();
-                let [word, key] = fields.as_slice() else {
-                    return Err(LmError::BadLine {
-                        line: (i + 1) as u64,
-                        detail: format!("造词区期望「词<TAB>拼音」两字段,实际: {t:?}"),
-                    });
-                };
-                entries.entry((*key).to_string()).or_default().push((*word).to_string());
-            } else {
-                bigram_text.push_str(t);
-                bigram_text.push('\n');
+                Section::Blocklist => {
+                    if t.is_empty() || t.starts_with('#') {
+                        continue;
+                    }
+                    let fields: Vec<&str> = t.split('\t').collect();
+                    let [word, key] = fields.as_slice() else {
+                        return Err(LmError::BadLine {
+                            line: (i + 1) as u64,
+                            detail: format!("屏蔽表区期望「词<TAB>拼音」两字段,实际: {t:?}"),
+                        });
+                    };
+                    blocklist.insert(block_key(key, word));
+                }
+                Section::Bigram => {
+                    bigram_text.push_str(t);
+                    bigram_text.push('\n');
+                }
             }
         }
         let mut bigram = BigramLM::new();
@@ -243,6 +320,7 @@ impl UserLM {
             bigrams: bigram.bigrams,
             unigram_total: bigram.unigram_total,
             entries,
+            blocklist,
         })
     }
 
@@ -250,18 +328,32 @@ impl UserLM {
     /// (来自会话的 `last_word`;原始字母/标点上屏后该值为 `None`,
     /// 此时只记一元计数)。返回距上次落盘的净增学习次数。
     pub fn learn(&self, prev: Option<&str>, word: &str) -> u32 {
+        let mut t = self.clone_tables_for_write();
+        Self::learn_into(&mut t, prev, word);
+        self.commit_tables(t)
+    }
+
+    /// copy-on-write 取出一份可写的计数表(写路径统一入口):
+    /// 独占时直接接管,共享时深拷贝——打分线程持有的旧快照不受影响。
+    fn clone_tables_for_write(&self) -> UserTables {
         let mut guard = self.tables.write().unwrap_or_else(|p| p.into_inner());
-        // copy-on-write:打分线程持有的旧快照不受影响。
-        let mut t: UserTables = match Arc::try_unwrap(std::mem::take(&mut *guard)) {
+        match Arc::try_unwrap(std::mem::take(&mut *guard)) {
             Ok(t) => t,
             Err(shared) => UserTables {
                 unigrams: shared.unigrams.clone(),
                 bigrams: shared.bigrams.clone(),
                 unigram_total: shared.unigram_total,
                 entries: shared.entries.clone(),
+                blocklist: shared.blocklist.clone(),
             },
-        };
-        Self::learn_into(&mut t, prev, word);
+        }
+        // 注意:guard 在这里已释放给调用方继续 mutate 之前必须重新
+        // 拿锁的场景不存在——commit_tables 会重新拿锁写回。
+    }
+
+    /// 把改完的计数表写回并累加 dirty(与 [`Self::learn`] 原路径一致)。
+    fn commit_tables(&self, t: UserTables) -> u32 {
+        let mut guard = self.tables.write().unwrap_or_else(|p| p.into_inner());
         *guard = Arc::new(t);
         self.dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
     }
@@ -295,17 +387,7 @@ impl UserLM {
     /// 返回距上次落盘的净增学习次数(与 [`Self::learn`] 共用同一
     /// dirty 计数与回写调度——造词与调频是同一份用户数据的两个面)。
     pub fn add_entry(&self, word: &str, pinyin_key: &str) -> u32 {
-        let mut guard = self.tables.write().unwrap_or_else(|p| p.into_inner());
-        // copy-on-write,与 learn 同一模式:打分线程持有的旧快照不受影响。
-        let mut t: UserTables = match Arc::try_unwrap(std::mem::take(&mut *guard)) {
-            Ok(t) => t,
-            Err(shared) => UserTables {
-                unigrams: shared.unigrams.clone(),
-                bigrams: shared.bigrams.clone(),
-                unigram_total: shared.unigram_total,
-                entries: shared.entries.clone(),
-            },
-        };
+        let mut t = self.clone_tables_for_write();
         let words = t.entries.entry(pinyin_key.to_string()).or_default();
         if !words.iter().any(|w| w == word) {
             words.push(word.to_string());
@@ -313,8 +395,47 @@ impl UserLM {
         if t.entries.len() > MAX_USER_ENTRIES {
             Self::decay_entries(&mut t);
         }
-        *guard = Arc::new(t);
-        self.dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+        self.commit_tables(t)
+    }
+
+    /// 删候选(editor 的 Ctrl+Delete,gear-audit 第 6 节):
+    /// 「屏蔽 + 能删则删」一体完成。
+    ///
+    /// 对一条候选 `(word, pinyin_key)` 做两件事:
+    /// 1. **屏蔽**:插入 blocklist——无论它是词库词还是用户造词,此后
+    ///    该候选在候选收口处被滤掉(`lib.rs` 的统一过滤点),重查同
+    ///    拼音不再出现。词库只读(mmap),这是词库词唯一可行的删除形态;
+    /// 2. **能删则删**:若它同时是用户造词条目(`entries` 里有),把那条
+    ///    词条也删掉——屏蔽管「不再出现」,但留着词条会让它继续占
+    ///    `MAX_USER_ENTRIES` 名额、继续被 unigram 计数引用,语义上
+    ///    「用户亲手删掉自己造的词」就该连根拔。
+    ///
+    /// 不动 unigrams/bigrams 计数:那是「上屏频次」的统计,删候选是
+    /// 「不想再见到它」,两件事分开——留着计数只影响 LM 打分里一个
+    /// 再也浮不上来的词,无害;清掉反而会让「误删后重新上屏」丢失
+    /// 已积累的调频。
+    ///
+    /// 幂等:重复屏蔽同一条不产生变化。返回 dirty(与 learn/add_entry
+    /// 共用同一回写调度,屏蔽表随同一份文件落盘)。
+    pub fn block_candidate(&self, word: &str, pinyin_key: &str) -> u32 {
+        let mut t = self.clone_tables_for_write();
+        t.blocklist.insert(block_key(pinyin_key, word));
+        if let Some(words) = t.entries.get_mut(pinyin_key) {
+            words.retain(|w| w != word);
+            if words.is_empty() {
+                t.entries.remove(pinyin_key);
+            }
+        }
+        self.commit_tables(t)
+    }
+
+    /// 屏蔽表条数(测试/日志用)。
+    pub fn blocklist_len(&self) -> usize {
+        self.tables
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .blocklist
+            .len()
     }
 
     /// 全表计数右移一位(÷2 向下取整),丢弃衰减到 0 的条目。
@@ -436,6 +557,30 @@ impl UserLM {
                 .entries
                 .iter()
                 .flat_map(|(key, words)| words.iter().map(move |w| (w.as_str(), key.as_str())))
+                .collect();
+            rows.sort_unstable();
+            for (word, key) in rows {
+                text.push_str(word);
+                text.push('\t');
+                text.push_str(key);
+                text.push('\n');
+            }
+        }
+        // 屏蔽表区:与造词区同格式、同兼容策略(标记行 `#` 前缀,
+        // 旧版解析器把它当注释跳过;旧文件没有本节则屏蔽表为空)。
+        // 存储键是拼接串「key\u{1}词」,写出时拆回「词<TAB>key」两字段。
+        if !t.blocklist.is_empty() {
+            text.push_str(BLOCKLIST_SECTION_MARK);
+            text.push('\n');
+            let mut rows: Vec<(&str, &str)> = t
+                .blocklist
+                .iter()
+                .map(|k| {
+                    let (key, word) = k
+                        .split_once('\u{1}')
+                        .expect("屏蔽键由 block_key 构造,必含分隔符");
+                    (word, key)
+                })
                 .collect();
             rows.sort_unstable();
             for (word, key) in rows {
@@ -704,5 +849,104 @@ mod tests {
         }
         assert_eq!(lm.entry_len(), 1);
         assert_eq!(lm.snapshot().lookup_entries("zhang san feng").len(), 1);
+    }
+
+    // —— 屏蔽表(Ctrl+Delete 删候选)——
+
+    #[test]
+    fn block_candidate_marks_blocked_and_removes_user_entry() {
+        // 核心判据:屏蔽一条候选后,该 (key, word) 被标记;若它是用户
+        // 造词条目,词条同时被删(连根拔);若是词库词(entries 里没有),
+        // 只屏蔽、不影响任何词条。
+        let lm = UserLM::in_memory();
+        lm.add_entry("自造短语", "zi zao duan yu");
+        assert_eq!(lm.entry_len(), 1);
+
+        // 词库词:entries 里没有,屏蔽只进 blocklist,不动词条
+        lm.block_candidate("词库词", "ci ku ci");
+        assert!(lm.snapshot().is_blocked("ci ku ci", "词库词"));
+        assert_eq!(lm.entry_len(), 1, "词库词的屏蔽不应动造词条目");
+
+        // 用户造词:屏蔽 + 删词条
+        lm.block_candidate("自造短语", "zi zao duan yu");
+        assert!(lm.snapshot().is_blocked("zi zao duan yu", "自造短语"));
+        assert_eq!(lm.entry_len(), 0, "用户造词应连同词条一起删掉");
+        assert!(
+            lm.snapshot().lookup_entries("zi zao duan yu").is_empty(),
+            "删掉后按 key 查不到该词条"
+        );
+        assert_eq!(lm.blocklist_len(), 2);
+    }
+
+    #[test]
+    fn block_candidate_is_idempotent() {
+        // 重复屏蔽同一条不重复计(幂等,与 add_entry 同一取舍)。
+        let lm = UserLM::in_memory();
+        lm.block_candidate("词", "ci");
+        lm.block_candidate("词", "ci");
+        assert_eq!(lm.blocklist_len(), 1);
+        assert!(lm.snapshot().is_blocked("ci", "词"));
+    }
+
+    #[test]
+    fn block_candidate_leaves_counts_alone() {
+        // 屏蔽不动 unigram/bigram 计数:那是「上屏频次」的统计,
+        // 删候选是「不想再见到它」,两件事分开(留着计数只影响一个
+        // 再也浮不上来的词的打分,无害;清掉反而丢调频)。
+        let lm = UserLM::in_memory();
+        lm.learn(None, "某词");
+        lm.learn(Some("某词"), "下一词");
+        let before_uni = lm.unigram_len();
+        lm.block_candidate("某词", "mou ci");
+        assert_eq!(lm.unigram_len(), before_uni, "屏蔽不应动 unigram 计数");
+        assert!(lm.snapshot().is_blocked("mou ci", "某词"));
+    }
+
+    #[test]
+    fn blocklist_survives_roundtrip() {
+        // 落盘 + 读回:屏蔽表经 flush 写入 `# xwx-user-blocklist` 区,
+        // 重开后仍生效;与计数区、造词区三段共存。
+        let dir = std::env::temp_dir().join(format!("xwx_userlm_bl_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("bl.txt");
+        {
+            let lm = UserLM::open_or_create(&path);
+            lm.learn(None, "今天");
+            lm.add_entry("自造", "zi zao");
+            lm.block_candidate("词库词", "ci ku ci");
+            lm.block_candidate("自造", "zi zao"); // 同时屏蔽 + 删词条
+            lm.flush().expect("flush 不应失败");
+        }
+        {
+            let lm = UserLM::open_or_create(&path);
+            assert_eq!(lm.unigram_len(), 1, "计数区应读回");
+            assert_eq!(lm.entry_len(), 0, "自造词条已被删(屏蔽连根拔)");
+            assert!(lm.snapshot().is_blocked("ci ku ci", "词库词"), "屏蔽表应读回");
+            assert!(lm.snapshot().is_blocked("zi zao", "自造"), "屏蔽表应读回");
+            assert!(!lm.snapshot().is_blocked("ci ku ci", "别的词"), "键含词,不误伤");
+            assert!(!lm.snapshot().is_blocked("别的拼音", "词库词"), "键含拼音,不误伤");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_file_with_blocklist_section_loads() {
+        // 向后兼容:含造词区但无屏蔽表区的「次新」文件(引入屏蔽表之前)
+        // 正常加载,屏蔽表为空;手写一份该形态验证分节解析不回退。
+        let dir = std::env::temp_dir().join(format!("xwx_userlm_leg2_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mid.txt");
+        std::fs::write(
+            &path,
+            "# xwx 用户词频学习模型\n你\t3\n# xwx-user-entries\n自造\tzi zao\n",
+        )
+        .unwrap();
+        let lm = UserLM::open_or_create(&path);
+        assert_eq!(lm.unigram_len(), 1, "计数区应加载");
+        assert_eq!(lm.entry_len(), 1, "造词区应加载");
+        assert_eq!(lm.blocklist_len(), 0, "无屏蔽表区时屏蔽表为空");
+        assert!(!lm.snapshot().is_blocked("zi zao", "自造"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

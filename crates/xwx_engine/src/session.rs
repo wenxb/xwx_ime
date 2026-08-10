@@ -76,6 +76,10 @@ pub enum InputEvent {
     /// 翻页。
     PageUp,
     PageDown,
+    /// Ctrl+Delete:删除当前高亮候选(屏蔽它,此后同拼音查询不再出现;
+    /// 若是用户造词条目则连同词条删掉)。见 [`crate::UserLM::block_candidate`];
+    /// 仅在候选窗有候选时有意义。
+    DeleteCandidate,
     /// Ctrl+空格：切换中英文模式。
     ToggleAscii,
 }
@@ -247,6 +251,24 @@ impl InputSession {
                 self.refresh()?;
                 Ok(SessionOutput::Updated(self.update()))
             }
+            // —— B2 音节分隔符 `'`(librime speller 的 delimiters)——
+            // 进拼音串、作为强制切分点(`xi'an` 消歧出「西安」)。
+            // 切分在引擎层做:`lookup_candidates` 把 `'` 归一化成
+            // 「干净串 + 边界字节表」——`'` 不进词典 key、不进
+            // `Candidate.pinyin`,但它的位置作为「不许任何边跨越」的
+            // 强制切分点贯穿格构建/beam/后向 DP(详见 lib.rs 的
+            // `lookup_candidates` 与 `build_lattice` 注释)。
+            // 空闲时(拼音串为空)打 `'` 没有意义:透传给应用。
+            InputEvent::Char('\'') => {
+                if self.pinyin.is_empty() {
+                    Ok(SessionOutput::Noop)
+                } else {
+                    self.pinyin.insert(self.caret, '\'');
+                    self.caret += 1; // `'` 是单字节 ASCII
+                    self.refresh()?;
+                    Ok(SessionOutput::Updated(self.update()))
+                }
+            }
             // —— 中文标点(librime punctuator 的等价物;映射表及成对标点不交替、
             //    `'` 不进表、`,`/`.` 翻页留待与 selector 一起设计等取舍,
             //    见 punctuator.rs 模块文档) ——
@@ -256,6 +278,35 @@ impl InputSession {
             // 上屏全角标点。英文模式不到这里(上面第一个 Char 分支已拦截,
             // 返回 Noop 沿透传链让应用收到原始半角字符)。
             InputEvent::Char(c) if fullwidth_punct(c).is_some() => {
+                // —— librime `paging_with_comma_period` / `paging_with_minus_equal` 的状态机 ——
+                // 在「上屏标点」之前先判翻页(照 `/usr/share/rime-data/key_bindings.yaml`):
+                //   `.` 用 has_menu:候选窗开着(非空)就翻下一页;
+                //   `,` 用 paging:仅「已翻过页」(page>0)才回翻上一页——
+                //     第一页时打 `,` 仍出中文逗号,这是它与 `.` 的非对称点,
+                //     也是「中文标点和翻页不冲突」的关键(还没翻页时 `,` 必须是标点);
+                //   `-`/`=`(key_bindings.yaml:27-30,都是 has_menu)无标点含义、
+                //     不冲突,一并做:候选窗开着时分别上/下翻页。
+                // 末页再按 `.`、首页再按 `,`:`page` 用 min/saturating 钳在
+                // 合法范围(不 wrap),与既有 PageUp/PageDown 分支同一行为——
+                // 多按一下无效果,不报错、不上屏、不丢候选。
+                if !self.candidates.is_empty() {
+                    let max_page = self
+                        .candidates
+                        .len()
+                        .div_ceil(self.page_size)
+                        .saturating_sub(1);
+                    match c {
+                        '.' | '=' => {
+                            self.page = (self.page + 1).min(max_page);
+                            return Ok(SessionOutput::Updated(self.update()));
+                        }
+                        ',' | '-' if self.page > 0 => {
+                            self.page = self.page.saturating_sub(1);
+                            return Ok(SessionOutput::Updated(self.update()));
+                        }
+                        _ => {}
+                    }
+                }
                 let punct = fullwidth_punct(c).expect("守卫已检查");
                 if self.pinyin.is_empty() {
                     Ok(SessionOutput::Commit(self.commit_raw(punct.to_string())))
@@ -295,8 +346,25 @@ impl InputSession {
                     Ok(SessionOutput::Commit(format!("{head}{c}")))
                 }
             }
-            // —— 其余可打印字符(含 `'`——B2 音节分隔符预留,见
-            //    punctuator.rs 模块文档):透传给应用 ——
+            // —— `-`/`=` 翻页(librime `paging_with_minus_equal`,has_menu)——
+            // 这两个键**没有全角标点映射**(上面 punctuator 分支够不着),
+            // 也无标点含义冲突,故候选窗开着时一律翻页:`=` 下一页(has_menu),
+            // `-` 上一页(同 `,` 的 paging 边界:仅 page>0 回翻,首页钳 0)。
+            // 空闲(无候选窗)时落回 catch-all 透传,键不被吃掉。
+            InputEvent::Char(c @ ('-' | '=')) if !self.candidates.is_empty() => {
+                let max_page = self
+                    .candidates
+                    .len()
+                    .div_ceil(self.page_size)
+                    .saturating_sub(1);
+                if c == '=' {
+                    self.page = (self.page + 1).min(max_page);
+                } else if self.page > 0 {
+                    self.page = self.page.saturating_sub(1);
+                }
+                Ok(SessionOutput::Updated(self.update()))
+            }
+            // —— 其余可打印字符:透传给应用 ——
             InputEvent::Char(_) => Ok(SessionOutput::Noop),
 
             // —— 数字选词 ——
@@ -402,6 +470,21 @@ impl InputSession {
                 Ok(SessionOutput::Updated(self.update()))
             }
             InputEvent::PageUp | InputEvent::PageDown => Ok(SessionOutput::Noop),
+
+            // —— Ctrl+Delete:删当前高亮候选(librime editor 的 DeleteCandidate)——
+            // 有候选窗且高亮有效:把该 (pinyin key, word) 屏蔽(用户造词
+            // 同时删词条,词库词只屏蔽——词库只读),随后重查候选让列表
+            // 立刻少一条。无候选(拼音串空或列表空)时透传,让应用收到
+            // 正常的 Ctrl+Delete(删词)。删到列表空也不 panic:refresh
+            // 对空候选收敛 cursor/page,update 照常返回。
+            InputEvent::DeleteCandidate if !self.pinyin.is_empty() => {
+                if let Some(c) = self.candidates.get(self.cursor).cloned() {
+                    self.engine.delete_candidate(&c.word, &c.pinyin);
+                    self.refresh()?;
+                }
+                Ok(SessionOutput::Updated(self.update()))
+            }
+            InputEvent::DeleteCandidate => Ok(SessionOutput::Noop),
         }
     }
 
@@ -606,6 +689,7 @@ mod tests {
     use super::*;
     use crate::ImeEngine;
     use crate::LmStore;
+    use crate::Dictionary as _; // DictStore.lookup(测试里直查词库用)
 
     fn session_with_dict() -> InputSession {
         let engine = ImeEngine::new(None).expect("内存引擎创建失败");
@@ -1186,16 +1270,28 @@ mod tests {
     fn punct_with_no_real_candidate_commits_raw_then_fullwidth() {
         // 拼音串非空但没有真实候选:与 Space 分支同一兜底语义——
         // 上屏原始输入串(空词库下唯一候选是回声候选,词即原始串),
-        // 再追加全角句号。
+        // 再追加全角标点。
+        //
+        // 三段式(`selector` 的 `,`/`.` 翻页落地后改写):
+        // - 原断言用 `.`:空词库下 `zgr` 仍有 1 个回声候选(候选窗开着),
+        //   而 `.` 的翻页条件是 has_menu(候选非空)——按 librime 语义它
+        //   此刻该翻页,不再上屏「zgr。」。那条断言与「`.` 有候选就翻页」
+        //   的新行为正面冲突,不可能同时成立;
+        // - 改为用 `;`(分号,无翻页键语义)走同一条「无真实候选 →
+        //   原始串 + 全角标点」路径;`. 的翻页行为由 paging 专项测试覆盖;
+        // - 为什么新行为对:librime `key_bindings.yaml` 的 `.` 就是
+        //   has_menu 翻页,回声候选也是候选(用户在候选窗里看得见它),
+        //   「有候选就翻页」与 librime 逐字一致;要验证的本是「无真实
+        //   候选时标点先上屏原始串」,换一个不翻页的标点键,语义不变。
         let engine = Arc::new(ImeEngine::new(None).expect("内存引擎创建失败"));
         let mut s = InputSession::new(engine);
         for c in "zgr".chars() {
             s.handle(InputEvent::Char(c)).expect("不应失败");
         }
-        let out = s.handle(InputEvent::Char('.')).expect("不应失败");
+        let out = s.handle(InputEvent::Char(';')).expect("不应失败");
         assert!(
-            matches!(out, SessionOutput::Commit(ref t) if t == "zgr\u{3002}"),
-            "无真实候选时应上屏「原始串 + 。」: {out:?}"
+            matches!(out, SessionOutput::Commit(ref t) if t == "zgr\u{FF1B}"),
+            "无真实候选时应上屏「原始串 + ;」: {out:?}"
         );
         assert!(!s.is_active(), "上屏后会话应复位");
         assert_eq!(s.last_word, None, "回声/原始串不是词");
@@ -1260,23 +1356,37 @@ mod tests {
     }
 
     #[test]
-    fn apostrophe_passthrough_reserved_for_b2() {
-        // `'` 是 B2 音节分隔符(xi'an 消歧)的预留键,本轮明确不进
-        // 标点表,保持既有透传行为——中文模式下也是 Noop。
+    fn apostrophe_enters_pinyin_as_syllable_separator() {
+        // B2 音节分隔符落地(本轮兑现 punctuator.rs 里的预留):
+        // `'` 在拼音串非空时**进拼音串**当强制切分点(`xi'an` 消歧),
+        // 空闲时(拼音串为空)打 `'` 没有意义,仍透传给应用。
+        //
+        // 三段式(B2 落地后改写,原测试名 apostrophe_passthrough_reserved_for_b2):
+        // - 原断言:「中文模式下 `'` 透传(Noop),拼音串非空时也透传」
+        //   ——那是 B2 未做时的过渡行为(预留键,不冲突先透传);
+        // - 改为:「空闲时 `'` 透传(Noop);拼音串非空时 `'` 进拼音串
+        //   (preedit 含 `'`)」——B2 的核心语义;
+        // - 为什么新行为对:librime speller 的 delimiters 就是「`'` 进
+        //   输入串、abc_segmentor 按它硬切」;引擎层把 `'` 当归一化掉的
+        //   强制断点(任何含 `'` 的子串都不是合法音节),`xi'an` 只有
+        //   [xi, an] 一种切法——消歧成立。进拼音串(而不进词典 key、
+        //   不进 `Candidate.pinyin`)的边界由引擎层归一化保证。
         let mut s = session_with_dict();
         let out = s.handle(InputEvent::Char('\'')).expect("不应失败");
         assert!(
             matches!(out, SessionOutput::Noop),
-            "' 应透传(B2 预留): {out:?}"
+            "空闲时 ' 应透传(拼音串为空,无分隔对象): {out:?}"
         );
-        // 拼音串非空时同样透传(不进拼音串、不触发标点上屏)
+        // 拼音串非空时:`'` 进拼音串,preedit 为 xi'
         s.handle(InputEvent::Char('x')).expect("不应失败");
         s.handle(InputEvent::Char('i')).expect("不应失败");
         let out = s.handle(InputEvent::Char('\'')).expect("不应失败");
-        assert!(
-            matches!(out, SessionOutput::Noop),
-            "拼音串非空时 ' 仍应透传: {out:?}"
-        );
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "xi'", "' 应进拼音串: {u:?}");
+            }
+            other => panic!("拼音串非空时 ' 应进拼音串(Updated),实际 {other:?}"),
+        }
     }
 
     #[test]
@@ -1410,12 +1520,25 @@ mod tests {
 
     #[test]
     fn unmapped_ascii_symbols_still_passthrough() {
-        // `=` `+` `-` `#` `%` `&` `*` `@` `|` 没有全角映射:
+        // `+` `#` `%` `&` `*` `@` `|` 没有全角映射:
         // translate_keyval 的 0x21..=0x7e 整段放行会把它们送进
         // Char(c),会话层必须落到 catch-all 透传(Noop)——键不能被
         // 吃掉,也不能被塞进拼音串。本轮动了 Char 分支的守卫,
         // 这条测试钉住这个行为不被破坏。
-        let unmapped = ['=', '+', '-', '#', '%', '&', '*', '@', '|'];
+        //
+        // 三段式(`selector` 的 `-`/`=` 翻页落地后改写):
+        // - 原断言的字符表含 `=` 与 `-`:它们「无全角映射 ⇒ catch-all
+        //   透传」。本轮给它们加了「候选窗开着时翻页」(librime
+        //   `paging_with_minus_equal`,has_menu)——候选窗非空时不再透传,
+        //   与「透传」断言正面冲突;
+        // - 改为:把 `=`/`-` 从这张表移出,它们的翻页/空闲透传行为由
+        //   `minus_equal_page_when_menu_open` 专项钉住;表里只留下
+        //   「无映射、无翻页语义」的其余符号,透传断言逐字不变;
+        // - 为什么新行为对:librime 默认就绑了 `-`/`=` 翻页
+        //   (key_bindings.yaml:27-30),它们不是「无映射透传」键而是
+        //   翻页键——该测试钉的本是「无映射符号不被劫持」,把两个
+        //   已被赋予翻页语义的键留在表里,断言的就不再是那个不变量。
+        let unmapped = ['+', '#', '%', '&', '*', '@', '|'];
         for c in unmapped {
             assert!(
                 fullwidth_punct(c).is_none(),
@@ -1733,4 +1856,377 @@ mod tests {
         assert!(user.entry_len() >= 1 || buffered <= 2,
             "超限应触发结算: entry_len={} buffered={buffered}", user.entry_len());
     }
+
+    // —— selector 的 `,`/`.` 与 `-`/`=` 翻页(librime key_bindings)——
+
+    /// 造一个「候选超过一页」的会话:同一拼音塞 page_size+3 个同音字,
+    /// 保证至少有 2 页可翻。
+    fn session_with_many_candidates() -> InputSession {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        // DEFAULT_PAGE_SIZE=9,塞 12 个同音字 → 2 页(9 + 3)
+        for i in 0..12u32 {
+            let w = char::from_u32(0x4E00 + i).unwrap().to_string();
+            engine.dict.upsert(&w, "ni", 1000 - i as u64).expect("插入失败");
+        }
+        InputSession::new(Arc::new(engine))
+    }
+
+    #[test]
+    fn period_pages_down_when_menu_open() {
+        // 候选窗有候选、在第 1 页:`.` → 翻到第 2 页(has_menu 语义)。
+        let mut s = session_with_many_candidates();
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Char('.')).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.page, 1, "`.` 应翻到第 2 页(下标 1)");
+                assert_eq!(u.preedit, "ni", "拼音串不变");
+            }
+            other => panic!("`.` 翻页应返回 Updated,实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn comma_pages_up_only_after_paging() {
+        // `,` 用 paging 语义:仅「已翻过页」(page>0)才回翻。
+        let mut s = session_with_many_candidates();
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        // 第 1 页:`,` 不翻页,出中文逗号「,」(最关键的一条:
+        // 中文标点与翻页不冲突的保证)
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t.ends_with('\u{FF0C}')),
+            "第 1 页的 `,` 应上屏中文逗号,不是翻页: {out:?}"
+        );
+
+        // 重新输入并翻到第 2 页,再按 `,` → 回第 1 页
+        let mut s = session_with_many_candidates();
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Char('.')).expect("`.` 应翻页"); // → page 1
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.page, 0, "第 2 页的 `,` 应回翻到第 1 页(下标 0)");
+            }
+            other => panic!("paging 状态下 `,` 应回翻(Updated),实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn idle_comma_period_still_fullwidth() {
+        // 拼音串为空(无候选窗):`.` → 。,`,` → ,——标点优先,无翻页对象。
+        let mut s = session_with_many_candidates();
+        let out = s.handle(InputEvent::Char('.')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(ref t) if t == "\u{3002}"), "空闲 `.` 应出 。");
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(ref t) if t == "\u{FF0C}"), "空闲 `,` 应出 ,");
+    }
+
+    #[test]
+    fn minus_equal_page_when_menu_open() {
+        // `-`/`=`(librime paging_with_minus_equal,has_menu):候选窗开着时翻页。
+        // `-` 同 `,` 的 paging 边界:第 1 页按 `-` 回翻钳在 0(saturating),
+        // 与 PageUp 在首页的行为一致(不 wrap、不上屏、不丢候选)。
+        let mut s = session_with_many_candidates();
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        // `=` 翻到第 2 页
+        let out = s.handle(InputEvent::Char('=')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 1), "`=` 应翻下一页");
+        // `-` 回第 1 页
+        let out = s.handle(InputEvent::Char('-')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 0), "`-` 应回上一页");
+        // 第 1 页再按 `-`:钳在 0,不出标点、不上屏、不 panic
+        let out = s.handle(InputEvent::Char('-')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 0), "首页 `-` 钳在 0");
+
+        // 空闲(无候选窗):`-`/`=` 落回 catch-all 透传(键不被吃掉),
+        // 接管自 unmapped_ascii_symbols_still_passthrough 移出的两条
+        let mut s = session_with_many_candidates();
+        for c in ['-', '='] {
+            let out = s.handle(InputEvent::Char(c)).expect("不应失败");
+            assert!(matches!(out, SessionOutput::Noop), "空闲时 {c:?} 应透传(Noop): {out:?}");
+        }
+    }
+
+    #[test]
+    fn period_at_last_page_stays_and_comma_recovers() {
+        // 末页再按 `.`:钳在末页(min(max_page)),不 wrap、不上屏;
+        // 之后按 `,` 仍能回翻(page>0 满足 paging)。
+        let mut s = session_with_many_candidates(); // 12 候选 → 2 页(0,1)
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        s.handle(InputEvent::Char('.')).expect("翻页"); // page 1(末页)
+        let out = s.handle(InputEvent::Char('.')).expect("末页再按");
+        assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 1), "末页 `.` 钳在末页");
+        let out = s.handle(InputEvent::Char(',')).expect("回翻");
+        assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 0), "`,` 应从末页回翻");
+    }
+
+    #[test]
+    fn nihao_comma_still_commits_fullwidth() {
+        // 不许退化:`nihao,` 仍出「你好,」——只有 1 个候选(你好)时
+        // candidates 非空、page=0,`,` 不满足 paging(page>0),走标点上屏。
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "你好\u{FF0C}"),
+            "nihao, 应仍出「你好,」: {out:?}"
+        );
+    }
+
+    // —— B2 音节分隔符 `'` ——
+
+    #[test]
+    fn apostrophe_disambiguates_xian() {
+        // `xi'an` → 「西安」:强制切分点让 [xi, an] 成为唯一双音节切法,
+        // 西安(xi an)应出现在候选里,且其 `pinyin` 字段不含 `'`。
+        //
+        // 三段式(原断言选错了观测点,本轮改写):
+        // - 原断言:「西安**出现在**候选里」。但西安在不带 `'` 的 `xian`
+        //   下本来就会出现(实机第 18 名),所以这条断言在「`'` 根本没
+        //   生效」的 bug 存在时也是绿的——它没测到消歧;
+        // - 改为**消歧语义**:消歧的定义是「另一种切法的候选**消失**」。
+        //   `xi'an` 的候选里**不得出现**只能由 `[xian]` 这条单音节切法
+        //   产生的词(如「先」,pinyin 恰为 `xian`),同时「西安」要在;
+        // - 为什么新行为对:`'` 是用户敲的强制切分点(librime 的
+        //   `delimiters`),`xi'an` 把输入钉成 [xi | an] 两段,`[xian]`
+        //   这条单音节边**不得**再产生——「先/现/显/线」这些只能来自
+        //   `[xian]` 的字因此消失,这才是 `'` 起作用的证据。只断「西安
+        //   存在」无法区分「`'` 生效」与「`'` 被静默删掉」两种实现。
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("西安", "xi an", 100).expect("插入失败");
+        engine.dict.upsert("先", "xian", 50).expect("插入失败");
+        let cands = engine
+            .lookup_candidates("xi'an", &crate::LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            cands.iter().any(|c| c.word == "西安"),
+            "xi'an 应能消歧出「西安」: {:?}",
+            cands.iter().take(6).map(|c| &c.word).collect::<Vec<_>>()
+        );
+        let c = cands.iter().find(|c| c.word == "西安").expect("应存在");
+        assert_eq!(c.pinyin, "xi an", "词典 key 不含 `'`:{:?}", c.pinyin);
+        // 消歧的关键:只能由 `[xian]` 单音节切法产生的「先」必须消失。
+        // 它是 `[xian]` 复活的标志——`'` 若被静默删掉,「先」会照常出现。
+        assert!(
+            !cands.iter().any(|c| c.word == "先" && c.pinyin == "xian"),
+            "xi'an 不应再召回只能由 `[xian]` 切出的「先」(`'` 未生效回归): {:?}",
+            cands.iter().take(6).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn apostrophe_never_leaks_into_candidate_pinyin() {
+        // `'` 不能进任何 `Candidate.pinyin`(词典 key 是空格分隔)。
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("西安", "xi an", 100).expect("插入失败");
+        engine.dict.upsert("先", "xian", 50).expect("插入失败");
+        engine.dict.upsert("岸", "an", 80).expect("插入失败");
+        let cands = engine
+            .lookup_candidates("xi'an", &crate::LmContext::empty())
+            .expect("查询失败");
+        for c in &cands {
+            assert!(!c.pinyin.contains('\''), "Candidate.pinyin 不应含 `'`:{:?}", c.pinyin);
+        }
+    }
+
+    #[test]
+    fn apostrophe_backspace_and_caret_cross_it() {
+        // `'` 能被 Backspace 删掉、caret 能跨过它(B1 的可编辑缓冲不许坏)。
+        let mut s = session_with_dict();
+        for c in "xi'an".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        assert_eq!(s.pinyin(), "xi'an");
+        assert_eq!(s.caret(), 5);
+
+        // caret 左移跨过 `'`(从 5 到 2,停在 i 后 ' 前)
+        for _ in 0..3 {
+            s.handle(InputEvent::Left).expect("不应失败");
+        }
+        assert_eq!(s.caret(), 2, "caret 应跨过 `'` 与字母");
+        // Backspace 删 caret 前的 i → x'an
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "x'an");
+
+        // caret 移到 `'` 后(位置 2),Backspace 删 `'` → xan
+        let mut s = session_with_dict();
+        for c in "x'a".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        // caret 在 3(串尾),左移 1 到 2(' 后),Backspace 删 '
+        s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 2);
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "xa", "Backspace 应能删掉 `'`");
+    }
+
+    #[test]
+    fn apostrophe_edge_cases_do_not_panic() {
+        // 连续 `''`、串首 `'`、串尾 `'`、全 `'` 都不 panic、都返回某个
+        // 合法的 SessionOutput(不断言具体候选,只钉住「不崩」)。
+        let mut s = session_with_dict();
+        for input in ["''", "an'", "'a", "a''n", "'''"] {
+            // 每个用全新会话,避免前一个的 preedit 干扰
+            let mut s = std::mem::replace(&mut s, session_with_dict());
+            for c in input.chars() {
+                // 串首的 `'` 会透传(Noop),后续进串;都不应 panic
+                let _ = s.handle(InputEvent::Char(c)).expect("不应失败");
+            }
+        }
+    }
+
+    // —— editor 的 Ctrl+Delete 删候选 ——
+
+    #[test]
+    fn ctrl_delete_removes_highlighted_candidate() {
+        // 删掉高亮候选后,重查同一拼音,该候选不再出现。
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        engine.dict.upsert("你", "ni", 200).expect("插入失败");
+        engine.dict.upsert("逆", "ni", 50).expect("插入失败");
+        let mut s = InputSession::new(Arc::clone(&engine));
+
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        // 高亮在 cursor=0(「你」,词频最高);Ctrl+Delete 删掉它
+        let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert!(
+                    u.candidates.iter().all(|c| c.word != "你"),
+                    "删掉后「你」不应再出现: {:?}",
+                    u.candidates.iter().map(|c| &c.word).collect::<Vec<_>>()
+                );
+                assert!(u.candidates.iter().any(|c| c.word == "逆"), "「逆」应还在");
+            }
+            other => panic!("DeleteCandidate 应返回 Updated,实际 {other:?}"),
+        }
+        // 重新查询同一拼音:「你」仍被屏蔽
+        let cands = engine
+            .lookup_candidates("ni", &crate::LmContext::empty())
+            .expect("查询失败");
+        assert!(cands.iter().all(|c| c.word != "你"), "重查后「你」仍应被屏蔽");
+    }
+
+    #[test]
+    fn ctrl_delete_user_coined_entry_also_removed() {
+        // 删掉用户造的词 → 用户词条也被删掉(连根拔)。
+        let (engine, mut s) = session_for_coin(&[
+            ("张", "zhang", 100),
+            ("三", "san", 100),
+            ("丰", "feng", 100),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+        type_and_commit(&mut s, "zhang", "张");
+        type_and_commit(&mut s, "san", "三");
+        type_and_commit(&mut s, "feng", "丰");
+        s.break_coin_run();
+        assert_eq!(user.entry_len(), 1, "已造出「张三丰」");
+
+        // 打出整串,定位并删掉「张三丰」候选
+        for c in "zhangsanfeng".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let cands = s.engine
+            .lookup_candidates("zhangsanfeng", &crate::LmContext::empty())
+            .expect("查询失败");
+        let idx = cands.iter().position(|c| c.word == "张三丰").expect("应能查到造词");
+        // 把高亮移到该候选,再 Ctrl+Delete
+        while s.candidates.get(s.cursor).map(|c| c.word.as_str()) != Some("张三丰") {
+            s.handle(InputEvent::Down).expect("下移失败");
+        }
+        let _ = idx;
+        s.handle(InputEvent::DeleteCandidate).expect("删除失败");
+        assert_eq!(user.entry_len(), 0, "删掉用户造词应连同词条删除");
+        assert!(
+            user.snapshot().is_blocked("zhang san feng", "张三丰"),
+            "且已屏蔽"
+        );
+    }
+
+    #[test]
+    fn ctrl_delete_dict_word_only_blocks_not_touch_dict() {
+        // 删掉词库词:屏蔽生效,但词库只读——dict.bin 不被修改。
+        // 用内存词库塞一个词当「词库词」,屏蔽后词库里它仍在
+        // (lookup 能查到),只是候选收口把它滤掉。
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        engine.dict.upsert("词库词", "ci ku ci", 100).expect("插入失败");
+        let mut s = InputSession::new(Arc::clone(&engine));
+        for c in "cikuci".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        // 定位并删掉
+        while s.candidates.get(s.cursor).map(|c| c.word.as_str()) != Some("词库词") {
+            if s.handle(InputEvent::Down).is_err() { break; }
+            if s.cursor > 50 { panic!("找不到词库词候选"); }
+        }
+        s.handle(InputEvent::DeleteCandidate).expect("删除失败");
+        // 词库里它仍在(只读词库没有被改——对内存词库而言 lookup 仍命中)
+        let still_in_dict = engine.dict.lookup("ci ku ci").expect("查询失败");
+        assert!(
+            still_in_dict.iter().any(|c| c.word == "词库词"),
+            "词库词只屏蔽,词库本体不动"
+        );
+        // 但候选列表里它被滤掉
+        let cands = engine
+            .lookup_candidates("cikuci", &crate::LmContext::empty())
+            .expect("查询失败");
+        assert!(cands.iter().all(|c| c.word != "词库词"), "候选里应被屏蔽");
+    }
+
+    #[test]
+    fn ctrl_delete_down_to_empty_does_not_panic() {
+        // 删到候选列表空:不 panic,update 照常(cursor/page 收敛到 0)。
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        engine.dict.upsert("你", "ni", 200).expect("插入失败");
+        let mut s = InputSession::new(Arc::clone(&engine));
+        for c in "ni".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        // 连续删,直到没有候选(每删一个 refresh 一次,可能冒出回声;
+        // 回声也能被 Ctrl+Delete 屏蔽——它的 (key,word)=(ni,ni))
+        for _ in 0..8 {
+            let has = s.candidates.get(s.cursor).is_some();
+            if !has { break; }
+            let out = s.handle(InputEvent::DeleteCandidate).expect("删除不应失败");
+            assert!(matches!(out, SessionOutput::Updated(_)), "删到空也应 Updated");
+        }
+        // 再按一次:无候选,吃掉按键、状态不变、不 panic
+        let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Updated(_)), "空候选时 DeleteCandidate 吃掉按键不 panic");
+    }
+
+    #[test]
+    fn ctrl_delete_passthrough_when_idle() {
+        // 拼音串为空:Ctrl+Delete 透传给应用(应用的删词快捷键不被吃掉)。
+        let mut s = session_with_dict();
+        let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Noop), "空闲时 Ctrl+Delete 应透传");
+    }
 }
+

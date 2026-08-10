@@ -92,6 +92,8 @@ pub mod keyval {
     /// 翻页键。
     pub const PAGE_UP: u32 = 0xff55;
     pub const PAGE_DOWN: u32 = 0xff56;
+    /// Delete(0xffff;Ctrl+Delete 删候选用,见 engine.rs 的拦截)。
+    pub const DELETE: u32 = 0xffff;
 }
 
 /// 协议层错误。
@@ -156,10 +158,12 @@ pub fn translate_keyval(keyval: u32, state: u32) -> Option<InputEvent> {
             }
         }
         // ASCII 可打印标点(0x21..=0x7e 去掉字母数字):原样放行,
-        // 含 `'`——它是 B2 音节分隔符的预留键,会话层当前对它 Noop
-        // 透传,行为与本轮之前逐位一致(见 punctuator.rs 模块文档)。
+        // 含 `'`——B2 音节分隔符(已在会话层落地:拼音串非空时进拼音串
+        // 当强制切分点,空闲时透传,见 punctuator.rs 模块文档)。
         // 注意:`=` `+` `-` `#` `%` `&` `*` `@` `|` 等没有全角映射的
-        // 字符也走这条路,会话层对它们 Noop 透传(键不会被吃掉)。
+        // 字符也走这条路;其中 `-`/`=` 在会话层候选窗开着时翻页
+        // (librime paging_with_minus_equal),其余无映射符号 Noop 透传
+        // (键不会被吃掉)。
         0x21..=0x7e => Some(InputEvent::Char(keyval as u8 as char)),
         _ => None,
     }
@@ -525,9 +529,9 @@ mod tests {
         assert_eq!(translate_keyval(0x5e, 0), Some(InputEvent::Char('^')), "抑扬符");
         assert_eq!(translate_keyval(0x5f, 0), Some(InputEvent::Char('_')), "下划线");
         assert_eq!(translate_keyval(0x7e, 0), Some(InputEvent::Char('~')), "波浪号");
-        // `'`(0x27)也放行——它是 B2 音节分隔符预留键,会话层对它 Noop
-        // 透传,与本轮之前「translate 返回 None 透传」的可观察行为一致
-        assert_eq!(translate_keyval(0x27, 0), Some(InputEvent::Char('\'')), "单引号(B2 预留)");
+        // `'`(0x27)也放行——B2 音节分隔符(会话层:拼音串非空时进拼音串
+        // 当强制切分点,空闲时透传)
+        assert_eq!(translate_keyval(0x27, 0), Some(InputEvent::Char('\'')), "单引号(B2 音节分隔符)");
         // DEL 与控制字符仍不识别
         assert!(translate_keyval(0x7f, 0).is_none(), "DEL 不处理");
         assert!(translate_keyval(0x09, 0).is_none(), "Tab 不处理");

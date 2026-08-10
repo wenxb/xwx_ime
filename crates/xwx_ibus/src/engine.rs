@@ -193,6 +193,27 @@ impl XwxEngineServer {
             return true; // 消费掉，应用不再收到 Ctrl+空格
         }
 
+        // —— Ctrl+Delete:删当前高亮候选 ——
+        // 与 Ctrl+空格同一理由放在修饰键透传过滤**之前**:普通 Ctrl 组合
+        // 键会被下面的过滤器整体透传,这里把 Ctrl+Delete 单拎出来拦截。
+        // 只认纯 Ctrl+Delete(Ctrl+Shift+Delete 等仍是应用快捷键);
+        // 会话层在无候选时对它返回 Noop,这里随之返回 false 透传给应用
+        // (应用的「删词」快捷键不被吃掉)。
+        let is_ctrl_delete = keyval == ibus_proto::keyval::DELETE
+            && state & ibus_proto::IBUS_RELEASE_MASK == 0
+            && state & ibus_proto::IBUS_CONTROL_MASK != 0
+            && state
+                & (ibus_proto::IBUS_SHIFT_MASK
+                    | ibus_proto::IBUS_LOCK_MASK
+                    | ibus_proto::IBUS_MOD1_MASK
+                    | ibus_proto::IBUS_SUPER_MASK
+                    | ibus_proto::IBUS_HYPER_MASK
+                    | ibus_proto::IBUS_META_MASK)
+                == 0;
+        if is_ctrl_delete {
+            return self.handle_key(&ctxt, InputEvent::DeleteCandidate).await;
+        }
+
         // —— 其余：释放事件与 Ctrl/Alt/Super/Hyper/Meta 组合键透传给应用 ——
         if state
             & (ibus_proto::IBUS_RELEASE_MASK

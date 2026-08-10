@@ -335,6 +335,20 @@ impl ImeEngine {
         user.add_entry(word, pinyin_key);
     }
 
+    /// 删一条候选(Ctrl+Delete 的引擎侧落点):屏蔽它,此后同拼音查询
+    /// 不再出现;若是用户造词条目则连同词条删掉(词库词只屏蔽——
+    /// 词库只读,mmap 不可改,屏蔽是唯一可行的删除形态)。
+    ///
+    /// 无用户层时是 no-op(与 [`Self::learn_committed`] / [`Self::coin_entry`]
+    /// 同一取舍:删候选是用户数据,没有用户数据层就没有「删除」的载体)。
+    /// 落盘复用用户模型的 dirty/flush 调度,不在此同步做。
+    pub(crate) fn delete_candidate(&self, word: &str, pinyin_key: &str) {
+        let Some(user) = self.user_lm() else {
+            return;
+        };
+        user.block_candidate(word, pinyin_key);
+    }
+
     /// 当前词库词条总数（启动日志/统计用；内存空词库时为 0）。
     pub fn dict_count(&self) -> u64 {
         match &self.dict {
@@ -379,7 +393,54 @@ impl ImeEngine {
             return Ok(Vec::new());
         }
 
-        let lattice = self.build_lattice(pinyin)?;
+        // B2 音节分隔符:`'` 是用户敲的**强制切分点**(`xi'an` 消歧出
+        // 「西安」)。这里把它归一化成「干净串 + 边界表」两个量:
+        // - `pinyin`:去掉 `'` 的干净串。`'` 不进词典 key、不进
+        //   `Candidate.pinyin`(词典 key 是空格分隔音节);
+        // - `boundaries`:每个 `'` 在干净串中对应位置的**字节偏移**
+        //   (`xi'an` → 干净串 `xian` + `[2]`),即「不允许任何音节/边
+        //   跨越」的位置表,贯穿格构建、beam、后向 DP 与排序的 u_min
+        //   桶([`Self::build_lattice`] 与 [`unreachable_tail`] 的注释)。
+        //
+        // **只删 `'` 不传边界是错的**(上一版实现):删完 `xi'an` 变回
+        // `xian`,而 `xian` 本身是合法音节,`[xian]` 这条单音节切法原样
+        // 复活,「先/现/显/线」照常在候选里——`'` 完全没起到强制切分的
+        // 作用(实机:`xian` 与 `xi'an` 候选逐字节相同)。正确语义是
+        // librime 的 `delimiters`:`'` 把输入钉成 [xi | an] 两段,
+        // 段内照常枚举音节链,**跨段边一律不建**。
+        //
+        // 归一化在这里做(而不是会话层):让「展示给用户的串」与
+        // 「查词典的串」解耦——会话/preedit 保留用户敲的 `xi'an`,
+        // 引擎内部只认干净拼音。无 `'` 输入走 `Cow::Borrowed` +
+        // 空边界表,零分配,既有路径**逐字节不变**(判退化的硬约束)。
+        let (pinyin, boundaries): (std::borrow::Cow<'_, str>, Vec<usize>) =
+            if pinyin.contains('\'') {
+                let mut clean = String::with_capacity(pinyin.len());
+                let mut bounds = Vec::new();
+                for ch in pinyin.chars() {
+                    if ch == '\'' {
+                        // `'` 是单字节 ASCII,clean.len() 即干净串中的字节偏移
+                        bounds.push(clean.len());
+                    } else {
+                        clean.push(ch);
+                    }
+                }
+                (std::borrow::Cow::Owned(clean), bounds)
+            } else {
+                (std::borrow::Cow::Borrowed(pinyin), Vec::new())
+            };
+        let pinyin: &str = &pinyin;
+        if pinyin.is_empty() {
+            // 输入全是 `'`(如 `'`、`''`):归一化后为空,无候选。
+            return Ok(Vec::new());
+        }
+        let bounds: Option<&[usize]> = if boundaries.is_empty() {
+            None
+        } else {
+            Some(&boundaries)
+        };
+
+        let lattice = self.build_lattice(pinyin, bounds)?;
         let paths = self.decode_beam_with_lattice(pinyin, ctx, BEAM_WIDTH, &lattice)?;
         if paths.is_empty() {
             // 整串还不能完整解码(首音节没打完 / 停在半音节):兜底联想,
@@ -390,8 +451,17 @@ impl ImeEngine {
             // 已按 MAX_CANDIDATES 截断,若先合并再截断,简拼层(在排序
             // 最末)会整体被截掉。合并后重排截断,简拼层得以保留
             // (它只与同样排在末尾的兜底长尾竞争最后的候选位)。
-            let abbrev = self.abbrev_candidates(pinyin, ctx, &ranked)?;
+            // 简拼层只在「无 `'`」时合并:用户敲了 `'` 就是给了明确的
+            // 全拼切分,`lookup_abbrev`/`lookup_mixed` 会把干净串当简拼
+            // 前缀重新查出 `[xian]` 系的字(先/现/显),把刚消掉的歧义
+            // 又灌回来——含 `'` 的查询语义上不是简拼,跳过简拼层。
+            let abbrev = if bounds.is_none() {
+                self.abbrev_candidates(pinyin, ctx, &ranked)?
+            } else {
+                Vec::new()
+            };
             let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
+            self.filter_blocked(&mut ranked);
             if ranked.is_empty() {
                 ranked.push(Self::echo_candidate(pinyin));
             }
@@ -451,7 +521,13 @@ impl ImeEngine {
         // 不再进简拼层(`abbrev_candidates` 内部去重)。截断走
         // `merge_with_abbrev`:简拼层有 ABBREV_QUOTA 个保底名额,
         // 精确层装满 100 时不再把简拼层整层截掉(PLAN.md 第三节缺口)。
-        let abbrev = self.abbrev_candidates(pinyin, ctx, &ranked)?;
+        // 含 `'` 时跳过简拼层(见上一条路径的注释):用户给了明确切分,
+        // 简拼会把 `[xian]` 系的字重新灌回来,破坏消歧。
+        let abbrev = if bounds.is_none() {
+            self.abbrev_candidates(pinyin, ctx, &ranked)?
+        } else {
+            Vec::new()
+        };
         let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
         // 回声候选兜底(公开 API 后置条件:非空输入 ⇒ 候选非空):
         // 整串连兜底联想都解不出任何候选时(如不支持的简拼),追加一个
@@ -462,7 +538,22 @@ impl ImeEngine {
         if ranked.is_empty() && !pinyin.is_empty() {
             ranked.push(Self::echo_candidate(pinyin));
         }
+        self.filter_blocked(&mut ranked);
         Ok(ranked)
+    }
+
+    /// 候选收口的统一过滤:把被用户 Ctrl+Delete 屏蔽的候选从最终
+    /// 列表里滤掉(在排序、截断、合并、回声兜底**全部完成后**——
+    /// 这样屏蔽不改变任何「保留候选」的相对排序与得分,只做删除)。
+    ///
+    /// 快照取自用户层(若有):无用户层时一次都不查,**空屏蔽表时
+    /// 候选列表逐字节不变**(判退化的结构性保证)。回声候选的
+    /// (key, word) = (输入串, 输入串),天然撞不上任何屏蔽键。
+    fn filter_blocked(&self, ranked: &mut Vec<Candidate>) {
+        let Some(snap) = crate::user_lm::user_entries_snapshot(&self.lm) else {
+            return;
+        };
+        ranked.retain(|c| !snap.is_blocked(&c.pinyin, &c.word));
     }
 
     /// 后向 DP(A3):`result[pos]` = 从 `pos` 到串尾的最优补全分
@@ -499,6 +590,9 @@ impl ImeEngine {
         let _ = ctx;
         let initial = self.lm.initial_state();
 
+        // `'` 强制切分点的语义已在 `build_lattice` 的逐音节检查里完全
+        // 落实——格里本来就不含任何跨 `'` 的边,后向 DP 在格上递推,
+        // 继承格的边界语义即可,不需要也不应再做边界过滤。
         for pos in (0..len).rev() {
             for edge in &lattice[pos] {
                 if !result[edge.end].is_finite() {
@@ -615,7 +709,20 @@ impl ImeEngine {
     ///   变体键同样查词（比旧实现只展开整串更细：`"ni hao"` → `"li hao"`
     ///   这类"词内模糊"也够得到）；
     /// - 精确键 + 变体键用 key 级缓存，重复键只查一次词库。
-    fn build_lattice(&self, pinyin: &str) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
+    ///
+    /// `bounds` 是 B2 的 `'` 强制切分点(干净串中的字节偏移表,升序;
+    /// `None` = 无 `'` 输入,走原有零开销路径)。每个边界把输入钉成前后
+    /// 两段:**任何边不得跨越它**——链的音节一旦恰好落在边界上就停下
+    /// (不再延长),于是 `xi'an`(干净串 `xian` + 边界 2)的格里没有
+    /// [xian] 这条单音节边,「先/现/显/线」从源头消失,「西安」
+    /// ([xi, an])成为唯一的整串双音节切法。`'` 本身已在
+    /// `lookup_candidates` 归一化时剥掉,干净串里没有 `'` 字符,
+    /// 词典 key 与 `Candidate.pinyin` 因此永远不含 `'`。
+    fn build_lattice(
+        &self,
+        pinyin: &str,
+        bounds: Option<&[usize]>,
+    ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let n = pinyin.len();
         let mut lattice: Vec<Vec<LatticeEdge>> = (0..=n).map(|_| Vec::new()).collect();
         if !pinyin.is_ascii() {
@@ -631,7 +738,7 @@ impl ImeEngine {
             let mut chain: Vec<&str> = Vec::new();
             self.collect_chain_edges(
                 pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
-                user_entries.as_ref(),
+                user_entries.as_ref(), bounds,
             )?;
         }
         Ok(lattice)
@@ -649,6 +756,7 @@ impl ImeEngine {
         cache: &mut HashMap<String, Vec<Candidate>>,
         budget: &mut usize,
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
+        bounds: Option<&[usize]>,
     ) -> Result<(), EngineError> {
         let n = pinyin.len();
         if chain.len() >= MAX_EDGE_SYLLABLES || *budget == 0 {
@@ -658,6 +766,13 @@ impl ImeEngine {
         for len in 1..=max_len {
             if *budget == 0 {
                 return Ok(());
+            }
+            // `'` 强制切分点:当前音节 [pos, pos+len) 内部不得含边界
+            // (边界落在音节*边界*上是合法的、正是消歧要的切分;落在音节
+            // *内部*才非法——如 `xian` 单音节跨 2)。`bounds` 为 None
+            // (无 `'` 输入)时此分支一次都不进,与改动前逐字节一致。
+            if bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x < pos + len)) {
+                continue;
             }
             let syl = &pinyin[pos..pos + len];
             if !self.segmenter.is_syllable(syl) {
@@ -713,7 +828,7 @@ impl ImeEngine {
 
             // 深度优先：延长链（下一音节从 `end` 继续）
             self.collect_chain_edges(
-                pinyin, start, end, chain, lattice, cache, budget, user_entries,
+                pinyin, start, end, chain, lattice, cache, budget, user_entries, bounds,
             )?;
             chain.pop();
         }
@@ -735,7 +850,7 @@ impl ImeEngine {
         if pinyin.is_empty() {
             return Ok(Vec::new());
         }
-        self.decode_beam_with_lattice(pinyin, ctx, k, &self.build_lattice(pinyin)?)
+        self.decode_beam_with_lattice(pinyin, ctx, k, &self.build_lattice(pinyin, None)?)
     }
 
     /// 与 [`Self::decode_beam`] 相同，但格子由调用方传入（分层便于
@@ -762,6 +877,9 @@ impl ImeEngine {
         });
         beams[0].push(0);
 
+        // 注:`'` 强制切分点已在 `build_lattice` 的逐音节检查里完全
+        // 落实——格里本来就不含任何跨 `'` 的边,beam 只在格上推进,
+        // 不需要也不应再做边界过滤(边的合法性由格决定)。
         for pos in 0..len {
             let cur = std::mem::take(&mut beams[pos]);
             if cur.is_empty() {
@@ -966,7 +1084,33 @@ fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
     // 可免的那部分未解释),与词频、LM 分在同一量纲竞争——系数经
     // 实测标定(见常量注释),让 `zhongguo` 的「中/种」压过段内词,
     // 但不再出现裸 u 硬键的「生僻组合词淹没高频单字」。
-    let umin = unreachable_tail(inp);
+    // `inp` 是排序时的查询串:可能含 B2 的 `'`(会话层把原始输入串直接
+    // 传进来)。排序首键 u_min 桶要与格构建/beam/后向 DP 用**同一份**
+    // 「不许跨 `'`」的可达性,故在这里把 `'` 归一化成边界表(与
+    // `lookup_candidates` 开头的归一化同式);无 `'` 时 `bounds` 为
+    // `None`,`unreachable_tail` 走原有零开销路径。
+    let (inp_clean, bounds_vec): (std::borrow::Cow<'_, str>, Vec<usize>) =
+        if inp.contains('\'') {
+            let mut clean = String::with_capacity(inp.len());
+            let mut bounds = Vec::new();
+            for ch in inp.chars() {
+                if ch == '\'' {
+                    bounds.push(clean.len());
+                } else {
+                    clean.push(ch);
+                }
+            }
+            (std::borrow::Cow::Owned(clean), bounds)
+        } else {
+            (std::borrow::Cow::Borrowed(inp), Vec::new())
+        };
+    let inp: &str = &inp_clean;
+    let bounds: Option<&[usize]> = if bounds_vec.is_empty() {
+        None
+    } else {
+        Some(&bounds_vec)
+    };
+    let umin = unreachable_tail(inp, bounds);
     // 预计算每个候选的数值键:`sort_by` 每次比较调两次 `sort_key`,
     // 而 `sort_key` 里的 `unexplained_letters` / `cp_len` 都要对
     // `c.pinyin` 做一次 chars 过滤(O(拼音长));500 条候选的简拼层
@@ -1089,7 +1233,7 @@ struct SortKey<'a> {
 ///
 /// 后向一次 DP 算出可达性,再正向把不可达位置映射到距离;返回表长
 /// `inp.len() + 1`,索引即字节位置(调用方已保证 `inp` 为 ASCII)。
-fn unreachable_tail(inp: &str) -> Vec<usize> {
+fn unreachable_tail(inp: &str, bounds: Option<&[usize]>) -> Vec<usize> {
     let n = inp.len();
     let mut reach = vec![false; n + 1];
     reach[n] = true;
@@ -1098,10 +1242,26 @@ fn unreachable_tail(inp: &str) -> Vec<usize> {
     // 音节 collect 进 HashSet,而本函数每次 `sort_candidates` 调用都
     // 跑一次(一次查询几十次),实测会把击键延迟放大 7~50 倍
     // (lookup_bench:womenjintianquxian 1.5ms→10.2ms)。
+    //
+    // `bounds` 是 B2 的 `'` 强制切分点(干净串字节偏移):音节链不得跨越
+    // 它(与 `build_lattice` 同一语义)。长度为 l 的音节 [i, i+l) 若跨过
+    // 某个边界(边界严格落在 (i, i+l) 内部)就跳过该链——`xi'an`(干净串
+    // `xian`,边界 2)的 `xian` 单音节链由此不可达,[xi, an] 才是唯一的
+    // 整串切法。`bounds` 为 `None`(无 `'` 输入)时此分支一次都不进,与
+    // 改动前逐字节一致(判退化的硬约束)。
     for i in (0..n).rev() {
         let max_len = (n - i).min(segmenter::MAX_SYLLABLE_LEN);
         reach[i] = (1..=max_len).any(|l| {
-            reach[i + l] && SYLLABLES.binary_search(&&inp[i..i + l]).is_ok()
+            if !reach[i + l] {
+                return false;
+            }
+            if let Some(b) = bounds {
+                // 跨过 ⇔ 存在边界严格落在 (i, i+l) 内部。
+                if b.iter().any(|&x| i < x && x < i + l) {
+                    return false;
+                }
+            }
+            SYLLABLES.binary_search(&&inp[i..i + l]).is_ok()
         });
     }
     (0..=n)
@@ -1275,7 +1435,7 @@ mod tests {
         if cp_len > inp.len() {
             0 // 补全词必以输入开头,u=0,桶恒 0
         } else {
-            unreachable_tail(inp)[cp_len]
+            unreachable_tail(inp, None)[cp_len]
         }
     }
 
@@ -1389,6 +1549,54 @@ mod tests {
         assert!(!cands.is_empty(), "ni 应有候选");
         assert_eq!(cands[0].word, "你", "最高频词应为 你");
         assert!(!dict.lookup_prefix("zhon").expect("前缀查询失败").is_empty());
+    }
+
+    /// B2 消歧(真实词库):`xi'an` 的候选里**不得**含只能由 `[xian]`
+    /// 单音节切法产生的高频字(先/现/显/线/险/仙……),且「西安」必须
+    /// 出现且名次显著前移。玩具词库里只有两三个词,挡不住「`'` 被静默
+    /// 删掉、`[xian]` 原样复活」这类问题——真实词库下 `xian` 有 100 个
+    /// 候选,这些字是否消失才看得出来。缺 `data/dict.bin` 时跳过。
+    #[test]
+    fn real_dict_apostrophe_disambiguates_xian() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !path.is_file() {
+            return;
+        }
+        let engine = ImeEngine::new(Some(&path)).expect("mmap 词库加载失败");
+
+        // 对照组:不带 `'` 的 `xian` 必须**有**这些单音节字(消歧的前提)。
+        let plain = engine
+            .lookup_candidates("xian", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            plain.iter().any(|c| c.word == "先" && c.pinyin == "xian"),
+            "对照组 `xian` 应含「先」(否则本测试的消歧断言失去意义)"
+        );
+
+        // 实验组:`xi'an` 不得召回任何只能由 `[xian]` 切出的字。
+        let cands = engine
+            .lookup_candidates("xi'an", &LmContext::empty())
+            .expect("查询失败");
+        for w in ["先", "现", "显", "线", "险", "仙"] {
+            assert!(
+                !cands.iter().any(|c| c.word == w && c.pinyin == "xian"),
+                "xi'an 不应再召回只能由 `[xian]` 切出的「{w}」(`'` 未生效回归): 前 10 {:?}",
+                cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+            );
+        }
+        // 「西安」必须在,且名次显著前移(对照组第 18 名;消歧后候选池
+        // 只剩 [xi|an] 系,应在第一页前列)。不设「必须第 1」硬指标——
+        // 名次由数据决定,但绝不应再被 [xian] 的高频单字压在 18 名。
+        let rank = cands
+            .iter()
+            .position(|c| c.word == "西安")
+            .unwrap_or_else(|| panic!("xi'an 应含「西安」: {:?}", cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()));
+        assert!(
+            rank < 10,
+            "xi'an 的「西安」应显著前移(对照组第 18 名),实际第 {} 名: 前 10 {:?}",
+            rank + 1,
+            cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+        );
     }
 
     #[test]
