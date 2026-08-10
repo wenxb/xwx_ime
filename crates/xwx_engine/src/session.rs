@@ -177,6 +177,17 @@ pub struct InputSession {
     /// 标点、Verbatim 大写都没有合法拼音,不进缓冲(与它们不进
     /// UserLM 学习是同一判断)。
     coin_buffer: Vec<(String, String)>,
+    /// recognizer 识别态(gear 审计最后一项:邮箱/网址识别)。
+    ///
+    /// `Some(_)` 表示当前拼音串整体被 [`crate::recognize`] 判定为
+    /// 邮箱/网址原文(如 `zhangsan@gmail.com`、`www.example.com`):
+    /// 候选列表被一条「原样上屏」的回声候选取代(拼音候选消失——
+    /// 「万维网/呜呜呜」不再出现在 `www.` 之后),`.`/`@`/`:` 等
+    /// 符号键直通进串(不被标点/翻页吃掉)。**每接纳/回删一个字符
+    /// 后用完整串重判一次**,判定是纯函数、状态只在会话层——
+    /// 「继续打字不反悔」与「Backspace 退回正常拼音」都由这个
+    /// 重判天然给出(见 `handle` 的 Char/Backspace 分支)。
+    recognized: Option<crate::Recognized>,
 }
 
 impl InputSession {
@@ -194,6 +205,7 @@ impl InputSession {
             last_word: None,
             english_mode: false,
             coin_buffer: Vec::new(),
+            recognized: None,
         }
     }
 
@@ -240,6 +252,20 @@ impl InputSession {
             // —— Ctrl+空格：切换中英文模式（引擎自己的逻辑） ——
             InputEvent::ToggleAscii => Ok(self.toggle_ascii()),
 
+            // —— recognizer 识别态(邮箱/网址):字符直通进串 ——
+            // 串已被识别为原文(`zhangsan@gmail`、`www.e`…)时,**任何**
+            // 可打印字符都直接进串——`.`/`@`/`:`/`/` 不能被标点/翻页
+            // 吃掉(`www.` 的点、`http://` 的斜杠都是网址的一部分),
+            // 字母继续延长原文。进串后用完整串重判(见 refresh);
+            // 识别态下候选窗只有一条「原样上屏」回声候选,拼音候选
+            // 消失——这是 recognizer 生效的可观测标志。
+            InputEvent::Char(c) if self.recognized.is_some() && c.is_ascii() && !c.is_ascii_control() => {
+                self.pinyin.insert(self.caret, c);
+                self.caret += c.len_utf8();
+                self.refresh()?;
+                Ok(SessionOutput::Updated(self.update()))
+            }
+
             // —— 字母：进入拼音串 ——
             InputEvent::Char(c) if c.is_ascii_alphabetic() => {
                 // 在 caret 处插入(不是追加):长串中间打错字母可以
@@ -250,6 +276,53 @@ impl InputSession {
                 self.caret += c.len_utf8();
                 self.refresh()?;
                 Ok(SessionOutput::Updated(self.update()))
+            }
+            // —— recognizer 入口 1:`@`(邮箱识别) ——
+            // `@` 不在标点表、空闲时照旧透传(应用收到原字符);
+            // 拼音串非空时进串——若此刻整串命中 email pattern
+            // (`[字母][-_.0-9A-Za-z]*@`),refresh 会把会话带入识别态,
+            // 此前被切成拼音的那几个字母(abc)原样留在串里成为原文,
+            // 候选窗从「安伯尘/安保处…」换成唯一一条「abc@」回声候选
+            // ——这就是「回溯」:不需要把已进串的内容搬出去,识别态只是
+            // 「别再切它」。
+            InputEvent::Char('@') => {
+                if self.pinyin.is_empty() {
+                    Ok(SessionOutput::Noop)
+                } else {
+                    self.pinyin.insert(self.caret, '@');
+                    self.caret += 1;
+                    self.refresh()?;
+                    Ok(SessionOutput::Updated(self.update()))
+                }
+            }
+            // —— recognizer 入口 2:`:`(协议前缀 url:http:/https:/mailto:/file:/ftp:)——
+            // 前向判定(与 `.` 的触发臂同构,先于标点臂):「串 + `:`」
+            // 命中某个 url 前缀时,`:` 直接进串——**不**落到标点臂
+            // 上屏「mailto:」。`http:` 落键后串就是 url 前缀,下一键
+            // (`/`、字母)使「前缀 + 非空后缀」命中,识别成立,
+            // 此后 `//` 等全部走识别态直通臂(`/` 不会被 fullwidth_punct
+            // 映射成顿号——这是本轮修掉的坏结果「http:、、xcom」)。
+            // `:` 不与翻页键位冲突(`,`/`.`/`-`/`=` 才有翻页语义),
+            // 唯一让渡:候选窗开着时对 `nihao:` 这类串敲 `:`,出的
+            // 是识别态 `http:` 前缀而不是「拼音首选 + `:`」——
+            // 只影响四个协议名前缀,可接受(见 recognizer.rs 模块文档)。
+            // `mailto` 单独打(不接 `:`)永不触发,拼音候选不受影响。
+            InputEvent::Char(':') if !self.pinyin.is_empty() => {
+                let prospective = format!("{}:", self.pinyin);
+                if crate::URL_PREFIXES.contains(&prospective.as_str()) {
+                    self.pinyin.insert(self.caret, ':');
+                    self.caret += 1;
+                    self.refresh()?;
+                    return Ok(SessionOutput::Updated(self.update()));
+                }
+                // 非协议前缀:落到标点臂(全角 `:`),行为不变
+                let punct = fullwidth_punct(':').expect("`:` 在标点表内");
+                let head = match self.candidates.get(self.cursor).cloned() {
+                    Some(c) => self.commit_word(&c),
+                    None => self.commit_raw(self.pinyin.clone()),
+                };
+                self.push_tail(punct);
+                Ok(SessionOutput::Commit(format!("{head}{punct}")))
             }
             // —— B2 音节分隔符 `'`(librime speller 的 delimiters)——
             // 进拼音串、作为强制切分点(`xi'an` 消歧出「西安」)。
@@ -289,6 +362,37 @@ impl InputSession {
                 // 末页再按 `.`、首页再按 `,`:`page` 用 min/saturating 钳在
                 // 合法范围(不 wrap),与既有 PageUp/PageDown 分支同一行为——
                 // 多按一下无效果,不报错、不上屏、不丢候选。
+                //
+                // recognizer 入口(`.`,网址识别):`.` 是「翻页/标点」
+                // 与「url 字符」唯一正面冲突的键。判定顺序照 librime
+                // recognizer(recognizer 排在 selector 之前,匹配成功
+                // PushInput 且不再落到后续 processor):**先问「串 + `.`
+                // 会不会命中 url pattern」,命中则 `.` 进串、不翻页、
+                // 不出标点**。
+                //
+                // 落到这里的 `c` 含全部标点键,但能把整串判成 url 的
+                // 只有 `.`(`recognize` 的 url 判定只看前缀字面量与
+                // 首字符,`@`/`:` 等其余键在 url 语义下恒不命中;
+                // email 的触发键 `@` 走上面专属臂,到不了这里)。
+                //
+                // 注意收窄语义:`recognize` 对「前缀 + 空后缀」不判成立
+                // (见 recognizer.rs 模块文档),所以 `www` + `.` 在落键
+                // 瞬间**不**进识别态——`.` 照旧翻页/出「。」;用户在
+                // `.` 后再敲一个字母(`www.e`)才识别。也因此,下面的
+                // 代码路径在现在的 pattern 集下**不可达**(没有任何
+                // 「加 `.` 后 newly 命中」的串):它防的是将来放宽
+                // 「前缀后必须有内容」这条收窄时,`.` 被翻页/标点
+                // 抢走。保留它是有意的——去掉它,那个未来改动会
+                // 静默退化成「`.` 被吃掉」。
+                if !self.candidates.is_empty()
+                    && c == '.'
+                    && crate::recognize(&format!("{}{}", self.pinyin, c)).is_some()
+                {
+                    self.pinyin.insert(self.caret, '.');
+                    self.caret += 1;
+                    self.refresh()?;
+                    return Ok(SessionOutput::Updated(self.update()));
+                }
                 if !self.candidates.is_empty() {
                     let max_page = self
                         .candidates
@@ -493,8 +597,69 @@ impl InputSession {
     /// TODO: 这里目前是"全量重查"；性能优化方向是增量更新
     /// （追加一个字母时只查新增前缀 + 复用旧候选）。
     fn refresh(&mut self) -> Result<(), EngineError> {
+        // recognizer 重判(每次重查候选前):整串命中邮箱/网址 pattern
+        // 时进入(或保持)识别态——候选列表**只有一条**「原样上屏」的
+        // 回声候选(词 = 原始串本身,`echo = true`:上屏走 commit_raw
+        // 语义,不学习、不进造词缓冲),拼音候选整批消失;不再命中时
+        // 退出识别态、恢复查词典。这条重判同时给出「继续打字不反悔」
+        // (每多一个字符整串仍命中)与「Backspace 退回」(`abc@` 删掉
+        // `@` 变回 `abc` 不再命中,候选立刻恢复)两个语义,不需要
+        // 单独的滞回状态机。
+        //
+        // **`.` 触发键补回**:`recognize` 对「url 前缀 + 空后缀」
+        // 刻意不判成立(见 recognizer.rs 模块文档),于是 `www` + `.`
+        // 落键瞬间不识别,`.` 被既有「候选窗非空 → 翻页」语义吃掉、
+        // 不进串。下一个字母到来时(`wwwe`),识别要先试「把那个被
+        // 翻页吃掉的点补回去」的形状(`www.e`)——命中则补点进串、
+        // 进识别态。「串以 www/ftp 开头、串内还没有点、补点后命中
+        // url」三个条件凑齐,唯一来源就是「用户刚在该前缀后敲过一个
+        // 被翻页吃掉的 `.`」;对正常拼音不可达(`wwwe` 之类本身
+        // 不是合法切分,只有回声候选)。caret 跟随右移一位。
+        //
+        // `:` 触发的前缀(`http:`/`https:`/`mailto:`/`file:`/`ftp:`)
+        // **不走这条路**:`:` 落键时已由 handle 的 `:` 前向臂直接进串
+        // (见「recognizer 入口 2」),不存在「被吃掉再补回」的形状。
+        // 但串此刻**就是**一条前缀(`http:`),「前缀 + 空后缀」的
+        // 收窄会让 recognize 返回 None、识别态立不住、`/` 落进标点
+        // 分支被映射成顿号(坏结果「http:、、xcom」)——所以「串
+        // 本身等于某条 url 前缀」也算识别成立:它只能来自 `:` 前向臂
+        // (`.`,` 触发的 `www.`/`ftp.` 进不了串,见上文),用户在
+        // 协议串中途,直通必须生效。
+        self.recognized = crate::recognize(&self.pinyin);
+        if self.recognized.is_none() && crate::URL_PREFIXES.contains(&self.pinyin.as_str()) {
+            self.recognized = Some(crate::Recognized::Url);
+        }
+        if self.recognized.is_none() && !self.pinyin.contains('.') {
+            for bare in ["www", "ftp"] {
+                if let Some(rest) = self.pinyin.strip_prefix(bare) {
+                    if !rest.is_empty() {
+                        let restored = format!("{bare}.{rest}");
+                        if crate::recognize(&restored).is_some() {
+                            self.pinyin = restored;
+                            if self.caret >= bare.len() {
+                                self.caret += 1;
+                            }
+                            self.recognized = crate::recognize(&self.pinyin);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
         if self.pinyin.is_empty() {
             self.candidates.clear();
+        } else if self.recognized.is_some() {
+            // 识别态:候选 = 原文本身(回声形态)。借回声候选的既有
+            // 语义:它是「词库解不出的原始输入串」,上屏按 commit_raw
+            // 处理——邮箱/网址同样不是词、不该进 UserLM/造词。
+            self.candidates = vec![Candidate {
+                word: self.pinyin.clone(),
+                pinyin: self.pinyin.clone(),
+                score: 0.0,
+                freq: 0,
+                spelling: crate::SpellingKind::Exact,
+                echo: true,
+            }];
         } else {
             self.candidates = self
                 .engine
@@ -649,6 +814,7 @@ impl InputSession {
         self.candidates.clear();
         self.cursor = 0;
         self.page = 0;
+        self.recognized = None;
     }
 
     /// 焦点切换（IBus `FocusOut` / `Reset` / `Disable`）的复位。
@@ -1520,7 +1686,7 @@ mod tests {
 
     #[test]
     fn unmapped_ascii_symbols_still_passthrough() {
-        // `+` `#` `%` `&` `*` `@` `|` 没有全角映射:
+        // `+` `#` `%` `&` `*` `|` 没有全角映射:
         // translate_keyval 的 0x21..=0x7e 整段放行会把它们送进
         // Char(c),会话层必须落到 catch-all 透传(Noop)——键不能被
         // 吃掉,也不能被塞进拼音串。本轮动了 Char 分支的守卫,
@@ -1538,7 +1704,24 @@ mod tests {
         //   (key_bindings.yaml:27-30),它们不是「无映射透传」键而是
         //   翻页键——该测试钉的本是「无映射符号不被劫持」,把两个
         //   已被赋予翻页语义的键留在表里,断言的就不再是那个不变量。
-        let unmapped = ['+', '#', '%', '&', '*', '@', '|'];
+        //
+        // 三段式(recognizer 落地后再改写):
+        // - 原断言的字符表还含 `@`:它「无全角映射 ⇒ 任何状态下
+        //   透传」。本轮 recognizer 给 `@` 加了「拼音串非空时进串
+        //   尝试邮箱识别」(librime recognizer 的 email pattern
+        //   `^[A-Za-z][-_.0-9A-Za-z]*@.*$` 要求 `@` 能进输入串)——
+        //   串非空时 `@` 不再透传,与「透传」断言正面冲突;
+        // - 改为:把 `@` 从这张表移出,它的「空闲透传 / 串中非空时
+        //   进串识别」行为由 recognized_state_char_fallthrough_when_not_recognized
+        //   与 email_* 用例专项钉住;表里只留下「无映射、无识别语义、
+        //   无翻页语义」的其余符号,透传断言逐字不变;
+        // - 为什么新行为对:librime 的 recognizer 就排在 speller 之前、
+        //   把 `@` 视为输入串的合法成分(email pattern 的成分),它
+        //   不是「无映射透传」键而是「识别触发」键——该测试钉的本是
+        //   「无映射符号不被劫持」,把一个已被赋予识别语义的键留在
+        //   表里,断言的就不再是那个不变量。空闲时(拼音串为空)`@`
+        //   照旧透传,这一半行为不变。
+        let unmapped = ['+', '#', '%', '&', '*', '|'];
         for c in unmapped {
             assert!(
                 fullwidth_punct(c).is_none(),
@@ -2227,6 +2410,470 @@ mod tests {
         let mut s = session_with_dict();
         let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
         assert!(matches!(out, SessionOutput::Noop), "空闲时 Ctrl+Delete 应透传");
+    }
+
+    // —— recognizer(gear 审计最后一项:邮箱/网址识别)——
+    //
+    // 断言纪律(本轮任务书特别强调):**观测点是「拼音候选消失」**——
+    // 只断「回车/空格能原样上屏」没有用,`commit_raw` 在 bug 存在时
+    // 本来就能原样上屏;必须断「候选列表里不再有拼音候选、只剩一条
+    // 原文回声候选」。
+
+    /// 往会话里逐字符打 `input`,返回最后一次的输出。
+    fn type_str(s: &mut InputSession, input: &str) -> SessionOutput {
+        let mut last = SessionOutput::Noop;
+        for c in input.chars() {
+            last = s.handle(InputEvent::Char(c)).expect("按键失败");
+        }
+        last
+    }
+
+    /// 断言识别态的三条不变量:串等于原文、候选恰一条(原文回声)、
+    /// 候选窗里没有任何拼音候选(词 ≠ 原文的都不能有)。
+    fn assert_recognized(s: &InputSession, raw: &str) {
+        assert_eq!(s.pinyin(), raw, "拼音串应为原文 {raw:?}");
+        assert!(s.recognized.is_some(), "应处于识别态: {raw:?}");
+        assert_eq!(s.candidates.len(), 1, "识别态下候选应只有一条(原文回声): {raw:?}");
+        let c = &s.candidates[0];
+        assert_eq!(c.word, raw, "唯一候选应为原文本身: {raw:?}");
+        assert!(c.echo, "识别态候选应为回声形态(上屏不学习): {raw:?}");
+    }
+
+    #[test]
+    fn email_suppresses_pinyin_candidates_and_commits_raw() {
+        // 验收 A:zhangsan@gmail.com 全程(自 `@` 起)不出拼音候选,
+        // 回车/空格原样上屏。
+        let mut s = session_with_dict();
+        // `@` 之前:正常拼音态(zhangsan 可能有候选,不断言内容,只断不识别)
+        type_str(&mut s, "zhangsan");
+        assert_eq!(s.recognized, None, "@ 之前不应识别");
+        // `@` 落键:整串命中 email,候选窗立刻只剩原文一条
+        let out = s.handle(InputEvent::Char('@')).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "zhangsan@");
+                assert_eq!(u.candidates.len(), 1, "@ 落键后候选应只剩原文: {:?}", u.candidates);
+                assert_eq!(u.candidates[0].word, "zhangsan@");
+            }
+            other => panic!("@ 应返回 Updated,实际 {other:?}"),
+        }
+        // 继续敲 gmail.com:识别态保持(逐步断言见
+        // continued_typing_after_recognition_does_not_oscillate)
+        type_str(&mut s, "gmail.com");
+        assert_recognized(&s, "zhangsan@gmail.com");
+        // 回车原样上屏
+        let out = s.handle(InputEvent::Enter).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "zhangsan@gmail.com"),
+            "回车应原样上屏整个邮箱: {out:?}"
+        );
+        assert!(!s.is_active(), "上屏后复位");
+        assert_eq!(s.recognized, None, "上屏后识别态清空");
+    }
+
+    #[test]
+    fn email_space_commits_raw_via_echo_candidate() {
+        // 空格路径:识别态下唯一候选是原文回声,空格选中它上屏 = 原文。
+        let mut s = session_with_dict();
+        type_str(&mut s, "abc@x.com");
+        assert_recognized(&s, "abc@x.com");
+        let out = s.handle(InputEvent::Space).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "abc@x.com"),
+            "空格应上屏原文(经回声候选): {out:?}"
+        );
+    }
+
+    #[test]
+    fn abc_at_sign_replaces_pinyin_candidates() {
+        // 「回溯」的显式断言:`abc` 三个字母已进拼音串、候选窗开着
+        // (哪怕只有回声候选);`@` 出现后,候选列表里**不得再有**
+        // 任何词 ≠ 原文的候选——在真实词库下「安伯尘/安保处」这类
+        // 拼音候选必须消失。内存词库里 abc 切不出合法音节、只有回声
+        // 候选,所以这里断的是更弱但同构的一点:候选恰一条且词随 `@`
+        // 从「abc」变「abc@」——识别逻辑短路掉时,`@` 透传、候选
+        // 仍是「abc」,本条即红(验证见报告第 4 节)。
+        let mut s = session_with_dict();
+        type_str(&mut s, "abc");
+        assert_eq!(s.recognized, None);
+        let before: Vec<&str> = s.candidates.iter().map(|c| c.word.as_str()).collect();
+        assert_eq!(before, ["abc"], "abc 切不出音节,候选应只有回声");
+        s.handle(InputEvent::Char('@')).expect("不应失败");
+        assert_recognized(&s, "abc@");
+    }
+
+    #[test]
+    fn url_www_dot_not_eaten_by_paging_or_punct() {
+        // 验收 A 的关键边界:`www.example.com` 里第一个 `.` 是网址的
+        // 一部分,不能被翻页/标点吃掉。
+        //
+        // 三段式(原断言基于「`www` + `.` 落键即识别」的设计,
+        // 该设计在 code review 中被自己推翻,本轮改写):
+        // - 原断言:「`www` 后按 `.`,点立刻进串、preedit 为 `www.`、
+        //   识别态成立」。这要求「前缀 + 空后缀」就判 url 命中;
+        // - 改为:**`.` 落键时不识别、进识别态的动作推迟到 `.` 后的
+        //   第一个字母**(`www.e`)。`.`,在中文模式下首先是句号/翻页
+        //   键,「`www` 后用户可能只想敲个句号」的意图不该被网址
+        //   识别抢走;`www.` 这个点随后由识别态的「字符直通」补进
+        //   串里(识别态下任何可打印字符直接进串,`.` 不会被标点
+        //   分支拦),最终上屏 `www.example.com` 一个字符不缺;
+        // - 为什么新行为对:与 librime 的差异只存在于「`www.` 单独
+        //   出现时」这一个落键瞬间(librime 前缀 + `.*$` 立吞,
+        //   我们要求后缀非空);此后行为逐键一致。而「`.` 落键不被
+        //   吃掉」这一条验收判据的本意——**最终能打出一个含点的
+        //   网址**——在新行为下完整成立,见本测试末尾的上屏断言。
+        //
+        // 另:识别态下「`.` 直通进串」这一条,由
+        // url_scheme_prefixes_recognized 的 `mailto:a@b.c` 与
+        // email 全程用例(`zhangsan@gmail.com` 的第二个点)覆盖——
+        // 那里 `.` 若被标点吃掉,串根本长不到目标形状。
+        let mut s = session_with_dict();
+
+        type_str(&mut s, "www");
+        assert_eq!(s.recognized, None, "www 无后缀时必须是拼音(不退化)");
+        assert!(!s.candidates.is_empty(), "候选窗开着(回声候选也在)");
+
+        // `.` 落键:候选窗非空 → 既有 has_menu 翻页语义,串不变。
+        // (此刻「用户要敲网址」尚无证据,`.` 保持它一贯的键义。)
+        let out = s.handle(InputEvent::Char('.')).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "www", "`.` 落键瞬间串不变(翻页语义): {u:?}");
+                assert_eq!(s.recognized, None, "此刻仍不识别");
+            }
+            other => panic!("`.` 翻页应返回 Updated,实际 {other:?}"),
+        }
+
+        // 再敲一个字母:此刻「www.」+「e」构成 url,进入识别态——
+        // 候选窗里的拼音候选**消失**、只剩一条原文回声(这是
+        // recognizer 生效的标志;只断「能原样上屏」在 bug 存在时
+        // 也成立,不算数)。
+        let out = s.handle(InputEvent::Char('e')).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "www.e", "e 落键后串含点: {u:?}");
+                assert_eq!(u.candidates.len(), 1, "候选应只剩原文回声: {:?}", u.candidates);
+                assert_eq!(u.candidates[0].word, "www.e");
+                assert!(u.candidates[0].echo, "应为回声形态");
+            }
+            other => panic!("识别应返回 Updated,实际 {other:?}"),
+        }
+        // 识别态下 `.` 直通(不被标点/翻页吃掉),打完整个网址
+        type_str(&mut s, "xample.com");
+        assert_recognized(&s, "www.example.com");
+        let out = s.handle(InputEvent::Enter).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(ref t) if t == "www.example.com"),
+            "回车应原样上屏完整网址: {out:?}");
+    }
+
+    #[test]
+    fn url_scheme_prefixes_recognized() {
+        // 验收 A 点名的其余前缀,**逐字符交互**(维护者裁决 2 后全部
+        // 可从零打出):http(s)://、mailto:、ftp.、file:。
+        // `:`/`/`/`.` 在识别态下都必须直通进串(不被标点吃掉——
+        // `/` 尤其不能走 fullwidth_punct 映射成顿号)。
+        for (input, why) in [
+            ("http://x.com", "http: 前缀,:// 直通"),
+            ("https://x.com", "https: 前缀"),
+            ("mailto:a@b.c", "mailto: 前缀;串内 @ 也直通"),
+            ("ftp.x.com", "ftp. 前缀(`.` 触发键补回)"),
+            ("file:/x", "file: 前缀"),
+        ] {
+            let mut s = session_with_dict();
+            type_str(&mut s, input);
+            assert_recognized(&s, input);
+            let out = s.handle(InputEvent::Enter).expect("不应失败");
+            assert!(
+                matches!(out, SessionOutput::Commit(ref t) if t == input),
+                "{why}:回车应原样上屏 {input:?},实际 {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn colon_enters_string_when_scheme_prefix() {
+        // `:` 触发臂的前向判定(维护者裁决 2 的核心):`mailto` 后敲
+        // `:` → `:` 进串、**不**上屏「mailto:」、候选窗里拼音候选
+        // 消失(只剩一条原文回声)——这是「`:` 不被标点分支吃掉」
+        // 的直接断言。初版的坏结果是「mailto 被当拼音上屏成某词 +
+        // 全角冒号」,本条在该 bug 存在时必红。
+        let mut s = session_with_dict();
+        type_str(&mut s, "mailto");
+        assert_eq!(s.recognized, None, "mailto 单独打不得识别");
+        let out = s.handle(InputEvent::Char(':')).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "mailto:", "`:` 应进串: {u:?}");
+                assert!(
+                    u.candidates.iter().all(|c| c.echo),
+                    "识别态下候选应只剩回声(拼音候选消失): {:?}",
+                    u.candidates.iter().map(|c| &c.word).collect::<Vec<_>>()
+                );
+            }
+            SessionOutput::Commit(t) => {
+                panic!("`:` 不应触发上屏(初版 bug:上屏「拼音词+冒号」),实际 Commit({t:?})")
+            }
+            other => panic!("`:` 应返回 Updated,实际 {other:?}"),
+        }
+        // 继续打完,`@` 与 `.` 直通
+        type_str(&mut s, "a@b.c");
+        assert_recognized(&s, "mailto:a@b.c");
+    }
+
+    #[test]
+    fn mailto_alone_keeps_pinyin_candidates() {
+        // 「mailto 单独打(后面不接 `:`)仍出拼音候选」——`:` 触发臂
+        // 不许污染裸前缀。玩具词库里塞一个 mailto 切得出来的词
+        // ([mai, l, to] → 「买」确认可切),断言它在、且不进识别态。
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("买", "mai", 100).expect("插入失败");
+        let mut s = InputSession::new(Arc::new(engine));
+        type_str(&mut s, "mailto");
+        assert_eq!(s.recognized, None, "mailto 不接 `:` 不得识别");
+        assert!(
+            s.candidates.iter().any(|c| c.word == "买" && !c.echo),
+            "mailto 应出真实拼音候选「买」: {:?}",
+            s.candidates.iter().take(8).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bare_domain_stays_pinyin_per_ruling() {
+        // 裁决 1 的既定行为钉住:`example.com`(裸域名,无显式前缀)
+        // **仍走拼音路径**——`.` 落键时按既有标点/翻页语义消耗,
+        // 不进串、不进识别态。这条测试防止将来有人把它当「漏了」
+        // 误修。librime 的 `^[a-z]+[.].+$` 子句被有意排除,理由见
+        // recognizer.rs 模块文档。
+        let mut s = session_with_dict();
+        type_str(&mut s, "example");
+        assert_eq!(s.recognized, None);
+        // `.` 落键:候选窗非空 → 翻页(has_menu),串不变、不识别
+        let out = s.handle(InputEvent::Char('.')).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Updated(ref u) if u.preedit == "example"),
+            "裸域名的 `.` 应按翻页消耗,串不变: {out:?}"
+        );
+        assert_eq!(s.recognized, None, "裸域名不得进识别态");
+        // 继续敲 com:走正常拼音(字母进串)
+        type_str(&mut s, "com");
+        assert_eq!(s.pinyin(), "examplecom", "`.` 未进串,字母照拼");
+        assert_eq!(s.recognized, None, "裸域名全程不得识别");
+    }
+
+    #[test]
+    fn recognized_samples_end_to_end_commit_identity() {
+        // 端到端(维护者实测发现问题的方法,表驱动):对每个样例
+        // 「逐字符 handle + 末尾 Enter,拼接所有 Commit 输出」断言
+        // 等于原串。单键断言覆盖不到的「中间某键偷偷上屏了一段」
+        // 在这条下无处遁形——`http://` 出「http:、、xcom」就是
+        // 这样被抓到的。
+        for input in [
+            "zhangsan@gmail.com",
+            "www.example.com",
+            "http://x.com",
+            "https://x.com",
+            "mailto:a@b.c",
+            "ftp.x.com",
+            "file:/x",
+        ] {
+            let mut s = session_with_dict();
+            let mut committed = String::new();
+            for ch in input.chars() {
+                if let SessionOutput::Commit(t) =
+                    s.handle(InputEvent::Char(ch)).expect("按键失败")
+                {
+                    committed.push_str(&t);
+                }
+            }
+            if let SessionOutput::Commit(t) = s.handle(InputEvent::Enter).expect("回车失败") {
+                committed.push_str(&t);
+            }
+            assert_eq!(committed, input, "端到端上屏应等于原串 {input:?}");
+        }
+    }
+
+    #[test]
+    fn continued_typing_after_recognition_does_not_oscillate() {
+        // 「识别成立后继续打字不反悔」:`abc@gmail.com` 逐个字符推进,
+        // 每一步都保持识别态、候选恒一条。
+        let mut s = session_with_dict();
+        type_str(&mut s, "abc@");
+        let mut expect = String::from("abc@");
+        for c in "gmail.com".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+            expect.push(c);
+            assert_eq!(s.candidates.len(), 1, "第 {expect:?} 步候选应恒一条");
+            assert_eq!(s.candidates[0].word, expect, "第 {expect:?} 步候选应为当前原文");
+            assert!(s.recognized.is_some(), "第 {expect:?} 步应保持识别态");
+        }
+    }
+
+    #[test]
+    fn backspace_out_of_recognition_restores_pinyin() {
+        // 验收 A:`abc@` 删掉 `@` → 回到正常拼音态,候选恢复。
+        let mut s = session_with_dict();
+        type_str(&mut s, "abc@");
+        assert_recognized(&s, "abc@");
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => {
+                assert_eq!(u.preedit, "abc", "删掉 @ 后应回到 abc");
+            }
+            other => panic!("Backspace 应返回 Updated,实际 {other:?}"),
+        }
+        assert_eq!(s.recognized, None, "删掉 @ 后应退出识别态");
+        // 候选恢复为拼音路径的结果(内存词库下 abc 只有回声候选;
+        // 「恢复」的判据是候选词回到 abc 而不是 abc@)
+        assert_eq!(s.candidates.len(), 1);
+        assert_eq!(s.candidates[0].word, "abc", "候选应回到拼音态的回声");
+        // 再删光:识别态同样清空
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        assert!(!s.is_active());
+        assert_eq!(s.recognized, None);
+    }
+
+    #[test]
+    fn backspace_mid_email_stays_recognized() {
+        // 识别态下回删但整串仍命中(`zhangsan@gmail.co` 删成
+        // `zhangsan@gmail.c`):保持识别态,不回拼音。
+        let mut s = session_with_dict();
+        type_str(&mut s, "a@b.co");
+        assert_recognized(&s, "a@b.co");
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_recognized(&s, "a@b.c");
+    }
+
+    #[test]
+    fn escape_in_recognized_state_clears() {
+        // 验收 A:Escape 在识别态下清空。
+        let mut s = session_with_dict();
+        type_str(&mut s, "abc@x");
+        assert!(s.recognized.is_some(), "前置:应处于识别态");
+        let out = s.handle(InputEvent::Escape).expect("不应失败");
+        match out {
+            SessionOutput::Updated(u) => assert!(u.preedit.is_empty(), "Escape 应清空"),
+            other => panic!("Escape 应返回 Updated,实际 {other:?}"),
+        }
+        assert_eq!(s.recognized, None, "Escape 后识别态清空");
+        assert!(!s.is_active());
+    }
+
+    #[test]
+    fn ascii_toggle_during_recognition_leaves_no_residue() {
+        // 验收 A:识别态中途切英文再切回来,不残留识别态。
+        let mut s = session_with_dict();
+        type_str(&mut s, "abc@x");
+        assert!(s.recognized.is_some());
+        // 切英文:未上屏串原样上屏(toggle 的既有语义),识别态随 reset 清空
+        let out = s.handle(InputEvent::ToggleAscii).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "abc@x"),
+            "切英文应原样上屏未确认串: {out:?}"
+        );
+        assert_eq!(s.recognized, None, "切英文后识别态清空");
+        assert!(s.english_mode());
+        // 切回中文:重新打字,正常拼音态
+        s.handle(InputEvent::ToggleAscii).expect("不应失败");
+        assert!(!s.english_mode());
+        type_str(&mut s, "ni");
+        assert_eq!(s.recognized, None, "切回中文后不应残留识别态");
+    }
+
+    #[test]
+    fn recognized_commit_does_not_learn_and_does_not_coin() {
+        // 识别态上屏的是原文,不是词:不进 UserLM 学习、不进造词缓冲
+        // (借回声候选的既有语义,与 echo_candidate_commit_does_not_learn
+        // 同构,但走的是「识别态回声」这条新通道)。
+        let engine = Arc::new(
+            crate::ImeEngine::new(None)
+                .expect("内存引擎创建失败")
+                .with_user_lm(crate::UserLM::in_memory()),
+        );
+        engine.dict.upsert("你", "ni", 100).expect("插入失败");
+        let mut s = InputSession::new(Arc::clone(&engine));
+        let user = engine.user_lm().expect("应有用户层");
+        let before_uni = user.unigram_len();
+
+        type_str(&mut s, "a@b.c");
+        assert!(s.recognized.is_some());
+        let out = s.handle(InputEvent::Space).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(ref t) if t == "a@b.c"));
+        assert_eq!(user.unigram_len(), before_uni, "识别态上屏不应学习");
+        assert_eq!(s.last_word, None, "原文不是词");
+        // 紧接着选一次真实候选词,不应与刚才的原文粘成造词
+        type_str(&mut s, "ni");
+        let out = s.handle(InputEvent::Space).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Commit(ref t) if t == "你"));
+        s.break_coin_run();
+        assert_eq!(user.entry_len(), 0, "识别态原文不应参与造词");
+    }
+
+    #[test]
+    fn unrecognized_inputs_keep_pinyin_candidates() {
+        // 不退化:「像前缀但没敲触发字符」的串仍走正常拼音。
+        // `www`(缺 `.` + 后缀)不得识别;真实词库下「万维网/呜呜呜」
+        // 的召回由 probe 对拍基线保证(玩具词库里 w 不是声母、
+        // `www` 切不出音节,只有回声候选——判据落在「不进识别态 +
+        // 候选走查词典通道」)。
+        let mut s = session_with_dict();
+        type_str(&mut s, "www");
+        assert_eq!(s.recognized, None, "www 单独打不得识别");
+        assert!(
+            s.candidates.iter().all(|c| c.echo),
+            "玩具词库下 www 只应有回声候选(识别态未劫持): {:?}",
+            s.candidates.iter().map(|c| &c.word).collect::<Vec<_>>()
+        );
+
+        // 同构的一条:「能切出真实拼音候选」的串,识别逻辑不许碰——
+        // `nini`(切得出 [ni,ni])在玩具词库里「你」应在;若
+        // recognizer 误判这类串,候选会被一条原文回声换掉。
+        let mut s2 = session_with_dict();
+        type_str(&mut s2, "nini");
+        assert_eq!(s2.recognized, None, "nini 不得识别");
+        assert!(
+            s2.candidates.iter().any(|c| c.word == "你" && !c.echo),
+            "nini 应出真实拼音候选「你」: {:?}",
+            s2.candidates.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn caret_editing_in_recognized_state() {
+        // 识别态与 B1 可编辑缓冲共存:caret 不在串尾时插入字符、
+        // Backspace 删 caret 前字符,重判基于完整新串。
+        let mut s = session_with_dict();
+        type_str(&mut s, "a@b.com");
+        assert_recognized(&s, "a@b.com");
+        // caret 移到串首后一位,插入 x → ax@b.com,仍是 email
+        for _ in 0..6 {
+            s.handle(InputEvent::Left).expect("不应失败");
+        }
+        assert_eq!(s.caret(), 1);
+        s.handle(InputEvent::Char('x')).expect("不应失败");
+        assert_recognized(&s, "ax@b.com");
+        assert_eq!(s.caret(), 2);
+        // caret 处 Backspace 删掉 @ → axb.com 不再命中,退回拼音
+        let mut s = session_with_dict();
+        type_str(&mut s, "a@b");
+        // caret 在 3(串尾),左移 1 到 2(@ 后),Backspace 删 @
+        s.handle(InputEvent::Left).expect("不应失败");
+        assert_eq!(s.caret(), 2);
+        s.handle(InputEvent::Backspace).expect("不应失败");
+        assert_eq!(s.pinyin(), "ab");
+        assert_eq!(s.recognized, None, "删掉 @ 应退出识别态");
+    }
+
+    #[test]
+    fn recognized_state_char_fallthrough_when_not_recognized() {
+        // 防御:`@` 在「不可能识别」的位置(串首)仍透传,不被吃掉;
+        // 数字串 + @ 不识别(首字符非字母,但数字根本进不了串——
+        // 这条只测串首 @)。
+        let mut s = session_with_dict();
+        let out = s.handle(InputEvent::Char('@')).expect("不应失败");
+        assert!(matches!(out, SessionOutput::Noop), "空闲时 @ 应透传");
+        assert!(!s.is_active());
     }
 }
 
