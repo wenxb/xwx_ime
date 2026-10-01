@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-   xwx 输入的 component XML。
-   安装时用 install.sh 把 `__XWX_EXEC__` 替换成实际二进制路径后，
-   放到 ~/.local/share/ibus/component/xwx.xml 即可被 ibus-daemon 扫描。
-   字段与引擎的 XML 输出模式保持一致（engine name = xwx，
-   组件 name = 引擎进程占用的 D-Bus 服务名）。
+   xwx 的 component XML。`just install` 把 __XWX_EXEC__ 替换成二进制路径后，
+   装到 /usr/share/ibus/component/xwx.xml（必须是系统目录，IBus 不扫 ~/.local/share）。
 -->
 <component>
   <name>org.freedesktop.IBus.Engine.xwx</name>
