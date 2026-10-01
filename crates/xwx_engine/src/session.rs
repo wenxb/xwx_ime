@@ -27,13 +27,87 @@ pub const COMMITTED_TAIL_LIMIT: usize = 16;
 
 /// 一次造词片段的最大字符数(按 `char` 计,非字节)。
 ///
-/// 对应 librime `unity_table_encoder` 对单次编码片段的长度上限:超过
-/// 这个长度的连续上屏段(如对着文档长句逐字敲)不再粘成一个用户词
-/// ——越长越不像是「一个想反复复用的短语」,且造出来的词条要占
-/// 候选位,病态长度(数百字)会让用户词典被一次性大段文本塞满。
+/// 长度上限:超过这个长度的连续上屏段不再粘成一个用户词——越长
+/// 越不像是「一个想反复复用的短语」,且造出来的词条要占候选位。
 /// 24 字覆盖常见人名/短语/短句(「张三丰」3 字、七言诗句 14 字),
 /// 又不至于让一次失控的长段上屏永久占位。
+///
+/// > **溯源更正(2026-10-01)**:本常量原先的注释称它「对应 librime
+/// > `unity_table_encoder` 对单次编码片段的长度上限」。实读 librime
+/// > 头文件与 `gear-audit.md` 的对照后发现这个溯源是错的:
+/// > `UnityTableEncoder` 是 **`table_translator`**(码表输入法)的组件,
+/// > 挂在 `/usr/include/rime/gear/unity_table_encoder.h`,而拼音走的是
+/// > **`script_translator`**(`gear-audit.md` 第 3 节确认 script_translator
+/// > 没有 encoder)。也就是说 xwx 在拼音引擎上移植了一个**码表特性**。
+/// > 24 这个数值本身仍是合理的工程选择(覆盖人名/诗句),保留;
+/// > 但「librime 也这么做」不再是它的理由——见
+/// > [`InputSession::is_reusable_phrase`] 的说明。
 pub const MAX_COIN_CHARS: usize = 24;
+
+/// 造词最少片段数:一次「完整词上屏」(缓冲长度 1)不造词。
+///
+/// 单片段要么词库本来就有它(造了是重复条目),要么是单字——
+/// 单字的候选地位由 unigram 调频表达就够了,造成词条也不会改变
+/// 它的召回(它本来就以单音节 key 查得到)。
+///
+/// ≥2 片段才造,这是 `unity_table_encoder` 语义的正确落点:它把
+/// **一次编码**反查出的整段短语写进用户词典,而「一次编码」在码表
+/// 里对应一次完整上屏;在拼音里对应「用户逐字/逐词挑了一串」。
+pub const MIN_COIN_SEGMENTS: usize = 2;
+
+/// 造词的判据开关:要求造词段里**每一个片段都是单字**(逐字组词)。
+///
+/// **为什么需要这道门槛(实测依据)**:造词缓冲对**每一次非回声候选
+/// 上屏**都入队(`push_coin`),只在被打断时结算。于是「把候选当空格
+/// 用」的连续打字——选「你好」→ 选「世界」→ 选下一个词——会被粘成
+/// 一个用户词条。这在真实用户数据里已经发生
+/// (`~/.local/share/xwx/user_bigram.txt` 的造词段):
+///
+/// ```text
+/// 当前主线以及已经完了是吧进度  dang qian zhu xian yi ji yi jing wan le shi ba jin du
+/// 设置为说着玩的说说中文        she zhi wei shuo zhe wan de shuo shuo zhong wen
+/// ```
+///
+/// 这些是**句子**,不是用户想复用的词条;而且用户对此毫无感知
+/// (没有确认步骤、没有提示),词条却会永久占用候选位——正是
+/// `MAX_COIN_CHARS` 想避免的「用户词典被一次性大段文本塞满」,
+/// 只是 24 字上限拦不住 11 字的句子。
+///
+/// **判据的演化(记下来,别再走一遍)**:第一版取「缓冲里**存在**
+/// 至少一个单字片段」。那是错的——上面第二条 `设置为说着玩的说说中文`
+/// 的片段里有单字「为」「说」,会被误判为够格。改成「**全部**片段
+/// 都是单字」后两条真实句子都被拦住:
+///
+/// | 段 | 片段切分 | 全单字? | 判定 |
+/// |---|---|---|---|
+/// | `当前主线以及已经完了是吧进度` | 当前/主线/以及/已经/完了/是吧/进度 | 否 | 不造 ✓ |
+/// | `设置为说着玩的说说中文` | 设置/为/说着玩的/说/说中文 | 否 | 不造 ✓ |
+/// | `张三丰`(验收) | 张/三/丰 | **是** | 造 ✓ |
+/// | `西双版纳` | 西/双/版/纳 | **是** | 造 ✓ |
+///
+/// 这也正是这个特性的原始定义:**「用户逐字选出来的整段短语」**。
+/// 只要用户选了**一个整词**作为片段,就说明他是在组句/正常打字,
+/// 不是在造词——判据与语义因此完全对齐,不是权宜之计。
+///
+/// 权衡:极端情况下「逐词拼一个真正想复用的短语」不再自动造词
+/// (用户仍可逐字选一遍来造)。这是刻意的保守取舍——
+/// **宁可不造,不可乱造**:乱造的词条会污染候选,而且用户删不掉
+/// (它只在候选里出现,没有「管理用户词典」界面)。
+///
+/// **残留局限(如实记下,没解决)**:反过来那种情况仍会误造——
+/// 用户**全部用单字**连续打字组句时(如逐个选「我」「的」「是」),
+/// 片段全是单字,判据为真,仍会造出「我的是」。这条判据分不开
+/// 「逐字组一个想复用的词」与「逐字打一句话的巧合」,因为两者在
+/// **片段形状上完全同构**——这既是判据能成立的原因,也是它的边界。
+///
+/// 要彻底分开需要额外信号,都超出当前改动范围:
+/// - 「同一个字被反复重打过」的观察(可隔开句子与词汇);
+/// - 用户显式确认(弹窗/按键)后才落盘;
+/// - 给用户一个「管理用户词典」的界面来删(更该做,目前没有)。
+///
+/// 当前取舍:**优先挡住高频且明显错误的场景**(把候选当空格用的
+/// 连续打字——已实测发生在真实用户数据里),接受低频的逐字组句误造。
+pub const COIN_ALL_SEGMENTS_SINGLE_CHAR: bool = true;
 
 /// 一次按键的抽象。由上层把 IBus/GDK 键值翻译成这个枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -726,6 +800,11 @@ impl InputSession {
         // 长度上限:超限即把当前缓冲结算后清空(防失控长段粘成
         // 一个词;见 MAX_COIN_CHARS 注释)。结算发生在「打断」语义
         // 之前——超限本身就是一种打断。
+        //
+        // 注意:这里用的是**字符**总数,与 is_reusable_phrase 的
+        // 「片段数/单字」判据是两件事,不要混:本上限拦的是「单次
+        // 编码片段过长」,那条拦的是「这一串到底像不像一个想复用的
+        // 短语」。两者各自独立生效。
         let chars: usize = self
             .coin_buffer
             .iter()
@@ -736,15 +815,14 @@ impl InputSession {
         }
     }
 
-    /// 打断造词缓冲:缓冲 ≥ 2 字时把整段造成一条用户词条
+    /// 打断造词缓冲:缓冲够格时把整段造成一条用户词条
     /// (词 = 各片段拼接,拼音 key = 各片段拼音空格连接),随后清空。
     ///
-    /// 单片段(长度 1 的缓冲)不造词:它是一次「完整词上屏」,
-    /// 要么词库本来就有它(造了也是重复条目),要么它是单字——
-    /// 单字的候选地位由 unigram 调频表达就够了,造成词条也不会
-    /// 改变它的召回(它本来就以单音节 key 查得到)。
+    /// 「够格」= [`Self::is_reusable_phrase`](见那里的实测依据与权衡)。
+    /// 不够格(连续打字的句子)时**只清空、不造词**——缓冲本身仍要
+    /// 清掉,否则下一次打断会把上一句的尾巴也拼进来。
     fn break_coin_run(&mut self) {
-        if self.coin_buffer.len() >= 2 {
+        if self.is_reusable_phrase() {
             let word: String = self.coin_buffer.iter().map(|(w, _)| w.as_str()).collect();
             let key: String = self
                 .coin_buffer
@@ -755,6 +833,29 @@ impl InputSession {
             self.engine.coin_entry(&word, &key);
         }
         self.coin_buffer.clear();
+    }
+
+    /// 当前造词缓冲是否够格造成一条用户词条。
+    ///
+    /// 判据(依据见 [`COIN_ALL_SEGMENTS_SINGLE_CHAR`] 的完整注释):
+    /// 1. 片段数 ≥ [`MIN_COIN_SEGMENTS`]——一次完整词上屏不造词;
+    /// 2. **全部**片段都是单字——逐字组词(「张三丰」「西双版纳」)
+    ///    满足;只要有**一个**整词片段(连续打字的形状)就不满足,
+    ///    因而「设置为说着玩的说说中文」这类句子不会被粘成词条。
+    ///
+    /// 抽成独立方法是为了让它**可被直接单测**:造词是「用户无感知地
+    /// 写入持久数据」的行为,判据必须能被逐条钉住,而不是埋在
+    /// `break_coin_run` 里只能通过整体副作用观察。
+    fn is_reusable_phrase(&self) -> bool {
+        if self.coin_buffer.len() < MIN_COIN_SEGMENTS {
+            return false;
+        }
+        if !COIN_ALL_SEGMENTS_SINGLE_CHAR {
+            return true;
+        }
+        self.coin_buffer
+            .iter()
+            .all(|(w, _)| w.chars().count() == 1)
     }
 
     /// 把上屏文本追加进有界尾部并更新 `last_word`。
@@ -1929,6 +2030,189 @@ mod tests {
         );
         // 但调频计数照常(既有 learn 通道不受影响)。
         assert_eq!(user.unigram_len(), 1, "unigram 学习应照常");
+    }
+
+    // —— 造词判据:句子不该被粘成用户词条(真实用户数据的回归)——
+
+    /// **回归测试,证据来自真实用户数据。**
+    ///
+    /// `~/.local/share/xwx/user_bigram.txt` 的造词段里出现过:
+    /// ```text
+    /// 当前主线以及已经完了是吧进度  dang qian zhu xian yi ji yi jing wan le shi ba jin du
+    /// 设置为说着玩的说说中文        she zhi wei shuo zhe wan de shuo shuo zhong wen
+    /// ```
+    /// 这是「把候选当空格用」的连续打字被粘成词条——用户毫无感知,
+    /// 词条却永久占候选位。根因是 `break_coin_run` 只判「片段数 ≥ 2」。
+    ///
+    /// 注意:第一版判据取的是「**存在**至少一个单字片段」,那版会漏掉
+    // 下面第 2 条(它的片段里有单字「为」「说」),已经是错的——
+    // 现在取「**全部**片段都是单字」,两条都被拦住。
+    #[test]
+    fn consecutive_multi_char_words_do_not_coin_a_sentence() {
+        let (engine, mut s) = session_for_coin(&[
+            ("当前", "dang qian", 100),
+            ("主线", "zhu xian", 100),
+            ("进度", "jin du", 100),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        // 连续上屏三个「多字词」——都是完整词,不是逐字挑的。
+        type_and_commit(&mut s, "dangqian", "当前");
+        type_and_commit(&mut s, "zhuxian", "主线");
+        type_and_commit(&mut s, "jindu", "进度");
+        s.break_coin_run();
+
+        assert_eq!(
+            user.entry_len(),
+            0,
+            "连续上屏多字词不该粘成句子词条(修复前这里会造出「当前主线进度」)"
+        );
+        assert!(
+            user.snapshot().lookup_entries("dang qian zhu xian jin du").is_empty(),
+            "不该有这条拼起来的词条"
+        );
+        // 调频(learn)通道不受影响:它本来就是「用过就加频」的语义。
+        assert_eq!(user.unigram_len(), 3, "unigram 调频应照常记录三个词");
+    }
+
+    /// **回归测试,证据是真实数据第 2 条**——它专门钉住「存在单字」
+    /// 那版错误判据。
+    ///
+    /// 真实词条是 `设置为说着玩的说说中文`,其片段为
+    /// `设置(2) / 为(1) / 说着玩的(4) / 说(1) / 说中文(3)`——
+    /// **含单字但含多字词**。取「存在单字 ⇒ 够格」的实现会把它造出来;
+    /// 取「全部单字 ⇒ 够格」才拦得住。
+    ///
+    /// 这条断言的价值正在于它**能证伪第一版实现**:把
+    /// `is_reusable_phrase` 的 `.all(...)` 改回 `.any(...)`,它立刻变红。
+    #[test]
+    fn mixed_single_and_multi_char_segments_do_not_coin() {
+        let (engine, mut s) = session_for_coin(&[
+            ("设置", "she zhi", 100),
+            ("为", "wei", 100),
+            ("说着玩的", "shuo zhe wan de", 100),
+            ("说", "shuo", 100),
+            ("说中文", "shuo zhong wen", 100),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        type_and_commit(&mut s, "shezhi", "设置");
+        type_and_commit(&mut s, "wei", "为");
+        type_and_commit(&mut s, "shuozhewande", "说着玩的");
+        type_and_commit(&mut s, "shuo", "说");
+        type_and_commit(&mut s, "shuozhongwen", "说中文");
+        s.break_coin_run();
+
+        assert_eq!(
+            user.entry_len(),
+            0,
+            "含整词片段的连续上屏不该造词——即使中间夹着单字。\
+             这正是真实数据「设置为说着玩的说说中文」的形状"
+        );
+        assert!(
+            user.snapshot()
+                .lookup_entries("she zhi wei shuo zhe wan de shuo shuo zhong wen")
+                .is_empty(),
+            "不该有这条真实数据形状的词条"
+        );
+    }
+
+    /// 逐字组词的**验收不能被上面那条误伤**。
+    ///
+    /// 「张三丰」是 PLAN/HANDOFF 里点名的验收判据(逐字选三个单字,
+    /// 再打整串拼音应能召回)。它的片段全是单字,必须仍然造词。
+    ///
+    /// 这条与上一条构成**双向判据**:只测「句子不造词」会被
+    /// 「造词彻底关掉」的实现骗过,只测「张三丰能造」会被原来的
+    /// bug 骗过。两条一起才钉住「该造的造、不该造的不造」。
+    #[test]
+    fn char_by_char_coining_still_satisfies_predicate() {
+        let (engine, mut s) = session_for_coin(&[
+            ("张", "zhang", 100),
+            ("三", "san", 100),
+            ("丰", "feng", 100),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        type_and_commit(&mut s, "zhang", "张");
+        type_and_commit(&mut s, "san", "三");
+        // 缓冲里已有两个单字片段,判据此刻就应为真。
+        assert!(
+            s.is_reusable_phrase(),
+            "两个单字片段应够格造词: {:?}",
+            s.coin_buffer
+        );
+        type_and_commit(&mut s, "feng", "丰");
+        s.break_coin_run();
+
+        assert_eq!(user.entry_len(), 1, "逐字组词应造出「张三丰」");
+        assert_eq!(
+            user.snapshot().lookup_entries("zhang san feng"),
+            &["张三丰".to_string()],
+            "词条拼音 key 应为三段拼接"
+        );
+    }
+
+    /// `is_reusable_phrase` 的**逐条判据表**:把「够格/不够格」的
+    /// 各种组合钉死,而不是只测两个端到端场景。
+    ///
+    /// 造词是「无感知写入持久数据」的行为,判据必须能被逐条检查。
+    #[test]
+    fn reusable_phrase_predicate_table() {
+        let (_engine, mut s) = session_for_coin(&[]);
+
+        // 空缓冲 / 单片段:不够格(单片段是一次完整词上屏)。
+        assert!(!s.is_reusable_phrase(), "空缓冲不够格");
+        s.coin_buffer.push(("你".into(), "ni".into()));
+        assert!(!s.is_reusable_phrase(), "单片段不够格");
+
+        // 两个单字:够格。
+        s.coin_buffer.push(("好".into(), "hao".into()));
+        assert!(s.is_reusable_phrase(), "两个单字够格");
+
+        // 全多字词:不够格(连续打字的形状)。
+        s.coin_buffer.clear();
+        s.coin_buffer.push(("你好".into(), "ni hao".into()));
+        s.coin_buffer.push(("世界".into(), "shi jie".into()));
+        assert!(!s.is_reusable_phrase(), "全多字词不够格");
+
+        // 单字 + 多字混合:**不够格**。
+        // 这是判据演化过的关键一格:第一版用 `.any(...)`(存在单字即可)
+        // 时这里是够格的,于是真实数据的「设置为说着玩的说说中文」
+        // (含单字「为」「说」)被误造成词条。改成 `.all(...)` 后不够格。
+        s.coin_buffer.push(("张".into(), "zhang".into()));
+        assert!(
+            !s.is_reusable_phrase(),
+            "只要有一个整词片段就不够格——整词意味着在组句/正常打字,不是在造词"
+        );
+
+        // 多字 + 单字,顺序无所谓(仍不够格)。
+        s.coin_buffer.clear();
+        s.coin_buffer.push(("你好".into(), "ni hao".into()));
+        s.coin_buffer.push(("啊".into(), "a".into()));
+        assert!(!s.is_reusable_phrase(), "顺序不影响判据:仍不够格");
+
+        // 三个单字(张三丰/西双版纳的形状):够格。
+        s.coin_buffer.clear();
+        for (w, p) in [("西", "xi"), ("双", "shuang"), ("版", "ban"), ("纳", "na")] {
+            s.coin_buffer.push((w.into(), p.into()));
+        }
+        assert!(s.is_reusable_phrase(), "全单字四个片段够格(西双版纳)");
+    }
+
+    /// 不够格时缓冲**仍须清空**——否则上一句的尾巴会被拼进下一次
+    /// 结算,反而造出跨句的更大垃圾词条。
+    #[test]
+    fn non_reusable_run_still_clears_buffer() {
+        let (engine, mut s) = session_for_coin(&[("你好", "ni hao", 100), ("世界", "shi jie", 100)]);
+        let user = engine.user_lm().expect("应有用户层");
+
+        type_and_commit(&mut s, "nihao", "你好");
+        type_and_commit(&mut s, "shijie", "世界");
+        assert!(!s.coin_buffer.is_empty(), "缓冲应已累积");
+        s.break_coin_run();
+        assert!(s.coin_buffer.is_empty(), "结算后缓冲必须清空");
+        assert_eq!(user.entry_len(), 0, "不够格不造词");
     }
 
     #[test]

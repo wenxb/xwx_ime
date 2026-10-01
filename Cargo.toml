@@ -44,6 +44,10 @@ zvariant  = { version = "4", features = ["gvariant"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Integration tests (tests/) speak D-Bus through zbus, whose `call_method` is
+# bounded on `serde::Serialize`. The workspace already resolves serde; this
+# only makes it nameable from the integration-test crate.
+serde = { workspace = true }
 
 # ---- deb 打包（cargo deb）----
 # XML 必须进 /usr/share/ibus/component/（IBus 不扫用户目录）。

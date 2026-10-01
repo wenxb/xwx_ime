@@ -1,5 +1,23 @@
 # librime gear 组件逐项对照审计(xwx_engine 现状)
 
+> ⚠ **本文件是 2026-08-09 的历史快照,其中 P0/P1 清单已全部清零。**
+> 表里的「现状」列**不代表今天的状态**——读它请配合 `PLAN.md` 的
+> 第二、三节(已完成改动)与本文件末尾的「清零记录」。
+> **保留原文是为了留住「当初缺什么、为什么缺」的推理**,不是现状清单。
+>
+> 已于 2026-08-10 清零的项:punctuator、ascii_composer(Shift/CapsLock)、
+> memory(接线 + 造词 + 删候选)、fallback_segmentor × echo_translator、
+> selector 的 `,`/`.` 翻页、editor 的 Ctrl+Delete、recognizer。
+> charset_filter 经实测**销掉**(收益为零)。
+>
+> **2026-10-01 追加的溯源更正**:本文件第 3 节把
+> `unity_table_encoder` 与 `memory` 一起挂在 `table_translator` 内部
+> ——这是**对的**,而且很关键。后续实现造词时忽略了这一点,
+> 在 `MAX_COIN_CHARS` 的注释里把它当成拼音(script_translator)的
+> 对应物,导致溯源错误。**读这张表要连「挂在哪个 translator 下」
+> 一起读**:librime 有 table / script / reverse_lookup 等多个 translator,
+> 组件清单是按 translator 分组的,只对组件名会搬错特性。
+>
 > 目的:把 librime `src/rime/gear/` 的 36 个组件(`.h` 清单取自
 > `https://api.github.com/repos/rime/librime/contents/src/rime/gear`)
 > 逐项对照 xwx 现状,列出「还没发现的问题」。

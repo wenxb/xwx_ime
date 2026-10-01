@@ -31,6 +31,23 @@ build:
 build-release:
     cargo build --release --workspace
 
+# 全量测试（引擎/会话层单测 + 协议测试 + D-Bus 集成测试）
+test:
+    cargo test --workspace --offline
+
+# 验收硬门槛：clippy 必须全绿（PLAN.md 第三节「工程卫生」）
+#
+# 为什么是硬门槛而不是「基线 N 处」：基线清单会随 clippy 版本失效，
+# 已经发生过——`dict.rs` 三处在新版本下不再报，执行者无法判断自己
+# 有没有新增，这条判据实际已经废掉。清零后门槛变成一句话。
+
+# clippy 全绿（-D warnings），验收硬门槛
+check:
+    cargo clippy --workspace --all-targets --offline -- -D warnings
+
+# test + check 一把过（提交前跑这个）
+verify: check test
+
 # dev：编译并前台跑引擎（debug，连接到 ibus-daemon）
 dev:
     cargo build -p xwx_ime

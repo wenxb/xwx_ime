@@ -658,4 +658,65 @@ mod tests {
         let (s, _) = store.score(&store.initial_state(), "任何词");
         assert!(s.is_finite(), "两层都空时混合分仍应有限");
     }
+
+    /// **句首排序的真正通道是用户层 unigram,不是通用层。**
+    ///
+    /// 钉住一个实测事实(2026-10-01,`examples/lm_ctx_probe.rs`):在空
+    /// 上下文下
+    /// - 万象 `.gram`(`WanxiangLM::score_word` 的 `ctx_tail.is_empty()`
+    ///   早退)对**任何**词都返回同一个常数 `floor_log10()` ≈ -11.605767
+    ///   ——实测「西安/先/闲/狄安娜/中国/的/龘」七词分数逐位相同;
+    /// - 用户层(`UserLmSnapshot::log10_prob`)在无 `prev` 时**回落到
+    ///   unigram 计数**,因此对学过的词给出**不同**的分。
+    ///
+    /// 这条测试的意义是防止误诊:看 `wanxiang.rs` 的空上下文早退很容易
+    /// 得出「句首排序完全由词频决定」的结论,但那只在生产进程同时挂了
+    /// 用户层(`main.rs` 调 `with_user_lm`)时才对**通用层**成立——
+    /// **用户用过的词在句首是能被区分的**。
+    ///
+    /// 同时它也是「空上下文 unigram backoff 不可行」这条结论的边界说明:
+    /// 那条修法针对的是**通用 gram**层(键长不可比),而**用户层**的
+    /// unigram 计数本来就是可比的自然数,不需要也不应该一起否决。
+    #[test]
+    fn empty_context_user_layer_discriminates_but_base_does_not() {
+        let base = BigramLM::new(); // 空通用层:等价于「通用层给不出信号」
+        let user = UserLM::in_memory();
+        for _ in 0..5 {
+            user.learn(None, "西安");
+        }
+        user.learn(None, "的");
+        let store = LmStore::Mixed(MixedLM::new(
+            LmStore::Bigram(base),
+            user,
+            MIX_USER_WEIGHT,
+        ));
+
+        // 空上下文(句首):last_word = None。
+        let st = store.state_from_context(&LmContext::empty());
+        let (learned, _) = store.score(&st, "西安");
+        let st2 = store.state_from_context(&LmContext::empty());
+        let (rare, _) = store.score(&st2, "龘");
+
+        assert!(
+            learned.is_finite() && rare.is_finite(),
+            "两词分都应有限: {learned} / {rare}"
+        );
+        assert!(
+            learned > rare,
+            "用户学过的「西安」在句首应高于没学过的「龘」——\
+             这正是句首可被用户层区分的证据: {learned} vs {rare}"
+        );
+    }
+
+    /// 空上下文下 `LmContext::empty()` 的两个字段都必须是「无上文」。
+    ///
+    /// 这是上面那条测试的前提:`tail = ""` 触发万象早退,
+    /// `last_word = None` 触发用户层 unigram 回落。任一字段被填上,
+    /// 口径就变了(不再是「句首」)。钉住它以免后人改 `empty()`。
+    #[test]
+    fn empty_context_has_both_fields_absent() {
+        let c = LmContext::empty();
+        assert!(c.tail.is_empty(), "tail 必须为空串(否则万象不走早退)");
+        assert!(c.last_word.is_none(), "last_word 必须为 None(否则用户层走 bigram)");
+    }
 }

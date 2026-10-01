@@ -1,11 +1,24 @@
 # 实机验证清单
 
-> `cargo test` 有 207 个测试全绿，但**它证明的是引擎与会话层，不是实机可用**。
-> 下面这些路径在 D-Bus 边界上，单测结构上就摸不到：
+> `cargo test` 有 **275** 个测试全绿（226 单元 + **49 D-Bus 集成**），
+> 但**它仍不是实机可用的证据**。
 >
-> - 英文模式透传（`engine.rs` 的 `process_key_event` 直接 `return false`）
-> - `UpdatePreeditText` / `UpdateLookupTable` / `CommitText` 三个信号
-> - `FocusOut` 触发的造词结算（跨应用）
+> **2026-10-01 更新**：根 `tests/` 现在有一组 **D-Bus 集成测试**，
+> 跑真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`，已自动化下面清单里的
+> **一部分**（英文模式透传、`CommitText`/`UpdatePreeditText`/
+> `UpdateLookupTable` 信号内容与字段顺序、`FocusOut`、候选点击、翻页、
+> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性）。5 个文件：`passthrough_contract`(7)、
+> `focus_paging_delete`(14)、`signal_payloads`(7)、`interactive_sequences`(16)、
+> `hermeticity`(5)。
+>
+> **但它用的是私有总线，不是真实 ibus-daemon + 真实应用**——下面这份清单
+> 仍然要敲，因为它验的是 daemon / GNOME Shell / 应用三者与引擎的
+> **真实协作**，那部分结构上测不到：
+>
+> - 真实 daemon 的激活时序（走 `CreateEngine`，而非预导出实例）
+> - GNOME Shell candidate popup 的**实际渲染**（我们只发信号，不画窗）
+> - 跨应用时 `FocusOut` 的真实到达时机
+> - 与系统输入源切换（`Super+空格`）、fcitx5 抢总线名的交互
 >
 > 有时间时照这份清单敲一遍即可，**不需要一次做完**——每条都是独立的。
 

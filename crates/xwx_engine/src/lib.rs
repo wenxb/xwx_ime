@@ -42,6 +42,10 @@ pub use segmenter::{Segmenter, SYLLABLES};
 pub use session::{InputEvent, InputSession, SessionOutput, SessionUpdate};
 pub use wanxiang::{WanxiangConfig, WanxiangLM, WanxiangState};
 
+// 模糊拼音的配置面(`DEFAULT_FUZZY_ENABLED` / `FUZZY_ENV` /
+// `parse_fuzzy_env`)就定义在本模块顶层,天然是 `xwx_engine::` 的
+// 公开项,不需要(也不能)再 `pub use` 一次。
+
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
@@ -82,6 +86,81 @@ const ABBREV_QUOTA: usize = 5;
 /// 取值经评测集扫参（0.5/1/2/5，见 `examples/eval_rank.rs` 与报告）
 /// 定为 1.0——LM 的语境命中也以 1:1 记入总分，不额外放大/稀释。
 pub const DEFAULT_LM_WEIGHT: f32 = 1.0;
+
+/// 模糊拼音的**生产默认值**：关闭。
+///
+/// 历史状态与本次裁决（2026-10-01，`examples/fuzzy_bench.rs` 实测）：
+/// 在本次改动之前 `fuzzy_enabled` 在生产进程里**从未被置为 true**——
+/// 它只在单测里由测试自己设置（见本文件 `fuzzy_*` 测试），`main.rs`
+/// 既不设置它、也没有任何配置入口，而 `README.md` 早已把它列为已完成
+/// 特性。也就是说：**能力实现了、测试是绿的、用户却用不到**。
+///
+/// 本次把它接成真正的开关（`XWX_FUZZY=1`，见 `src/main.rs`），并保留
+/// 「默认关闭」。默认值不是随手定的，是实测裁决的（release，真实
+/// dict.bin + 万象 gram，`examples/fuzzy_bench.rs`）：
+///
+/// | 维度 | 实测结果 | 判定 |
+/// |---|---|---|
+/// | 延迟 | `nihao` 0.235→0.546ms(2.29x)、`zhongguo` 0.589→1.526ms(2.54x)、`womenjintianquxian` 3.376→22.008ms(**6.48x**) | ✗ 超预算 |
+/// | 排序 | `diannao` 前 10 第 9/10 名「点那」被模糊候选「惦」顶掉 | ✗ 有退化 |
+/// | 召回 | `lansheng`→男生 #27、`zongguo`→中国 #16（另有 1 组仍不可召回） | △ 收益弱 |
+///
+/// 关键的是延迟那一行：**最长全拼串 22ms 已经突破本项目自定的 12ms
+/// 上限**（PLAN.md 第五节性能预算）。IBus 侧按键是同步处理的，
+/// 22ms/击键在长句输入下是肉眼可感的卡顿。而收益侧只有 2 组新召回、
+/// 且名次在 16~27（要翻 2~3 页才够得着）——**代价确定、收益微弱**，
+/// 所以默认关闭，作为用户显式打开的 opt-in。
+///
+/// 开启后行为完全可用（13 组混淆对都参与展开与降权），
+/// 只是请知悉上表的三项代价。若将来要改默认值，请重跑
+/// `fuzzy_bench`——**词频数据或 LM 权重一变，这张表的结论就可能翻转**
+/// （与 `COVERAGE_PENALTY` 的余量同一种性质）。
+pub const DEFAULT_FUZZY_ENABLED: bool = false;
+
+/// 环境变量名：置 `1`/`true`/`on`/`yes`（大小写不敏感）即启用模糊拼音。
+///
+/// 放这里（而不是 `src/main.rs`）是为了让「解析规则」本身可单测——
+/// 进程级环境变量的解析是纯函数，与引擎不耦合。
+pub const FUZZY_ENV: &str = "XWX_FUZZY";
+
+/// 解析 [`FUZZY_ENV`] 的取值；未设置或无法识别时回落到
+/// [`DEFAULT_FUZZY_ENABLED`]。
+///
+/// 见 [`fuzzy_env_value_recognized`]——调用方用它来区分「解析结果」
+/// 与「这个值到底认不认得」，以便对无法识别的值记一条 warning。
+pub fn parse_fuzzy_env(value: Option<&str>) -> bool {
+    if fuzzy_env_value_recognized(value) {
+        matches!(
+            value.map(str::trim).map(|v| v.to_ascii_lowercase()),
+            Some(ref v) if matches!(v.as_str(), "1" | "true" | "on" | "yes")
+        )
+    } else {
+        // 未设置或无法识别:一律取默认值。
+        //
+        // **无法识别的值按「未设置」处理而不是报错**:输入法启动失败
+        // 比「模糊音没开」严重得多(与引擎对缺失词库/模型一律优雅
+        // 退化的取舍一致)。调用方负责把无法识别的值记一条 warning。
+        DEFAULT_FUZZY_ENABLED
+    }
+}
+
+/// `value` 是否是 [`FUZZY_ENV`] 认得的取值（含「未设置」）。
+///
+/// 拆出来是**为了避免取值词表出现两份**：`src/main.rs` 需要知道
+/// 「用户写的值被忽略了」，而这件事的定义就是「不认得」。
+/// 让它复用本函数，而不是在进程入口另抄一份 `matches!` 字面量
+/// ——两份词表迟早会漂移，而漂移的症状是**静默吞掉用户配置**。
+///
+/// `None`（未设置）算「认得」：它不是错误。
+pub fn fuzzy_env_value_recognized(value: Option<&str>) -> bool {
+    match value.map(str::trim).map(|v| v.to_ascii_lowercase()) {
+        None => true,
+        Some(ref v) => matches!(
+            v.as_str(),
+            "1" | "true" | "on" | "yes" | "0" | "false" | "off" | "no" | ""
+        ),
+    }
+}
 /// 切分格解码的 beam 宽度：每个拼音位置保留的前缀路径数。
 ///
 /// 取值理由：
@@ -301,7 +380,7 @@ impl ImeEngine {
             lm,
             lm_weight: DEFAULT_LM_WEIGHT,
             fuzzy_pairs: COMMON_CONFUSION_PAIRS.to_vec(),
-            fuzzy_enabled: false,
+            fuzzy_enabled: DEFAULT_FUZZY_ENABLED,
         })
     }
 
@@ -3383,5 +3462,111 @@ mod tests {
             "zhon 前 10 应以 zhong 系为主(实际 {n_zhong}/10): {:?}",
             zhon.iter().take(10).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
         );
+    }
+
+    // —— 模糊拼音的生产开关(XWX_FUZZY)——
+
+    /// 环境变量解析的**全表契约**。
+    ///
+    /// 这条测试的存在理由:此前 `fuzzy_enabled` 在生产里永远是 false
+    /// (没有任何配置入口),所以「解析器」本身不存在、也无人测。
+    /// 现在它成了用户唯一的开启通道,取值口径必须逐条钉死——
+    /// 尤其是**无法识别的值必须回落到默认值而不是报错**
+    /// (输入法启动失败比「模糊音没开」严重得多)。
+    #[test]
+    fn fuzzy_env_parsing_table() {
+        // 开启词(大小写不敏感、允许两侧空白)
+        for v in ["1", "true", "TRUE", "True", "on", "ON", "yes", "Yes", " 1 ", " on "] {
+            assert!(parse_fuzzy_env(Some(v)), "{v:?} 应解析为开启");
+        }
+        // 关闭词
+        for v in ["0", "false", "FALSE", "off", "OFF", "no", "NO", "", "  "] {
+            assert!(!parse_fuzzy_env(Some(v)), "{v:?} 应解析为关闭");
+        }
+        // 未设置 → 生产默认值
+        assert_eq!(
+            parse_fuzzy_env(None),
+            DEFAULT_FUZZY_ENABLED,
+            "未设置必须等于生产默认值"
+        );
+        // 无法识别 → 同样回落到默认值(不 panic、不报错)
+        for v in ["2", "maybe", "enable", "模糊", "y", "n", "t", "f"] {
+            assert_eq!(
+                parse_fuzzy_env(Some(v)),
+                DEFAULT_FUZZY_ENABLED,
+                "{v:?} 无法识别,应回落到默认值而不是报错"
+            );
+        }
+        // 「认不认得」与「解析成什么」必须一致(两份词表会漂移)。
+        assert!(fuzzy_env_value_recognized(None), "未设置不是错误,算认得");
+        for v in ["1", "true", "on", "yes", "0", "false", "off", "no", "", " ON "] {
+            assert!(fuzzy_env_value_recognized(Some(v)), "{v:?} 应认得");
+        }
+        for v in ["2", "maybe", "enable", "模糊", "y"] {
+            assert!(!fuzzy_env_value_recognized(Some(v)), "{v:?} 不应认得");
+        }
+    }
+
+    /// 默认值必须是**实测裁决过的那个值**,不是随手写的。
+    ///
+    /// 钉住 `false`:实测(`examples/fuzzy_bench.rs`,release、真实
+    /// dict.bin + 万象 gram)开启后最长全拼串 3.376ms → 22.008ms
+    /// (**6.48x**),突破本项目自定的 12ms 上限;`diannao` 前 10 有
+    /// 一处候选换血;收益仅 2 组新召回且名次在 16~27。
+    ///
+    /// **如果这条断言红了**,说明有人改了默认值——请先重跑
+    /// `fuzzy_bench` 并更新 `DEFAULT_FUZZY_ENABLED` 文档里那张表,
+    /// 而不是直接改这里的期望值。判据本身会腐烂(HANDOFF.md
+    /// 「判据本身会腐烂,要定期重验」),这张表就是它现在的口径。
+    #[test]
+    fn fuzzy_default_matches_measured_verdict() {
+        // 用 `const { ... }` 而不是普通 `assert!`:断言的是编译期常量,
+        // 普通 assert 会被编译器直接折叠掉(clippy 的
+        // `assertions_on_constants` 正是为此报错)。const 块把这条判据
+        // 变成**编译期**检查——有人改默认值时是编译失败,而不是一个
+        // 可能被忽略的测试红。这比运行时断言强,正是本判据需要的强度
+        // (默认值直接决定用户的击键延迟)。
+        const {
+            assert!(
+                !DEFAULT_FUZZY_ENABLED,
+                "默认必须关闭:实测开启后长串 22ms(超 12ms 上限)、有排序退化、收益弱。\
+                 改默认值前先重跑 examples/fuzzy_bench.rs 并更新文档表格"
+            );
+        }
+        // 环境变量名是对外契约(用户的 shell 里写的就是它),改名要同步文档。
+        assert_eq!(FUZZY_ENV, "XWX_FUZZY", "环境变量名是对外契约");
+    }
+
+    /// 默认关闭时,引擎的模糊能力**逐字节不变**——即「接线」这件事
+    /// 不能顺手改动任何既有行为。
+    ///
+    /// 这是「不许退化」硬约束在本次改动上的落点:接线前 fuzzy_enabled
+    /// 恒为 false,接线后默认仍是 false,所以默认路径必须与接线前
+    /// 完全一致。用同一词库、同一输入,断言候选列表逐位相同。
+    #[test]
+    fn default_config_reproduces_pre_wiring_behavior() {
+        let mut engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        for (w, py, f) in [("你", "ni", 100), ("逆", "ni", 50), ("里", "li", 1000)] {
+            engine.dict.upsert(w, py, f).expect("插入失败");
+        }
+        // 显式把引擎置回「接线前的生产状态」:false。
+        engine.fuzzy_enabled = parse_fuzzy_env(None);
+        assert!(!engine.fuzzy_enabled);
+
+        let cands = engine
+            .lookup_candidates("ni", &LmContext::empty())
+            .expect("查询失败");
+        // 「里」(li)词频 1000 远高于「你」(100),但精确匹配下它不该
+        // 出现——这正是「关模糊 = 不做展开」的证据。
+        assert!(
+            !cands.iter().any(|c| c.word == "里"),
+            "默认关闭时不应展开出模糊候选「里」: {cands:?}"
+        );
+        assert!(
+            cands.iter().all(|c| c.spelling == SpellingKind::Exact),
+            "默认关闭时全部候选都应是精确层: {cands:?}"
+        );
+        let words: Vec<&str> = cands.iter().map(|c| c.word.as_str()).collect();
+        assert_eq!(words, ["你", "逆"], "词频降序,且无模糊候选: {cands:?}");
     }
 }

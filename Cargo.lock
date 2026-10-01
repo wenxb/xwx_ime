@@ -1318,6 +1318,7 @@ dependencies = [
 name = "xwx_ime"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "tempfile",
  "tokio",
  "tracing",

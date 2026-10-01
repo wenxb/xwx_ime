@@ -113,6 +113,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::info!(path = %dict_path.display(), entries = engine.dict_count(), "词库已就绪");
 
+    // —— 模糊拼音(配置开关)——
+    // 此前 `fuzzy_enabled` 在生产进程里从未被置 true:能力实现了、
+    // 单测是绿的、用户却用不到(README 却把它列为已完成特性)。
+    // 这里接成真正的开关,默认值由 `DEFAULT_FUZZY_ENABLED` 裁决——
+    // 默认**关闭**,依据是 `examples/fuzzy_bench.rs` 的实测:
+    // 开启后最长全拼串延迟 3.4ms → 22.0ms(6.48x,突破本项目 12ms 上限)、
+    // `diannao` 前 10 有一处候选换血,而收益只有 2 组新召回(名次 16~27)。
+    // 完整表格见 `DEFAULT_FUZZY_ENABLED` 的文档注释。
+    let fuzzy_raw = std::env::var(xwx_engine::FUZZY_ENV).ok();
+    engine.fuzzy_enabled = xwx_engine::parse_fuzzy_env(fuzzy_raw.as_deref());
+    // 无法识别的取值按「未设置」处理(不报错、不启动失败),但要让用户
+    // 知道自己的设置被忽略了——静默吞掉配置是排查噩梦。
+    // 「认不认得」的定义复用引擎侧的 `fuzzy_env_value_recognized`,
+    // 不在这一层另抄一份取值词表(两份迟早漂移,而漂移的症状正是
+    // 「静默吞掉用户配置」,恰好是这里想避免的事)。
+    if !xwx_engine::fuzzy_env_value_recognized(fuzzy_raw.as_deref()) {
+        tracing::warn!(
+            env = xwx_engine::FUZZY_ENV,
+            value = fuzzy_raw.as_deref().unwrap_or(""),
+            default = xwx_engine::DEFAULT_FUZZY_ENABLED,
+            "无法识别的模糊拼音取值,已按默认值处理"
+        );
+    }
+    tracing::info!(
+        enabled = engine.fuzzy_enabled,
+        pairs = engine.fuzzy_pairs.len(),
+        env = xwx_engine::FUZZY_ENV,
+        "模糊拼音配置(未设置时取默认值)"
+    );
+
     if lm_is_gram {
         tracing::info!(
             path = %lm_path.display(),
@@ -167,15 +197,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!(error = %e, "注册组件失败（ibus-daemon 未运行？）");
     }
 
-    // 占用引擎服务名
-    conn.request_name(ibus_proto::ENGINE_SERVICE).await?;
-    tracing::info!(service = ibus_proto::ENGINE_SERVICE, "服务名已占用");
-
     // 导出 Factory 与首个引擎实例
+    //
+    // **先挂对象、再占名字**——顺序有语义，不能颠倒。`request_name` 一旦
+    // 成功，任何客户端（ibus-daemon、测试）看到这个名字就会立刻发方法调用；
+    // 此时若对象还没导出，那个调用就会落进「名字有人、路径没人应答」的窗口，
+    // 表现为**调用永远不返回**（集成测试抓到过：`FocusOut` 10s 无应答，而引擎
+    // 进程 /proc 状态是 `S`、日志干净——即活着但不分发）。先 `at()` 再
+    // `request_name` 就没有这个窗口：名字可见时对象一定已在服务。
     let factory = EngineFactory::new(Arc::clone(&engine), conn.clone());
     conn.object_server().at(FACTORY_PATH, factory).await?;
     let first = XwxEngineServer::new(Arc::clone(&engine));
     conn.object_server().at(ibus_proto::ENGINE_PATH, first).await?;
+
+    // 占用引擎服务名（对象已就绪，从这里起保证「可见即可服务」）
+    conn.request_name(ibus_proto::ENGINE_SERVICE).await?;
+    tracing::info!(
+        service = ibus_proto::ENGINE_SERVICE,
+        "服务名已占用（对象服务已先行就绪）"
+    );
     tracing::info!(path = ibus_proto::ENGINE_PATH, "引擎已就绪，等待 ibus-daemon 激活");
 
     // —— 常驻运行 + 用户模型落盘调度 ——

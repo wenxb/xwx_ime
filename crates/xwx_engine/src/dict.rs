@@ -42,8 +42,28 @@ pub const ABBREV_MAGIC: &[u8; 8] = b"XWXABR1\0";
 const ABBREV_VERSION: u32 = 1;
 /// abbrev.bin 头部长:magic(8) + version(4) + 5×u64(40) = 52(与主索引同构)。
 const ABBREV_HEADER_LEN: usize = 52;
-/// 混合简拼枚举的音节切分上限(每种切法都要回主索引扫一轮,限制枚举防爆炸)。
+/// 全拼路径枚举的音节切分上限(每种切法都要回主索引扫一轮,限制枚举防爆炸)。
+/// 只服务于 [`MmapDict::lookup_mixed_full_pinyin`](改动前的原实现)。
 const MAX_SEGMENTATIONS: usize = 8;
+
+/// 交错简拼 DFS 单次查询的**索引探测步数**上限(见 [`MmapDict::lookup_mixed`])。
+///
+/// 口径:一次二分迭代、一次记录读取各记 1 步。DFS 的每一项代价最终都落在
+/// 「在主索引上定位或读取一条记录」上,用同一种步数计量才能把「多分支枚举」
+/// 与「单次二分」放在同一把尺子上——这是本常量唯一的作用,**不是时间**,
+/// 因为时间随机器变、步数不随。
+///
+/// 取值依据(`tools/spike_abbrev/walk.py` 原型在真实 `data/dict.bin`
+/// 186 万 key 上实测的二分次数):
+/// - 真实交错输入远低于此:`feicde` 248、`zguo` 570、`nhao` 962、
+///   `beijdx` 1493、`shouzm` 1923、`zgren` 2085;
+/// - 病态输入才会逼近:`zzzz` 2831、`zhzhzhzh` 6922;
+/// - 20_000 步给真实输入留约 10 倍余量,同时把任意病态输入的最坏情况
+///   钳成常数(与 `MAX_CHAINS_PER_START` / `SYLLABLE_ENUM_QUOTA` 同一种
+///   「硬上限保证最坏情况有界」的思路)。
+///
+/// 预算耗尽时**保留已经收下的候选**(部分结果优于空结果),不报错。
+const MAX_MIXED_DFS_STEPS: usize = 20_000;
 
 /// 词库错误。
 #[derive(Debug, Error)]
@@ -616,23 +636,100 @@ impl MmapDict {
         idx.lookup_prefix(abbrev)
     }
 
-    /// 混合简拼查询:`zhongguor` → 中国人。
+    /// 混合简拼查询:`zhongguor` → 中国人,`nhao` → 您好。
     ///
-    /// 按 `docs/design-batch1.md`「设计更正」的**正确方案**(原先「精确前缀 +
-    /// 声母副索引」两段拼接的方案已作废:主索引 key 带空格 `"zhong guo ren"`,
-    /// 用户输入不带空格,直接前缀匹配恒为 0):
+    /// 词库主索引的 key 是**带空格的音节序列**(`"zhong guo ren"`),用户输入
+    /// 不带空格,所以直接前缀匹配恒为 0。查询分两条路:
     ///
-    /// 1. 用词库音节表对输入做音节切分,枚举前几种切法
-    ///    (`zhongguor` → `[zhong, guo] + r`、`[zhong, gu, o] + r`);
-    /// 2. 完整音节段**用空格拼接**作为主索引前缀去二分;
-    /// 3. 残余字符作为下一音节声母,过滤命中词条的「下一音节首字母 == 残余」。
+    /// - **输入本身就是合法全拼** → 走 [`Self::lookup_mixed_full_pinyin`],
+    ///   也就是**改动前的原实现,逐字节不变**;
+    /// - **否则** → 走下面这条**交错 DFS**,把首字母也当作音节来切。
     ///
-    /// 扫描带早停:凑够 `MAX_LOOKUP_RESULTS` 即止(这是 `zhongg` 这类命中
-    /// 数十万 key 的输入能进 5ms 的关键,见设计文档「实现期必须解决的风险」)。
+    /// # 为什么必须分路(冻结约束的落点)
+    ///
+    /// 项目硬约束是「全拼已经跑通的行为不许退化」。交错 DFS 单独用会**破坏**
+    /// 它:因为 `a`/`e`/`o` 是单字母音节,`hao` 也能被解释成
+    /// `h(e|ou) + ao`,实测给「hao」多加了「后澳」「河岙」——那不是用户的
+    /// 本意,**用户打的就是全拼**。
+    ///
+    /// 所以这里按「输入能否整体切成年节」分流。这不是「测出来一样」,
+    /// 而是**结构性保证**:全拼输入走的是与改动前完全相同的代码路径,
+    /// 对拍逐字节相同是必然的,不依赖测量。
+    ///
+    /// 这条分流也正好是「混合简拼」的定义:混合形式之所以存在,恰恰因为
+    /// 有一段**不是**全拼。`nhao`(n 不是音节)、`feicde`、`shouzm`、
+    /// `zhongg`、`zhongguor` 都属于这一类,交错 DFS 正是为它们而写。
+    ///
+    /// # 交错 DFS 的形状
+    ///
+    /// 每个位置要么消耗一个**字面音节**(全拼),要么消耗**一个首字母**
+    /// (`zh`/`ch`/`sh` 额外试 2 字符)作为下一音节的声母,后者把该音节的
+    /// 剩余部分**从索引里枚举出来**再往下走。旧实现只有「完整音节前缀 +
+    /// **尾部**残余声母」,结构上只支持缩写全在末尾;`nhao`(缩写**在开头**)、
+    /// `feicde`(缩写**在中间**)在旧实现下召回为 0。
+    ///
+    /// **至少要有一个完整音节**(`used_literal`):纯首字母串(`zgr`、`n`)是
+    /// [`Self::lookup_abbrev`] 副索引的职责,本函数对它们返回空——这与旧实现
+    /// `if syls.is_empty() { continue; }` 的口径**完全一致**,不是新加的限制。
+    ///
+    /// 收集口径(与旧实现的 `tail` 分支逐条对齐):
+    /// - 前缀是**完整音节序列**时只收 `key == 前缀` 的整条词条;
+    /// - 前缀停在**残缺音节**上时(末位首字母)收该前缀下的全部词条
+    ///   (`zhongg` → `zhong g*` → 中国 / 中国人)。
+    ///
+    /// 候选的 `pinyin` **直接取索引 key**(完整音节序列),因此 `nhao` 命中的
+    /// 「您好」返回的是 `nin hao` 而不是被截断的 `n hao`——**不需要任何回填**。
+    ///
+    /// 二分用哨兵 `'!'`(0x21)枚举同一音节位的不同取值:它 > 空格、
+    /// < 任何小写字母,于是 `lower_bound(前缀 + 已取音节 + '!')` 既跳过该取值
+    /// (含 `ta ...` 这类后继),又**保留** `ta`/`tan` 这类更长的同前缀音节
+    /// (用 `\xff` 会把后者一并跳掉)。
+    ///
+    /// **成本**:单次查询的索引探测步数硬上限为 [`MAX_MIXED_DFS_STEPS`]
+    /// (20_000 步),预算耗尽即停并保留已收候选——病态输入(`zzzz`、
+    /// `zhzhzhzh`)的最坏情况因此是常数。扫描同样带早停:
+    /// 凑够 [`MAX_LOOKUP_RESULTS`] 即止。
+    ///
     /// 音节表来自编译进二进制的静态表 `crate::segmenter::SYLLABLES`(410 项),
-    /// 零扫描;**不依赖副索引存在**——`MmapDict::open()` 未装配副索引时本查询
-    /// 照常工作(混合简拼走主索引,不需要 abbrev.bin)。
+    /// 零扫描;**不依赖副索引存在**——本查询只走主索引,
+    /// `MmapDict::open()` 未装配 abbrev.bin 时照常工作。
     pub fn lookup_mixed(&self, input: &str) -> Result<Vec<Candidate>, DictError> {
+        let table = self.syllable_table();
+        if table.is_empty() || input.is_empty() || !input.is_ascii() {
+            return Ok(Vec::new());
+        }
+        if is_full_pinyin(input, table) {
+            return self.lookup_mixed_full_pinyin(input);
+        }
+        // 按长度降序:字面音节分支贪心最长优先(与旧 segment_input 一致)。
+        let mut by_len: Vec<&'static str> = table.to_vec();
+        by_len.sort_by_key(|s| std::cmp::Reverse(s.len()));
+
+        let mut best: std::collections::HashMap<(String, String), u64> =
+            std::collections::HashMap::new();
+        {
+            let mut dfs = MixedDfs {
+                dict: self,
+                input: input.as_bytes(),
+                by_len,
+                out: &mut best,
+                budget: MAX_MIXED_DFS_STEPS,
+            };
+            dfs.dfs(0, &[], false, false)?;
+        }
+        let mut out: Vec<Candidate> = best
+            .into_iter()
+            .map(|((word, py), freq)| Candidate::new(word, py, freq))
+            .collect();
+        out.sort_by_key(|c| std::cmp::Reverse(c.freq));
+        Ok(out)
+    }
+    /// 混合简拼的**全拼**路径:**改动前的原实现,逐字节不动**。
+    ///
+    /// 只在 [`is_full_pinyin`] 为真时调用(见 [`Self::lookup_mixed`])。
+    /// 刻意保留原实现而不是「让 DFS 只走字面分支」:后者只是*看起来*等价,
+    /// 而冻结约束要的是**同一条代码路径**给出的硬保证。
+    fn lookup_mixed_full_pinyin(&self, input: &str) -> Result<Vec<Candidate>, DictError> {
         let table = self.syllable_table();
         if table.is_empty() || input.is_empty() {
             return Ok(Vec::new());
@@ -715,7 +812,223 @@ impl MmapDict {
         out.sort_by_key(|c| std::cmp::Reverse(c.freq));
         Ok(out)
     }
+
+
 }
+
+/// 输入能否被**完整**切成一串音节(即「整串都是合法全拼」)。
+///
+/// 用 DP 而不是复用 [`segment_input`]:后者有 `MAX_SEGMENTATIONS` 上限,
+/// 前 8 种切法都不完整时会**误判**成「不是全拼」,从而把一批全拼输入
+/// 错送进交错 DFS——冻结约束就会漏。这里 `reachable[i]` = 前缀
+/// `input[..i]` 可完整切分,与切法条数无关。
+///
+/// 调用方已保证 `input` 是 ASCII,故按字节索引安全。
+fn is_full_pinyin(input: &str, table: &[&str]) -> bool {
+    let n = input.len();
+    let mut reachable = vec![false; n + 1];
+    reachable[0] = true;
+    for i in 0..n {
+        if !reachable[i] {
+            continue;
+        }
+        for s in table {
+            if input[i..].starts_with(s) {
+                reachable[i + s.len()] = true;
+            }
+        }
+    }
+    reachable[n]
+}
+
+/// 交错简拼 DFS 的状态(见 [`MmapDict::lookup_mixed`])。
+///
+/// 独立成结构体而不是闭包:递归要在「只读词库」与「可变收集池」之间同时持有
+/// 两份借用,闭包写不出这种分离;结构体字段天然分离,也顺带把「步数预算」
+/// 这种横切状态从递归参数里拿出来。
+struct MixedDfs<'a> {
+    dict: &'a MmapDict,
+    /// 输入字节(上游已拒绝非 ASCII)。
+    input: &'a [u8],
+    /// `SYLLABLES` 按长度降序(字面分支贪心最长优先)。
+    by_len: Vec<&'static str>,
+    /// 收集池:按 (词, 全拼) 去重,保留最高 freq。
+    out: &'a mut std::collections::HashMap<(String, String), u64>,
+    /// 剩余索引探测步数(二分迭代或读记录各 1 步),归零即停。
+    budget: usize,
+}
+
+/// 把 `part` 接到空格分隔的前缀 `prefix` 之后(空前缀不加前导空格)。
+fn joined(prefix: &[u8], part: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(prefix.len() + part.len() + 1);
+    v.extend_from_slice(prefix);
+    if !prefix.is_empty() {
+        v.push(b' ');
+    }
+    v.extend_from_slice(part);
+    v
+}
+
+impl MixedDfs<'_> {
+    /// 前缀 `prefix` 区间下界;**每次二分迭代消耗 1 步预算**。
+    fn lower_bound(&mut self, prefix: &[u8]) -> Result<usize, DictError> {
+        let dict = self.dict;
+        let (mut lo, mut hi) = (0usize, dict.pinyin_count);
+        while lo < hi {
+            if self.budget == 0 {
+                // 预算耗尽:返回「空区间」下标,让调用方的 `starts_with`
+                // 检查自然失败——已收候选保留,不再产出。
+                return Ok(dict.pinyin_count);
+            }
+            self.budget -= 1;
+            let mid = (lo + hi) / 2;
+            let rec = dict.record(mid)?;
+            let s = dict.slice(dict.strings_off + rec.str_off, rec.str_len)?;
+            if s < prefix {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(lo)
+    }
+
+    /// 读出第 `i` 条记录的 key(读记录 1 步)。返回 owned 值,避开「持有
+    /// 词库切片的同时再 `&mut self` 二分」的借用冲突。
+    fn key_at(&mut self, i: usize) -> Result<Vec<u8>, DictError> {
+        let dict = self.dict;
+        self.budget = self.budget.saturating_sub(1);
+        let rec = dict.record(i)?;
+        Ok(dict
+            .slice(dict.strings_off + rec.str_off, rec.str_len)?
+            .to_vec())
+    }
+
+    /// 枚举 `base` 区间内**本音节位**的所有不同取值(该位音节的剩余字母),
+    /// 靠 `'!'` 哨兵二分跳转。见 [`MmapDict::lookup_mixed`] 的哨兵说明。
+    fn distinct_tokens(&mut self, base: &[u8]) -> Result<Vec<Vec<u8>>, DictError> {
+        let mut toks: Vec<Vec<u8>> = Vec::new();
+        let mut i = self.lower_bound(base)?;
+        loop {
+            if i >= self.dict.pinyin_count || self.budget == 0 {
+                return Ok(toks);
+            }
+            let k = self.key_at(i)?;
+            if !k.starts_with(base) {
+                return Ok(toks);
+            }
+            let rest = &k[base.len()..];
+            let end = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
+            let t = rest[..end].to_vec();
+            let mut jump = base.to_vec();
+            jump.extend_from_slice(&t);
+            jump.push(b'!');
+            toks.push(t);
+            i = self.lower_bound(&jump)?;
+        }
+    }
+
+    /// 收下 `prefix` 区间内的词条。`mid_syllable` = 前缀停在残缺音节上
+    /// (末位首字母),此时该前缀下的每个 key 都在这一位继续,全部收下;
+    /// 否则前缀是完整音节序列,只收与它完全相等的 key。
+    fn collect(&mut self, prefix: &[u8], mid_syllable: bool) -> Result<(), DictError> {
+        let dict = self.dict;
+        let mut i = self.lower_bound(prefix)?;
+        while i < dict.pinyin_count {
+            if self.out.len() >= MAX_LOOKUP_RESULTS as usize || self.budget == 0 {
+                return Ok(());
+            }
+            self.budget = self.budget.saturating_sub(1);
+            let rec = dict.record(i)?;
+            let k = dict.slice(dict.strings_off + rec.str_off, rec.str_len)?;
+            if !k.starts_with(prefix) {
+                return Ok(());
+            }
+            // 完整音节前缀:key 按字节序排,与前缀相等的那条最先出现,
+            // 之后的只会更长,故可直接收工(与旧实现 `key.len() == pb.len()`
+            // 等价)。
+            if !mid_syllable && k.len() != prefix.len() {
+                return Ok(());
+            }
+            let py = std::str::from_utf8(k)
+                .map_err(|_| DictError::Corrupt("拼音不是合法文本"))?
+                .to_owned();
+            for (word, freq) in dict.parse_entries(dict.entries_off + rec.ent_off, rec.ent_len)?
+            {
+                let e = self.out.entry((word, py.clone())).or_insert(0);
+                if freq > *e {
+                    *e = freq;
+                }
+                if self.out.len() >= MAX_LOOKUP_RESULTS as usize {
+                    return Ok(());
+                }
+            }
+            i += 1;
+        }
+        Ok(())
+    }
+
+    /// DFS 主体:在 `pos` 处,`prefix` 是已消耗音节以空格连接的主索引前缀。
+    ///
+    /// `mid_syllable` = 前缀末尾是残缺音节;`used_literal` = 已消耗过至少一个
+    /// **完整音节**(纯首字母串不算混合简拼,见 [`MmapDict::lookup_mixed`])。
+    fn dfs(
+        &mut self,
+        pos: usize,
+        prefix: &[u8],
+        mid_syllable: bool,
+        used_literal: bool,
+    ) -> Result<(), DictError> {
+        if self.out.len() >= MAX_LOOKUP_RESULTS as usize || self.budget == 0 {
+            return Ok(());
+        }
+        let input = self.input;
+        if pos == input.len() {
+            // 纯首字母串(`zgr`/`n`)= 副索引的职责,这里不产候选。
+            if !used_literal {
+                return Ok(());
+            }
+            return self.collect(prefix, mid_syllable);
+        }
+        let rest = &input[pos..];
+
+        // (a) 字面音节分支(全拼)。
+        let n = self.by_len.len();
+        for idx in 0..n {
+            let s: &'static str = self.by_len[idx];
+            let sb = s.as_bytes();
+            if !rest.starts_with(sb) {
+                continue;
+            }
+            let np = joined(prefix, sb);
+            self.dfs(pos + sb.len(), &np, false, true)?;
+        }
+
+        // (b) 首字母分支(简拼):1 字符;zh/ch/sh 额外试 2 字符。
+        let mut cands: [&[u8]; 2] = [&rest[..1], &rest[..1]];
+        let mut ncand = 1usize;
+        if rest.len() >= 2 && matches!(&rest[..2], b"zh" | b"ch" | b"sh") {
+            cands[1] = &rest[..2];
+            ncand = 2;
+        }
+        for c in cands.into_iter().take(ncand) {
+            let base = joined(prefix, c);
+            if pos + c.len() == input.len() {
+                // 末位首字母:音节残缺,按前缀收更长的词(声母语义)。
+                self.dfs(pos + c.len(), &base, true, used_literal)?;
+            } else {
+                // 中间首字母:把该音节的剩余字母从索引里枚举出来再往下走。
+                for t in self.distinct_tokens(&base)? {
+                    let mut full = base.clone();
+                    full.extend_from_slice(&t);
+                    self.dfs(pos + c.len(), &full, false, used_literal)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 
 /// 把输入切成「完整音节段 + 残余声母」,枚举前 `MAX_SEGMENTATIONS` 种切法。
 ///
@@ -1196,6 +1509,119 @@ mod tests {
             "zhongguor 应含中国人: {:?}",
             res.iter().take(5).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>());
     }
+
+    #[test]
+    fn real_abbrev_mixed_initial_at_any_position() {
+        // 本轮新增能力:首字母可以出现在**开头**或**中间**,不再只支持末尾。
+        //
+        // 旧实现要求第一个音节必须是**完整音节**(`segment_input` 走不出音节
+        // 就直接返回空),所以 `nhao` 整条查询召回为 0、只剩回声候选;
+        // `feicde` 只能靠「非常地恩爱」这类长词偶然覆盖,目标词进不了前列。
+        //
+        // 失败见证:把交错分支(DFS 的 (b))删掉 → `nhao` 变回空 → 红。
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !dict_path.is_file() {
+            return;
+        }
+        let dict = MmapDict::open(&dict_path).expect("词库加载失败");
+
+        // **开头**缩写:n(in) + hao。全拼必须是补全后的 `nin hao`,
+        // 不能是被截断的 `n hao`(候选的 pinyin 直接取索引 key)。
+        let res = dict.lookup_mixed("nhao").expect("nhao 查询失败");
+        assert!(
+            res.iter().any(|c| c.word == "您好" && c.pinyin == "nin hao"),
+            "nhao 应含「您好」且全拼为 nin hao(不得截断成 n hao): {:?}",
+            res.iter().take(6).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+        );
+        assert!(
+            res.iter().any(|c| c.word == "你好" && c.pinyin == "ni hao"),
+            "nhao 也应含「你好」(ni + hao): {:?}",
+            res.iter().take(6).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+        );
+
+        // **中间**缩写:fei + c(hang) + de。
+        let res = dict.lookup_mixed("feicde").expect("feicde 查询失败");
+        assert!(
+            res.iter().any(|c| c.word == "非常地" && c.pinyin == "fei chang de"),
+            "feicde 应含「非常地」: {:?}",
+            res.iter().take(6).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn real_abbrev_mixed_full_pinyin_uses_the_exact_path() {
+        // **冻结约束**的落点:整串是合法全拼时走原实现,不得出现「只有缩略
+        // 解释才可能命中」的词。
+        //
+        // `hao` 是合法音节,但 `h` 当缩写再补全成 `he`/`hou` 也能凑出
+        // `he ao`/`hou ao`——交错 DFS 单独用会真的加进「河岙」「后澳」
+        // (a/e/o 是单字母音节,`ao` 是合法音节)。分路之后它们必须消失。
+        //
+        // 失败见证:去掉 `is_full_pinyin` 分流 → 这两条重新出现 → 红。
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !dict_path.is_file() {
+            return;
+        }
+        let dict = MmapDict::open(&dict_path).expect("词库加载失败");
+        let res = dict.lookup_mixed("hao").expect("hao 查询失败");
+        for w in ["河岙", "后澳"] {
+            assert!(
+                !res.iter().any(|c| c.word == w),
+                "「hao」是合法全拼,不得出现只有缩略解释才命中得上的 {w:?}: {:?}",
+                res.iter().take(6).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            res.iter().any(|c| c.word == "好"),
+            "「hao」必须仍能命中「好」"
+        );
+    }
+
+    #[test]
+    fn real_abbrev_mixed_requires_a_full_syllable() {
+        // 纯首字母串是副索引 `lookup_abbrev` 的职责,`lookup_mixed` 对它返回空
+        // ——与旧实现 `if syls.is_empty() { continue; }` 同口径。这条同时挡住
+        // 「单字母输入从前缀联想里拿到几百条候选」。
+        //
+        // 失败见证:去掉 `used_literal` 判断 → `zgr`/`n` 会返回大量前缀词 → 红。
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !dict_path.is_file() {
+            return;
+        }
+        let dict = MmapDict::open(&dict_path).expect("词库加载失败");
+        for input in ["zgr", "n", "bjdx"] {
+            let res = dict.lookup_mixed(input).expect("查询失败");
+            assert!(
+                res.is_empty(),
+                "纯首字母串 {input:?} 应由副索引负责,lookup_mixed 必须返回空,实测 {} 条",
+                res.len()
+            );
+        }
+    }
+
+    #[test]
+    fn real_abbrev_mixed_pathological_input_is_bounded() {
+        // 预算守卫:病态输入不得报错、不得突破 `MAX_LOOKUP_RESULTS`。
+        // 耗时上界由 `examples/abbrev_bench.rs` 的预算守卫组实测(实测最坏
+        // `zhzhzhzh` ≈1.4ms,门槛 5ms),这里钉的是「不 panic、不失控」。
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !dict_path.is_file() {
+            return;
+        }
+        let dict = MmapDict::open(&dict_path).expect("词库加载失败");
+        // `zhongg` 是**命中量很大**的混合输入(实测正好顶到上限),把它和病态
+        // 输入放在一起:前者证明早停真的生效,后者证明病态形状不 panic。
+        // 失败见证:去掉 `collect` 里的早停 → `zhongg` 返回远超 500 条 → 红。
+        for input in ["zzzz", "zhzhzhzh", "aaaaaaaa", "zhzhzhzhzhzhzhzh", "zhongg"] {
+            let res = dict.lookup_mixed(input).expect("病态输入不得报错");
+            assert!(
+                res.len() <= MAX_LOOKUP_RESULTS as usize,
+                "{input:?} 返回 {} 条,超过上限",
+                res.len()
+            );
+        }
+    }
+
 
     #[test]
     fn real_abbrev_early_stop_caps_results() {

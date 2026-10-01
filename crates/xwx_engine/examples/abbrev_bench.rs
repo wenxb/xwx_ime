@@ -38,6 +38,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("xx", false),
         ("zhongg", true),
         ("zhongguor", true),
+        // 末尾四条是**预算守卫**(`MAX_MIXED_DFS_STEPS` = 20_000 步):它们代表
+        // 交错 DFS 的最坏形状(全首字母 / 反复 zh / 单字母音节堆积),用来证明
+        // 「病态输入的耗时也是常数」是实测而不是推理。`nhao`/`feicde` 是本次
+        // 新增能力的代表(缩写出现在**开头**/**中间**),留作回归哨兵。
+        ("nhao", true),
+        ("feicde", true),
+        ("zzzz", true),
+        ("zhzhzhzh", true),
+        ("aaaaaaaa", true),
     ];
 
     println!("== 简拼/混合简拼单次查询延迟(预热 20 次后取 100 次的 min/avg/p95)==");
