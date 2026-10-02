@@ -1,12 +1,13 @@
-//! 兜底分支的「前缀混拼读法」:整串覆盖不了时,仍要能确认**覆盖输入前缀**的
-//! 混拼读法,剩下的串继续收尾。
+//! 简拼/混拼的整串读法:整串能拆成词串时,**一次空格整串上屏**。
 //!
-//! 用户报告:`womenjintqubeij` 实际只能一段段确认到「我」「门禁」,剩下的
-//! `tqubeij` 收不了尾——因为混拼读法只在**整串被完整覆盖**时才产出,
-//! 而「我们今天」只覆盖前 9 个字母(`wo men jin t*`)。
+//! 用户报告(2026-10-02):`womenjintqubeij` 这种「部分音节只打首字母」的串,
+//! 以前只在**整串恰好等于某一个词条**时才产候选,于是第一次空格只吃掉覆盖
+//! 前缀的「我们今天」,剩 `qubeij` 再按一次;更糟的是纯首字母串(`wmjtqbj`)
+//! 一个候选都产不出,只剩原样回显。
 //!
-//! 这里走**真实会话 API**(`InputEvent::Char` / `Space`),断言的是用户
-//! 实际看到的东西:第一次空格吃掉最长的那一段,剩余串自己收尾。
+//! 现在简拼弧也进格子(见 `engine/lattice.rs` 的 `abbrev` 参数)+ 复用同一套
+//! 带状态 beam 解码,整串读法作为一条覆盖整串的候选进同一张表 → 一次空格
+//! 整串上屏。这条用例走**真实会话 API**,断言用户实际看到的东西。
 //!
 //! 真实词库用例:词库/副索引缺失时跳过(与 `engine/tests/abbrev.rs` 同口径)。
 
@@ -14,57 +15,104 @@ use std::path::Path;
 
 use super::*;
 
-#[test]
-fn real_dict_prefix_mixed_reading_keeps_the_rest_resolvable() {
+/// 装好真实词库 + 副索引的会话。
+fn real_session() -> Option<InputSession> {
     let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
     let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
     if !dict_path.is_file() || !abbrev_path.is_file() {
-        return;
+        return None;
     }
     let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
     engine.dict = engine.dict.with_abbrev(&abbrev_path);
     assert!(engine.dict.has_abbrev(), "副索引应已装配");
-    let mut s = InputSession::new(Arc::new(engine));
+    Some(InputSession::new(Arc::new(engine)))
+}
 
-    for c in "womenjintqubeij".chars() {
+#[test]
+fn real_dict_mixed_whole_string_commits_in_one_space() {
+    let Some(mut s) = real_session() else {
+        return;
+    };
+    let input = "womenjintqubeij";
+    for c in input.chars() {
         s.handle(InputEvent::Char(c)).expect("不应失败");
     }
 
-    // 整串(15 字母)覆盖不了,但「我们今天」覆盖前 9 个字母
-    // (`wo men jin t*`,每个音节都有字母 → 合法读法)。
-    let top = s.candidates.first().expect("应有候选");
-    assert_eq!(
-        (top.word.as_str(), top.covered),
-        ("我们今天", 9),
-        "第一次空格应确认**最长**的那一段,实际前 5 条: {:?}",
+    // 结构性断言:候选表里**存在覆盖整串的简拼读法**,且读法就是「我们今天去北京」。
+    //
+    // 这里不断言它的名次:单测不带万象 `.gram`(只有词库),打分量纲退化成
+    // 「词频为主」,同族的其它读法(`我门禁提取北京`)会与它互换位置;带上真实
+    // LM 的名次由 `examples/probe` 的电池钉(实测两者都是「我们今天去北京」第一)。
+    assert!(
+        s.candidates.iter().any(|c| {
+            c.covered == input.len()
+                && c.spelling == crate::SpellingKind::Abbrev
+                && c.word == "我们今天去北京"
+        }),
+        "应有覆盖整串的简拼读法「我们今天去北京」,实际: {:?}",
         s.candidates
             .iter()
-            .take(5)
+            .take(6)
             .map(|c| (&c.word, c.covered, c.spelling))
             .collect::<Vec<_>>()
     );
 
-    match s.handle(InputEvent::Space).expect("不应失败") {
-        SessionOutput::Updated(u) => {
-            assert_eq!(u.preedit, "我们今天qubeij", "确认段留在组合里");
-            assert!(
-                !u.candidates.is_empty(),
-                "剩余串必须有候选(面板不能变成空的)"
-            );
-        }
-        other => panic!("期望 Updated(确认段留在组合里),实际 {other:?}"),
-    }
-    assert_eq!(s.pinyin(), "qubeij", "剩余串是 qubeij");
-
-    // 剩余串自己就能收尾(`qu` + `bei` + `j*` → 去北京)。
-    assert_eq!(
-        s.candidates.first().map(|c| c.word.as_str()),
-        Some("去北京"),
-        "剩余串 qubeij 的第一条应是「去北京」"
-    );
+    // **一次空格吃掉整串**:组合直接清空,不再需要按第二次。
     let out = s.handle(InputEvent::Space).expect("不应失败");
     assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "我们今天去北京"),
-        "两次空格把两段一起上屏: {out:?}"
+        matches!(out, SessionOutput::Commit(ref t) if !t.is_empty()),
+        "一次空格应整串上屏: {out:?}"
+    );
+    assert_eq!(s.pinyin(), "", "一次空格后组合应为空(整串被消费)");
+}
+
+/// 纯首字母串(`wmjtqbj` = 我们今天去北京的首字母)以前一个候选都没有,
+/// 只剩「原样回显」;现在必须给出覆盖整串的读法。
+#[test]
+fn real_dict_pure_initial_string_yields_a_whole_string_reading() {
+    let Some(mut s) = real_session() else {
+        return;
+    };
+    for c in "wmjtqbj".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    // 同上:纯首字母串必须产出覆盖整串的读法(名次交给带真实 LM 的电池)。
+    assert!(
+        s.candidates.iter().any(|c| {
+            c.covered == 7 && c.spelling == crate::SpellingKind::Abbrev && c.word == "我们今天去北京"
+        }),
+        "纯首字母串应有覆盖整串的读法,实际: {:?}",
+        s.candidates
+            .iter()
+            .take(6)
+            .map(|c| (&c.word, c.covered, c.spelling))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// 结构性保证:精确格**能**覆盖整串的输入(全拼),一次都不进简拼分支——
+/// 候选里不该出现简拼层。
+#[test]
+fn real_dict_fully_spelled_input_gets_no_abbrev_candidates() {
+    let Some(mut s) = real_session() else {
+        return;
+    };
+    for c in "womenjintian".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    assert!(
+        !s.candidates
+            .iter()
+            .any(|c| c.spelling == crate::SpellingKind::Abbrev),
+        "全拼输入不该出现简拼层候选: {:?}",
+        s.candidates
+            .iter()
+            .take(6)
+            .map(|c| (&c.word, c.spelling))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        s.candidates.first().map(|c| c.word.as_str()),
+        Some("我们今天")
     );
 }

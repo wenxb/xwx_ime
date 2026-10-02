@@ -22,7 +22,13 @@ impl ImeEngine {
         // 这里自取一代快照。生产查询走 `lookup_candidates`,那里一次查询
         // 只取一代、并把它传给格构建与屏蔽过滤(codex 审查 A3)。
         let user = crate::user_lm::user_entries_snapshot(&self.lm);
-        self.decode_beam_with_lattice(pinyin, ctx, k, &self.build_lattice(pinyin, None, user.as_ref())?)
+        self.decode_beam_with_lattice_penalized(
+            pinyin,
+            ctx,
+            k,
+            &self.build_lattice(pinyin, None, user.as_ref())?,
+            0.0,
+        )
     }
 
     /// 与 [`Self::decode_beam`] 相同，但格子由调用方传入（分层便于
@@ -39,6 +45,22 @@ impl ImeEngine {
         ctx: &LmContext<'_>,
         k: usize,
         lattice: &[Vec<LatticeEdge>],
+    ) -> Result<Vec<BeamPath>, EngineError> {
+        self.decode_beam_with_lattice_penalized(pinyin, ctx, k, lattice, 0.0)
+    }
+
+    /// [`Self::decode_beam_with_lattice`] + **每词加性先验**。
+    ///
+    /// 简拼整串读法需要这条：逐词 log 概率相加天生偏爱「多个超高频短词」的长链
+    /// （实测 `womenjintianqbj` 会解成「我满额你今天请病假」）。先验必须进**剪枝
+    /// 目标**本身，只在事后对结果排序是没用的——正确的读法可能早被 beam 剪掉了。
+    pub(super) fn decode_beam_with_lattice_penalized(
+        &self,
+        pinyin: &str,
+        ctx: &LmContext<'_>,
+        k: usize,
+        lattice: &[Vec<LatticeEdge>],
+        per_word_penalty: f32,
     ) -> Result<Vec<BeamPath>, EngineError> {
         let len = pinyin.len();
         let mut arena: Vec<BeamNode> = Vec::with_capacity((len + 1) * k);
@@ -105,7 +127,8 @@ impl ImeEngine {
                         // 模糊边减去累计 -log10(weight),多处混淆叠加累加。
                         score: arena[node_idx].score + dict_logp + logp * self.lm_weight
                             - edge.fuzzy_penalty
-                            - edge.typo_penalty,
+                            - edge.typo_penalty
+                            - per_word_penalty,
                         state: next_state,
                         edge: Some((pos, slot)),
                         parent: Some(node_idx),

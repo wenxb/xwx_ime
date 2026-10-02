@@ -94,6 +94,67 @@ pub const SYLLABLES: &[&str] = &[
     "zhun", "zhuo", "zi", "zong", "zou", "zu", "zuan", "zui", "zun", "zuo",
 ];
 
+/// 以 `prefix`（1~2 个字母的音节首字母，如 `j`/`zh`）开头的音节，长音节优先。
+///
+/// 简拼（只打首字母）读法要在**每个窗口**枚举候选音节，链枚举里线性扫 412 条
+/// 会把 `wmjtqbj` 这类长串放大成几万次比较；建一次表之后是 O(1) 切片查。
+/// 顺序按「长音节优先、同长字典序」（理由见 `sort_len_desc`），保证结果确定
+/// （同一输入两次查询逐字节一致）。
+///
+/// 两字母前缀只认 `zh`/`ch`/`sh`：其余两字母窗口（如 `wm`）不是音节的
+/// 首字母对，返回空——它们该走别的分支，不是简拼。
+pub fn abbrev_syllables(prefix: &str) -> &'static [&'static str] {
+    struct Index {
+        one: [Vec<&'static str>; 26],
+        two: Vec<(&'static str, Vec<&'static str>)>,
+    }
+    // 短音节优先：简拼里最省事的读法就是「一个声母就定下来的常用短音节」
+    // (`wo`/`men`/`ji`/`qu`…)。链枚举是按顺序花预算的，长音节先试会把
+    // `w`→`wang`、`m`→`mang` 这类分支排到前面，实测 `wmjtqbj` 因此只解出
+    // 「外媒镜头前不久」，真正的「我们今天去北京」连格子都没进。
+    fn sort_len_asc(v: &mut Vec<&'static str>) {
+        v.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+    }
+    static INDEX: std::sync::OnceLock<Index> = std::sync::OnceLock::new();
+    let idx = INDEX.get_or_init(|| {
+        let mut one: [Vec<&'static str>; 26] = std::array::from_fn(|_| Vec::new());
+        let mut two: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+        for s in SYLLABLES {
+            if let Some(i) = s.as_bytes().first().and_then(|c| c.checked_sub(b'a')) {
+                if (i as usize) < 26 {
+                    one[i as usize].push(s);
+                }
+            }
+            for p in ["zh", "ch", "sh"] {
+                if s.starts_with(p) {
+                    match two.iter_mut().find(|(k, _)| *k == p) {
+                        Some((_, v)) => v.push(s),
+                        None => two.push((p, vec![s])),
+                    }
+                }
+            }
+        }
+        for v in one.iter_mut() {
+            sort_len_asc(v);
+        }
+        for (_, v) in two.iter_mut() {
+            sort_len_asc(v);
+        }
+        Index { one, two }
+    });
+    if prefix.len() >= 2 {
+        return idx
+            .two
+            .iter()
+            .find(|(k, _)| *k == prefix)
+            .map_or(&[][..], |(_, v)| v.as_slice());
+    }
+    match prefix.as_bytes().first().and_then(|c| c.checked_sub(b'a')) {
+        Some(i) if (i as usize) < 26 => idx.one[i as usize].as_slice(),
+        _ => &[],
+    }
+}
+
 /// 音节最大长度：`shuang` / `chuang` / `zhuang` 均为 6。
 pub(crate) const MAX_SYLLABLE_LEN: usize = 6;
 

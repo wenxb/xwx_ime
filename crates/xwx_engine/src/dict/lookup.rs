@@ -4,7 +4,7 @@
 use super::mixed::{is_full_pinyin, partial_tail_readings, segment_input, MixedDfs, EMPTY_FIRST,
                    MAX_MIXED_COLLECT, MAX_MIXED_DFS_STEPS, MAX_PREFIX_READINGS,
                    MIN_PARTIAL_TAIL};
-use super::{Candidate, DictError, MmapDict, MAX_LOOKUP_RESULTS};
+use super::{Candidate, DictError, KeyPrefix, MmapDict, MAX_LOOKUP_RESULTS};
 
 /// 每条「停在残缺音节上」的前缀读法最多留几个候选。
 ///
@@ -22,6 +22,81 @@ const PREFIX_READING_QUOTA: usize = 8;
 const MAX_PREFIX_COLLECT_STEPS: usize = 8_000;
 
 impl MmapDict {
+    /// 主索引里以 `prefix` 为前缀的 key 存在性（见 [`Dictionary::key_prefix_state`]）。
+    ///
+    /// 简拼弧的剪枝与省分配：`None` ⇒ 整棵子树是死的（`wo ma …` 不存在），
+    /// 当场剪掉；`Prefix` ⇒ 有词条在后面，但本级不是词，**跳过一次
+    /// `parse_entries` 分配**；`Exact` ⇒ 去查词条。
+    ///
+    /// 零分配：一次二分 + 一次切片比较。
+    pub fn key_prefix_state(&self, prefix: &str) -> Result<KeyPrefix, DictError> {
+        let p = prefix.as_bytes();
+        let (mut lo, mut hi) = (0usize, self.pinyin_count);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let rec = self.record(mid)?;
+            let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            if k < p {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo >= self.pinyin_count {
+            return Ok(KeyPrefix::None);
+        }
+        let rec = self.record(lo)?;
+        let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+        Ok(if k == p {
+            KeyPrefix::Exact
+        } else if k.starts_with(p) {
+            KeyPrefix::Prefix
+        } else {
+            KeyPrefix::None
+        })
+    }
+
+    /// [`Self::key_prefix_state`] 的**带区间**版本：只在 `[lo, hi)` 里找。
+    ///
+    /// 简拼 DFS 用它在父链的区间内定位子链：链每延长一个音节，候选区间只会
+    /// 缩小，深层节点的二分因此只碰 1~2 个 mmap 页。全局二分每次要跳 ~21 个
+    /// 分散的页——实测「建格 19.33ms 却只有 1340 条弧」几乎全是页错误，不在 CPU。
+    ///
+    /// 返回 `(状态, 子区间下界)`；子区间上界沿用父区间（`[lo2, hi)` 一定是
+    /// 「以 `prefix` 开头」的超集，宁可宽也不能窄——宽只是多几步，窄会误剪）。
+    pub fn key_prefix_state_in(
+        &self,
+        prefix: &str,
+        lo: usize,
+        hi: usize,
+    ) -> Result<(KeyPrefix, usize), DictError> {
+        let p = prefix.as_bytes();
+        let (mut lo, mut hi) = (lo.min(self.pinyin_count), hi.min(self.pinyin_count));
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let rec = self.record(mid)?;
+            let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            if k < p {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo >= self.pinyin_count {
+            return Ok((KeyPrefix::None, lo));
+        }
+        let rec = self.record(lo)?;
+        let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+        let state = if k == p {
+            KeyPrefix::Exact
+        } else if k.starts_with(p) {
+            KeyPrefix::Prefix
+        } else {
+            KeyPrefix::None
+        };
+        Ok((state, lo))
+    }
+
     /// 纯简拼查询:`zgr` → 直接二分副索引,返回带全拼的词条。
     ///
     /// 副索引缺失时返回空(优雅退化,调用方走精确路径)。结果带早停:

@@ -24,6 +24,7 @@ fn edit_edge(end: usize, word: &str, pinyin: &str, edit_count: u8) -> LatticeEdg
         typo_penalty: 1.0,
         edit_count,
         gap: false,
+        abbrev: false,
     }
 }
 

@@ -78,10 +78,41 @@ pub enum DictError {
     BadTsvLine { line: u64, detail: String },
 }
 
+/// 主索引里 `prefix` 的存在性（简拼弧剪枝用，见 [`Dictionary::key_prefix_state`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPrefix {
+    /// 没有任何 key 以它为前缀：整棵子树是死的，当场剪掉。
+    None,
+    /// 有更长的 key 以它为前缀，但它自己不是词条：**不查词条**，只继续往下走。
+    Prefix,
+    /// 它自己就是一条词条（也可能同时是别的前缀）。
+    Exact,
+}
+
 /// 词库抽象：按拼音查词。
 pub trait Dictionary: Send + Sync {
     /// 精确查词：`pinyin` 可以是单音节（`"ni"`）或多音节短语（`"ni hao"`）。
     fn lookup(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError>;
+
+    /// 主索引里以 `pinyin` 为前缀的 key 存在性（简拼弧剪枝用）。
+    ///
+    /// 三态是**性能与正确性的分界**：`Prefix` 说明「有更长的词条在这里，
+    /// 但本级不是词」——简拼弧据此跳过词条解析（每个链节点一次
+    /// `parse_entries` 分配，22K 链就是实测 5~7ms 的来源）；`Exact` 才去查
+    /// 词条。默认 `None`：只有真实 mmap 词库有简拼能力。
+    fn key_prefix_state(&self, _pinyin: &str) -> Result<KeyPrefix, DictError> {
+        Ok(KeyPrefix::None)
+    }
+
+    /// 见 [`MmapDict::key_prefix_state_in`]；默认实现退化成全局查询。
+    fn key_prefix_state_in(
+        &self,
+        pinyin: &str,
+        _lo: usize,
+        _hi: usize,
+    ) -> Result<(KeyPrefix, usize), DictError> {
+        Ok((self.key_prefix_state(pinyin)?, 0))
+    }
 
     /// 前缀查词：返回所有 `pinyin` 以给定串开头的词条。
     ///
@@ -140,6 +171,12 @@ pub struct MmapDict {
     map: Mmap,
     pinyin_count: usize,
     total_entries: u64,
+    /// 「音节链 → 存在性」的**跨按键备忘**（简拼弧裁剪用）。
+    ///
+    /// 打字时同一批前缀会被反复查询：打 `wom` 时查过 `wo`/`wo men`，打 `women`
+    /// 时还会再查一次。每次查询是一次跨页 mmap 二分（实测 ~1µs，全库顺序读完
+    /// 1.73M 条 key 只要 41ms，说明成本在页错误而不是比较），缓存命中就把它省掉。
+    /// 上限到了整体清空即可——它只是备忘，不清也不会错。
     records_off: usize,
     strings_off: usize,
     entries_off: usize,
@@ -203,6 +240,29 @@ impl Dictionary for DictStore {
             Self::Mmap(d) => d.lookup(pinyin),
         }
     }
+
+    /// 转发到内层。**这条转发是简拼弧剪枝的正确性前提**：漏了它，引擎拿到
+    /// 的是 trait 默认值 `None`，每个简拼分支都会被当成死分支剪掉
+    /// （实测症状：`wmjtqbj` 连一个简拼候选都不出）。
+    fn key_prefix_state(&self, pinyin: &str) -> Result<KeyPrefix, DictError> {
+        match self {
+            Self::Sqlite(_) => Ok(KeyPrefix::None),
+            Self::Mmap(d) => d.key_prefix_state(pinyin),
+        }
+    }
+
+    fn key_prefix_state_in(
+        &self,
+        pinyin: &str,
+        lo: usize,
+        hi: usize,
+    ) -> Result<(KeyPrefix, usize), DictError> {
+        match self {
+            Self::Sqlite(_) => Ok((KeyPrefix::None, 0)),
+            Self::Mmap(d) => d.key_prefix_state_in(pinyin, lo, hi),
+        }
+    }
+
 
     fn lookup_prefix(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError> {
         match self {

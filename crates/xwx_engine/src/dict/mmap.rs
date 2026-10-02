@@ -10,9 +10,7 @@ use memmap2::Mmap;
 
 use crate::candidate::Candidate;
 
-use super::{read_u16, read_u32, read_u64, AbbrevIndex, DictError, Dictionary, MmapDict,
-            MmapRecord, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN, MMAP_MAGIC, MMAP_RECORD_LEN,
-            MMAP_VERSION};
+use super::{AbbrevIndex, DictError, Dictionary, KeyPrefix, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN, MMAP_MAGIC, MMAP_RECORD_LEN, MMAP_VERSION, MmapDict, MmapRecord, read_u16, read_u32, read_u64};
 
 impl MmapDict {
     /// 打开并 mmap 映射一个 dict.bin 词库文件。
@@ -213,6 +211,21 @@ impl Dictionary for MmapDict {
     /// 前缀联想：拼音数组按字节序排好，`[下界, 首个不匹配)` 就是答案区间。
     fn lookup_prefix(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError> {
         self.lookup_prefix_limited(pinyin, MAX_LOOKUP_RESULTS as usize)
+    }
+
+    /// 简拼弧剪枝：见 [`MmapDict::key_prefix_state`]。
+    fn key_prefix_state(&self, pinyin: &str) -> Result<KeyPrefix, DictError> {
+        MmapDict::key_prefix_state(self, pinyin)
+    }
+
+    /// 带区间的版本：见 [`MmapDict::key_prefix_state_in`]。
+    fn key_prefix_state_in(
+        &self,
+        pinyin: &str,
+        lo: usize,
+        hi: usize,
+    ) -> Result<(KeyPrefix, usize), DictError> {
+        MmapDict::key_prefix_state_in(self, pinyin, lo, hi)
     }
 
     fn lookup_prefix_limited(

@@ -446,6 +446,18 @@ impl WanxiangLM {
     fn log10_prob_raw(&self, value: i32, penalty_ln: f64) -> f32 {
         let logp = (value as f64 / 10_000.0 + penalty_ln) / std::f64::consts::LN_10
             - self.config.log10_corpus_size;
+        // **越界值按「模型兜底分」处理，不是钳到 0**。
+        //
+        // 2026-10-02 实测：`score(state=我, word=满额)` 会返回 +85781 这种值（.gram
+        // trie 在这个 (上文,词) 组合下读出 ≈2e9 的垃圾，`value/1e4/LN_10` 之后成了
+        // 正数，底层查询 bug 单独立卡）。先前把它 `.min(0.0)` 钳成 0.0 是错的——
+        // log10(1) = 0 意味着「概率 1」，等于给这种词白捡满分，实测 `womenjintianqbj`
+        // 因此被「我满额你今天请病假」占住（满额 lm=0.00，一路免费）。
+        // 正确语义是「模型没有可信结果」⇒ 记成非词配兜底分（与空上下文同档）。
+        if logp > 0.0 {
+            return (self.config.non_collocation_penalty / std::f64::consts::LN_10
+                - self.config.log10_corpus_size) as f32;
+        }
         logp as f32
     }
 

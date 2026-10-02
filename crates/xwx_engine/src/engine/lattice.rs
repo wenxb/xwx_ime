@@ -422,9 +422,11 @@ fn window_has_vowel(window: &str) -> bool {
             for start in 0..=to {
                 let mut budget = MAX_TOLERANT_CHAINS_PER_START;
                 let mut chain: Vec<&str> = Vec::new();
+                let mut key_buf = String::new();
                 self.collect_chain_edges(
                     pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
-                    user_entries, bounds, true, Some(stalls), 0, 0.0, true,
+                    user_entries, bounds, true, Some(stalls), 0, 0.0, true, false, false,
+                    &mut key_buf,
                 )?;
             }
         }
@@ -460,6 +462,36 @@ fn window_has_vowel(window: &str) -> bool {
         stalls: Option<&[usize]>,
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
+        self.build_lattice_flags(pinyin, bounds, tolerant, false, stalls, user_entries)
+    }
+
+    /// **简拼格**:字面读法之外,允许「单个字母 = 某个音节的首字母」这条读法
+    /// (见 [`segmenter::abbrev_syllables`]),让 `wmjtqbj` 这种全首字母串
+    /// 也能在格里有边、被同一个后向 DP + LM 解码读出「我们今天去北京」。
+    ///
+    /// 只在 [`ImeEngine::lookup_candidates`] 判定「精确格解不出整串」时才构建
+    /// (与容错同一个门槛思路),且调用方**只留覆盖整串的候选**——所以打对的
+    /// 输入零新边、简拼也不会把单字顶进第一页。
+    pub(super) fn build_abbrev_lattice(
+        &self,
+        pinyin: &str,
+        bounds: Option<&[usize]>,
+        user_entries: Option<&crate::user_lm::UserLmSnapshot>,
+    ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
+        self.build_lattice_flags(pinyin, bounds, false, true, None, user_entries)
+    }
+
+    /// [`Self::build_lattice_with`] 的带全部门槛开关版本:`tolerant` 打开容错
+    /// 弧,`abbrev` 打开简拼弧。两者互不影响,各自只在需要时才打开。
+    pub(super) fn build_lattice_flags(
+        &self,
+        pinyin: &str,
+        bounds: Option<&[usize]>,
+        tolerant: bool,
+        abbrev: bool,
+        stalls: Option<&[usize]>,
+        user_entries: Option<&crate::user_lm::UserLmSnapshot>,
+    ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let n = pinyin.len();
         let mut lattice: Vec<Vec<LatticeEdge>> = (0..=n).map(|_| Vec::new()).collect();
         if !pinyin.is_ascii() {
@@ -476,15 +508,65 @@ fn window_has_vowel(window: &str) -> bool {
         // 长串上**(改动前 7~9ms),打对的输入一次都不进这条分支。
         let per_start_budget = if tolerant {
             MAX_TOLERANT_CHAINS_PER_START
+        } else if abbrev {
+            MAX_ABBREV_CHAINS_PER_START
         } else {
             MAX_CHAINS_PER_START
         };
+        if abbrev {
+            // **简拼弧只从「真正走到了的位置」枚举**（工作队列 + 全局预算）。
+            //
+            // 旧实现对**每个**起点都吃满一份预算：15 字母输入 = 15 × 2048 弧
+            // （实测 `womenjintqubeij` p95 16.3ms，破 12ms 门槛），而其中绝大多数
+            // 起点根本接不上前一个词——简拼格是**词串链**，只有从 0 走得到的
+            // 位置才可能出现在解码路径里。
+            let mut seen = vec![false; n + 1];
+            let mut queue = std::collections::VecDeque::new();
+            seen[0] = true;
+            queue.push_back(0usize);
+            while let Some(start) = queue.pop_front() {
+                // **每个位置一份预算**（不共享）：共享时起点 0 会把预算一次吃光，
+                // 后面的位置（第二个词的起点）再也枚举不到，整串读法直接消失
+                // （实测 `wmjtqbj` 退回只剩原样回显）。省下来的是「接不上的起点」，
+                // 不是「走到了的位置」。
+                // **首词富枚举、后续词够用即可**：访问量 = 预算 × 走到位置数，
+                // 第一个词承担「整串从哪开始」的全部枚举，后续词只要能接上就够。
+                let mut budget = if start == 0 {
+                    per_start_budget
+                } else {
+                    MAX_ABBREV_TAIL_CHAINS
+                };
+                let mut chain: Vec<&str> = Vec::new();
+                let mut key_buf = String::new();
+                self.collect_chain_edges(
+                    pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
+                    user_entries, bounds, tolerant, stalls, 0, 0.0, false, abbrev, false,
+                    &mut key_buf,
+                )?;
+                // 这一步到达的位置 = 从 `start` 建出的所有边的终点，它们才需要
+                // 继续枚举（下一个词的起点）。
+                let ends: Vec<usize> = lattice[start]
+                    .iter()
+                    .map(|e| e.end)
+                    .filter(|&e| e > start && !seen[e])
+                    .collect();
+                for end in ends {
+                    if !seen[end] {
+                        seen[end] = true;
+                        queue.push_back(end);
+                    }
+                }
+            }
+            return Ok(lattice);
+        }
         for start in 0..n {
             let mut budget = per_start_budget;
             let mut chain: Vec<&str> = Vec::new();
+            let mut key_buf = String::new();
             self.collect_chain_edges(
                 pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
-                user_entries, bounds, tolerant, stalls, 0, 0.0, false,
+                user_entries, bounds, tolerant, stalls, 0, 0.0, false, abbrev, false,
+                &mut key_buf,
             )?;
         }
         Ok(lattice)
@@ -508,13 +590,25 @@ fn window_has_vowel(window: &str) -> bool {
         typo_edits: u8,
         typo_penalty: f32,
         only_typo_edges: bool,
+        abbrev: bool,
+        used_abbrev: bool,
+        key_buf: &mut String,
     ) -> Result<(), EngineError> {
         let n = pinyin.len();
         if chain.len() >= MAX_EDGE_SYLLABLES || *budget == 0 {
             return Ok(());
         }
         let max_len = (n - pos).min(segmenter::MAX_SYLLABLE_LEN);
-        for len in 1..=max_len {
+        // **简拼模式下先试长窗口**：长窗口才有「字面音节」(wo/men/jin/tian)，
+        // 而 len=1 只是缩写弧。旧顺序从 1 开始，位置 0 会先钻进 `w`→整音节
+        // 的子树把预算烧光，等轮到 `wo` 时预算已尽——实测 `womenjintianqbj`
+        // 的「我们今天」(0→12) 边因此压根没建出来（探针：只有「去北京」在）。
+        let lens: Vec<usize> = if abbrev {
+            (1..=max_len).rev().collect()
+        } else {
+            (1..=max_len).collect()
+        };
+        for len in lens {
             if *budget == 0 {
                 return Ok(());
             }
@@ -535,9 +629,9 @@ fn window_has_vowel(window: &str) -> bool {
             // - 否则在容错模式且有预算时,问音节级 ≤1 编辑索引:一个窗口
             //   可能同时像好几个音节(`em` 像 `me`、`en`…),全部展开,由
             //   LM 与词频打分决定谁赢——**不在这里替用户选**。
-            let mut readings: Vec<(&str, f32, u8)> = Vec::new();
+            let mut readings: Vec<(&str, f32, u8, bool)> = Vec::new();
             if self.segmenter.is_syllable(syl) {
-                readings.push((syl, 0.0, 0));
+                readings.push((syl, 0.0, 0, false));
             } else if tolerant
                 && typo_edits < MAX_TYPO_EDITS
                 && Self::window_covers_stall(stalls, pos, len)
@@ -549,30 +643,93 @@ fn window_has_vowel(window: &str) -> bool {
                 typo.sort_by(|a, b| a.1.total_cmp(&b.1));
                 typo.truncate(MAX_TYPO_READINGS_PER_WINDOW);
                 for (typo_syl, cost) in typo {
-                    readings.push((typo_syl, cost, 1));
+                    readings.push((typo_syl, cost, 1, false));
+                }
+            } else if abbrev && len == 1 {
+                // **简拼弧**:单字母窗口不是任何完整音节,但它是若干音节的
+                // 首字母(`j` → `ji`/`jin`/`jing`…)。旧实现只认「窗口本身是
+                // 合法音节」,于是 `wmjtqbj` 这种全首字母串在每个位置都走不动,
+                // 整串一个字都解不出来(实测:候选只剩原样回显);`zmgai` 的
+                // `z`/`m` 同理,只剩 `gai`→「改」。
+                //
+                // 代价 `ABBREV_PENALTY` 逐弧累加后扣在 `typo_penalty` 上
+                // (同一对数域,量纲一致),「走没走简拼」另由 `abbrev` 标记,
+                // 供候选层序使用。
+                for s in segmenter::abbrev_syllables(&pinyin[pos..pos + len]) {
+                    readings.push((s, ABBREV_PENALTY, 0, true));
                 }
             }
-            for (syl, arc_cost, arc_edits) in readings {
+            for (syl, arc_cost, arc_edits, arc_abbrev) in readings {
                 if *budget == 0 {
                     return Ok(());
                 }
                 *budget -= 1;
                 let arc_penalty = typo_penalty + arc_cost;
+                // 这条链里有没有简拼弧:逐边记录(见 `LatticeEdge::abbrev`)。
+                let past_abbrev = used_abbrev || arc_abbrev;
                 chain.push(syl);
                 let end = pos + len;
-            let joined = chain.join(" ");
-
-            // (key, fuzzy_penalty):精确键惩罚为 0,模糊键带上
-            // 展开时的累计 -log10(weight)。fuzzy 关闭时只有精确键。
-            let keys: Vec<(String, f32)> = if self.fuzzy_enabled {
-                expand_fuzzy_scored(&joined, &self.fuzzy_pairs)
+                // **key 用可复用缓冲维护**（不再每弧 `chain.join(" ")` 分配）：
+                // 简拼格构建是 2 万次量级的弧访问，每次一次 String 分配就是
+                // 几毫秒——实测建格 12.8ms 的主项之一。
+                let key_mark = key_buf.len();
+                if key_mark > 0 {
+                    key_buf.push(' ');
+                }
+                key_buf.push_str(syl);
+                let joined = key_buf.as_str();
+            // **简拼弧的索引剪枝**（见 [`crate::MmapDict::has_key_prefix`]）：
+            // 词内音节链只要不再是任何词条的 key 前缀，后面的扩展都落不到词上，
+            // 整棵子树当场剪掉（不花预算、不进递归）。没有它时死分支会把 DFS
+            // 预算吃光——实测 `wmjtqbj` 只解出「王莽讲堂前北京」，真正的
+            // 「我们今天去北京」连格子都没进。
+            //
+            // 代价：只按主索引剪枝，用户自造词（不在主索引里的 key）在简拼
+            // 弧上会一起被剪掉——简拼弧本来就只在精确格解不出整串时才开，
+            // 优先保证「有词可解」。
+            // 三态：`None` 剪子树；`Prefix` 只继续往下走、**不查词条**（省掉每个
+            // 链节点一次 `parse_entries` 分配——实测 22K 链就是 5~7ms 的来源）；
+            // `Exact` 才是本级真有词，去查。
+            let prefix_state = if arc_abbrev {
+                self.dict.key_prefix_state(joined)?
             } else {
-                vec![(joined.clone(), 0.0)]
+                crate::dict::KeyPrefix::Exact
             };
+            if prefix_state == crate::dict::KeyPrefix::None {
+                chain.pop();
+                key_buf.truncate(key_mark);
+                continue;
+            }
+            let word_here = prefix_state == crate::dict::KeyPrefix::Exact;
+
             // 「只补新边」模式(容错格以精确格为底时的复用):这条链一次弧都
             // 没用过 ⇒ 它的边在精确格里已经在,不必重复推。
+            //
+            // **简拼弧只拼多音节词**(2026-10-02):一个字母配单字词等于把
+            // 「一个字」和「一个字母」划等号(`w`→王/我、`m`→莽/忙 全是高频
+            // 单字),词频项会把它们顶到整句读法前面——实测 `wmjtqbj` 出的是
+            // 「王莽讲堂前北京」。这也是用户早前否掉的「一字一字母」形态
+            // (见 `MixedDfs` 的 `used_literal` 门槛,同一口径)。多音节词
+            // (`wo men`、`qu bei jing`)不受影响。
+            let abbrev_word_len_ok = !past_abbrev || chain.len() >= 2;
+            // `keys` 只在这里构造：前面的剪枝/精确性检查已经挡掉了绝大多数弧
+            // （它们只是某个更长词条的前缀），那些弧不该付 `join` + Vec 的分配。
+            let joined_owned: String = key_buf.clone();
+            let keys: Vec<(String, f32)> = if self.fuzzy_enabled {
+                expand_fuzzy_scored(&joined_owned, &self.fuzzy_pairs)
+            } else {
+                vec![(joined_owned, 0.0)]
+            };
             for (key, fuzzy_penalty) in &keys {
                 if only_typo_edges && arc_penalty == 0.0 {
+                    continue;
+                }
+                if !abbrev_word_len_ok {
+                    continue;
+                }
+                // 简拼弧且本级不是词条（只是某个更长词条的前缀）⇒ 没有边可建，
+                // 但 DFS 仍要往下走（`chain` 不动）。
+                if arc_abbrev && !word_here {
                     continue;
                 }
                 let cands = if let Some(c) = cache.get(key.as_str()) {
@@ -592,6 +749,7 @@ fn window_has_vowel(window: &str) -> bool {
                         typo_penalty: arc_penalty,
                         edit_count: arc_edits,
                         gap: false,
+                        abbrev: past_abbrev,
                     });
                 }
                 // 造词条目合并(仅精确键):与词典条目同区间同层,
@@ -610,6 +768,7 @@ fn window_has_vowel(window: &str) -> bool {
                                 typo_penalty: arc_penalty,
                                 edit_count: arc_edits,
                                 gap: false,
+                                abbrev: past_abbrev,
                             });
                         }
                     }
@@ -620,8 +779,10 @@ fn window_has_vowel(window: &str) -> bool {
                 self.collect_chain_edges(
                     pinyin, start, end, chain, lattice, cache, budget, user_entries, bounds,
                     tolerant, stalls, typo_edits + arc_edits, arc_penalty, only_typo_edges,
+                    abbrev, past_abbrev, key_buf,
                 )?;
                 chain.pop();
+                key_buf.truncate(key_mark);
             }
         }
 
@@ -659,12 +820,14 @@ fn window_has_vowel(window: &str) -> bool {
                             typo_penalty: cost,
                             edit_count: 1,
                             gap: true,
+                            abbrev: used_abbrev,
                         });
                     }
                 } else {
                     self.collect_chain_edges(
                         pinyin, start, pos + gap, chain, lattice, cache, budget, user_entries,
                         bounds, tolerant, stalls, typo_edits + 1, cost, only_typo_edges,
+                        abbrev, used_abbrev, key_buf,
                     )?;
                 }
             }

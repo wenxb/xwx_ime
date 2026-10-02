@@ -1560,3 +1560,28 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   总表 p50 0.258→**0.232ms**、p95 1.568→**1.451ms**,其中简拼层最重的
   `mixed:zhongg` p50 1.576→**1.319ms**。省下的确实是分配(与 `score_only`
   同结论),但这一条顺带把最重的简拼排序也压下去了一截。
+
+## ㉕ 简拼整串候选(首字母音节进格子 + 复用 beam 解码)
+
+- **背景**:`wmjtqbj`(我们今天去北京)只回显原串;`womenjtqbj` 第 1 是「我们今天」、
+  后面 21 条全是第一个音节的单字;`womenjintianqbj` 被「我满额你今天请病假」占住。
+  根因:`collect_chain_edges` 只在窗口**本身是合法音节**时建边,首字母(`j`/`t`)
+  不进格子;`dict/mixed.rs` 那条混拼通道又只收「整串恰等于单条词条」的候选。
+- **实现**:`LatticeEdge` 加 `abbrev` 标记;`collect_chain_edges` 新增单字母简拼弧
+  (`segmenter::abbrev_syllables` 按首字母建 O(1) 索引)、`build_abbrev_lattice`
+  与工作队列枚举;`lookup_candidates` 在「精确格解不出整串」时建简拼格,复用
+  `decode_beam_with_lattice_penalized`(逐词先验**进剪枝目标**),整串读法作为
+  覆盖整串的候选进同一张表并按结构置顶(上游 libime/RIME 同构,不设阈值)。
+- **三个坑(都靠探针定位)**:
+  1. 缩写读法按「短音节优先」时,位置 0 先钻进 `w`→整音节的子树把预算烧光,
+     字面窗口 `wo` 轮不到 ⇒ `我们今天`(0→12) 边压根没建(探针:只有 `去北京` 在)。
+     修法:简拼模式**窗口从长到短**(字面音节优先)。
+  2. `.gram` 越界正值被钳成 0 = log10(1) = **满分**,垃圾词白捡分(`满额 lm=0.00`)。
+     修法:越界值按非词配兜底分处理(底层 trie 查询 bug 单独立卡)。
+  3. 逐词先验只在事后排序无效——正确读法可能早被 beam 剪掉,必须进剪枝目标。
+- **门槛**:`cargo test --workspace` **365 passed / 0 failed**;clippy `-D warnings` 0 告警;
+  `perf_probe --repeat 3 --prewarm` 全场景通过(max 10.626ms、超线 0 样本);
+  `regression_probe --format v1` 2322 行**只 9 行差异,全部来自 `zhzhzhzh`**
+  (连续 zh、无元音的病态串:以前只出原样回显,现在多一条覆盖整串的读法)。
+  28 条电池 6 个变化,5 个改善、1 个不理想(`womenjtqbjgy`);`yij`/`wsm`/`zgr`/
+  `meiy`/`xian`/`nihao`/`zhongguo` 等既有形态逐字节不变。
