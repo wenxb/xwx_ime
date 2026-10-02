@@ -156,7 +156,7 @@ fn window_has_vowel(window: &str) -> bool {
                 let score = if edge.gap {
                     -edge.typo_penalty + result[edge.end]
                 } else {
-                    let (logp, _) = self.lm.score(&initial, &edge.word);
+                    let logp = self.lm.score_only(&initial, &edge.word);
                     let dict_logp = if total_freq > 0 {
                         ((edge.freq.max(1) as f64).log10() - log10_total) as f32
                     } else {
@@ -271,7 +271,7 @@ fn window_has_vowel(window: &str) -> bool {
             if seen.contains(&(c.word.as_str(), c.pinyin.as_str())) {
                 continue; // 已在更靠前的层出现:同词不进简拼层
             }
-            let (lm_score, _) = self.lm.score(&state, c.word.as_str());
+            let lm_score = self.lm.score_only(&state, c.word.as_str());
             let dict_logp = if total_freq > 0 {
                 ((c.freq.max(1) as f64).log10() - log10_total) as f32
             } else {

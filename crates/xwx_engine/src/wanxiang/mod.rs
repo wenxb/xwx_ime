@@ -556,6 +556,12 @@ impl LanguageModel for WanxiangLM {
         };
         (logp, WanxiangState { tail: next_tail })
     }
+
+    /// 只要分数:不拼那个「上文并入 word 再截断」的新查询键(后向 DP 与
+    /// 独立候选评分立刻丢弃它)。
+    fn score_only(&self, state: &Self::State, word: &str) -> f32 {
+        self.score_word(&state.tail, word)
+    }
 }
 
 #[cfg(test)]

@@ -1411,3 +1411,40 @@ codex 审查第二批 P1:「首键和首次纠错存在被预热隐藏的初始�
   属于数据格式版本升级,单列。
 - **门槛**:`just verify` **351 用例全绿**(282 engine + 6 ibus + 9 bin + 54 集成),
   clippy `-D warnings` 无输出。
+
+## ㉝ `score_only`:被丢弃的 LM 状态不再构建(2026-10-03)
+
+codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状态推进」的前半截。
+
+- **问题**:后向 DP 与独立候选评分拿到分数后**立刻丢掉**新状态,而 `score`
+  必须为它付一次分配——bigram 一个 `String`、万象一个拼接的查询键、
+  混合层一个 `Box<LmState>` + 一次 `String` + 一次快照克隆。生产里有四处
+  这样的调用(`engine/lattice.rs:159,274`、`engine/lookup.rs:317`、
+  `engine/decode.rs:302`);beam 里那处(`decode.rs:82`)**真的要状态**,不动。
+- **改法**:`LanguageModel` 新增 `score_only(&self, state, word) -> f32`
+  (默认实现退化成 `score(..).0`,保证任何未覆盖的实现语义不变);
+  `BigramLM`/`WanxiangLM`/`MixedLM`/`LmStore` 四个实现各自覆盖成「只算分、
+  不建状态」。混合层的表达式顺序**刻意与 `score` 一致**(先算 boost 再相加),
+  否则 f32 不满足结合律,会从「省一次分配」变成「改一个 ULP」。
+- **验证一(逐位相等)**:`crates/xwx_engine/src/lm/tests.rs` 的
+  `score_only_matches_score_bit_for_bit`——bigram/混合/万象三组、多状态多词,
+  全部按 `to_bits()` 比,含真实的 `wanxiang-lts-zh-hans.gram`(文件不存在时跳过)。
+  **这条测试的边界已实测并写进它的文档**:它抓不住「把混合层加法顺序改一处」
+  (那套语料上两种顺序恰好逐位相同),所以它证明的是实现当下一致,
+  不是 ULP 敏感度。
+- **验证二(真的省了)**:新增 `tests/alloc_count.rs`——自写计数分配器
+  (`GlobalAlloc` 包 `System`),同样 600 次打分:`score` 分配 **31200 字节**、
+  `score_only` 分配 **0 字节**(每条 52 字节 = 一个 `String` + 一个 `Box`)。
+  这条与机器快慢无关,是结构性的。
+- **实测(延迟)**:`perf_probe` 各场景**测不出差别**(总表 p95 1.612→1.582ms、
+  max 2.602→2.574ms、长串 p50 0.622→0.623ms,都在噪声内)——符合预期:
+  后向 DP 只在容错分支里跑,而这批场景多数走精确路。审查提醒过「不能把
+  LM 调用/分配减少比例当耗时比例」,这里照实报告:省的是分配,不是毫秒。
+- **行为对拍**:`regression_probe --format v1` 2322 行与 `/tmp/codex_batch1_nt.txt`
+  **diff 0 行**。
+- **同一批 P2 里仍未做**的三项(留给后续):格查询缓存命中时借用候选而不是
+  先克隆整个 `Vec<Candidate>`(`lattice.rs:480-496`);排序装饰键持有候选
+  所有权或索引、不做整批 clone(`rank.rs:82-95`);UI 更新区分「候选内容变了」
+  与「只有光标动了」(`session/view.rs:74`)。
+- **门槛**:`just verify` **353 用例全绿**(283 engine + 6 ibus + 9 bin + 55 集成),
+  clippy `-D warnings` 无输出。

@@ -1,16 +1,16 @@
 # 实机验证清单
 
-> `cargo test` 有 **351** 个测试全绿（282 engine 单测 + 6 ibus 单测 + 9 bin +
-> **54 D-Bus 集成**），但**它仍不是实机可用的证据**。
+> `cargo test` 有 **353** 个测试全绿（283 engine 单测 + 6 ibus 单测 + 9 bin +
+> **55 D-Bus 集成**），但**它仍不是实机可用的证据**。
 >
 > **2026-10-01 更新**：根 `tests/` 现在有一组 **D-Bus 集成测试**，
 > 跑真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`，已自动化下面清单里的
 > **一部分**（英文模式透传、`CommitText`/`UpdatePreeditText`/
 > `UpdateLookupTable` 信号内容与字段顺序、`FocusOut`、候选点击、翻页、
-> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性、总线往返延迟）。13 个文件（每个文件一组场景，原来是 5 个）：
+> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性、总线往返延迟、分配计数）。14 个文件（每个文件一组场景，原来是 5 个）：
 > `verbatim_url`(7)、`wire_abbrev`(5)、`mods_keys`(4)、`prefix_commit`(1)、
 > `paging`(7)、`blocklist_delete`(2)、`focus_lifecycle`(4)、`punctuation_paging`(1)、
-> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)、`wire_perf`(1)。
+> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)、`wire_perf`(1)、`alloc_count`(1)。
 >
 > **回归基线**（codex 审查 Q1）：`tests/baselines/regression_v2.txt` 是
 > `examples/regression_probe.rs --format v2` 的输出（2515 行），旁边

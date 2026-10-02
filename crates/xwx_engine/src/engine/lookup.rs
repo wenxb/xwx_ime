@@ -314,7 +314,7 @@ impl ImeEngine {
             // 上屏下恰恰有用(用户可以先上屏这一段,剩下的留给下一轮);
             // 它们在排序里落在自己的 u_min 桶内、按分数靠后,不会挤掉
             // 完整读法。容错格会带来更多这类前缀边,同样按低分排在桶内。
-            let (logp, _) = self.lm.score(&initial, &edge.word);
+            let logp = self.lm.score_only(&initial, &edge.word);
             let dict_logp = if total_freq > 0 {
                 ((edge.freq.max(1) as f64).log10() - log10_total) as f32
             } else {

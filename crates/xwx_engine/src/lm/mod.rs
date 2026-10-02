@@ -87,6 +87,18 @@ pub trait LanguageModel: Send + Sync {
     /// 调用方要不要采用返回的新状态由自己决定——例如 Viterbi 只沿
     /// 被选中的路径推进状态，被剪掉的路径丢弃。
     fn score(&self, state: &Self::State, word: &str) -> (f32, Self::State);
+
+    /// 只要分数、不要新状态。
+    ///
+    /// 后向 DP、独立候选评分这类调用方**立刻丢弃**推进出来的状态,而
+    /// [`Self::score`] 必须为它付一次分配(bigram 一个 `String`、万象一个
+    /// 查询键、混合层一个 `Box` + 状态克隆)。默认实现退化成
+    /// `self.score(state, word).0`,**语义必须逐位相同**;各实现覆盖它,
+    /// 才真的省下那次分配。相等性由 `lm/tests.rs` 的
+    /// `score_only_matches_score_bit_for_bit` 在每个实现上钉住。
+    fn score_only(&self, state: &Self::State, word: &str) -> f32 {
+        self.score(state, word).0
+    }
 }
 
 /// 已上屏文本构成的 LM 查询上下文。
@@ -258,6 +270,11 @@ impl LanguageModel for BigramLM {
         // 消费这个词后上下文推进为它自己（是否采用由调用方决定）。
         (logp, Some(word.to_string()))
     }
+
+    /// 只要分数:同一个 `log10_prob`,不建 `Some(word.to_string())`。
+    fn score_only(&self, state: &Self::State, word: &str) -> f32 {
+        self.log10_prob(state.as_deref(), word)
+    }
 }
 
 
@@ -407,6 +424,18 @@ impl LanguageModel for MixedLM {
             },
         )
     }
+
+    /// 只要分数:不建 `MixedState`(那要 `Box` 一次 + 一次 `String` +
+    /// 一次快照克隆)。**表达式顺序与 `score` 保持一致**——f32 加法不满足
+    /// 结合律,换个括号就不再逐位相同了。
+    fn score_only(&self, state: &MixedState, word: &str) -> f32 {
+        let base_logp = self.base.score_only(&state.base, word);
+        let (c_uni, c_bi) = self
+            .user
+            .counts_with(&state.snap, state.user_prev.as_deref(), word);
+        let boost = count_gain(c_uni) + count_gain(c_bi);
+        base_logp + boost
+    }
 }
 
 /// 统一的语言模型状态。
@@ -490,6 +519,16 @@ impl LanguageModel for LmStore {
             }
             // 状态类型与模型不匹配：只可能是调用方手工构造了错误的状态
             // 枚举变体（会话状态永远来自同一个 LmStore），属编程错误。
+            _ => unreachable!("LmState 变体与 LmStore 变体不匹配"),
+        }
+    }
+
+    /// 转发给具体实现的 `score_only`(同样只做匹配、不建新状态)。
+    fn score_only(&self, state: &LmState, word: &str) -> f32 {
+        match (self, state) {
+            (Self::Bigram(lm), LmState::Bigram(s)) => lm.score_only(s, word),
+            (Self::Wanxiang(lm), LmState::Wanxiang(s)) => lm.score_only(s, word),
+            (Self::Mixed(lm), LmState::Mixed(s)) => lm.score_only(s, word),
             _ => unreachable!("LmState 变体与 LmStore 变体不匹配"),
         }
     }

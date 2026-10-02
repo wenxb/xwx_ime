@@ -409,3 +409,93 @@ fn mixed_learning_never_demotes() {
     let (b_untouched, _) = plain.score(&plain.initial_state(), "跨越");
     assert_eq!(untouched, b_untouched, "没学过的词必须原样保留通用层分");
 }
+
+/// 万象 `.gram` 的真实路径(有才验,没有就跳过——不假装验过)。
+fn real_gram_path() -> Option<std::path::PathBuf> {
+    let xdg = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+        })?;
+    let path = xdg.join("xwx").join("wanxiang-lts-zh-hans.gram");
+    path.is_file().then_some(path)
+}
+
+/// `score_only` 必须与 `score(..).0` **逐位相同**(codex 审查第二批)。
+///
+/// 它省的是分配,不是精度:`score` 要为被丢弃的状态付一次 `String`/`Box`,
+/// `score_only` 不建状态,但**两边算出来的分数必须一模一样**。
+/// 按 `to_bits()` 比而不是肉眼近似:f32 加法不满足结合律,混合层里
+/// `base + (g1 + g2)` 与 `(base + g1) + g2` 原则上能差一个 ULP。
+///
+/// **这条测试证明的是什么、不证明什么(实测过)**:它证明四个实现当下
+/// 逐位一致;但它**抓不住**「把加法顺序改一处」——把混合层的
+/// `base + boost` 展开成 `(base + g1) + g2` 之后,本测试语料上的结果
+/// 恰好仍然逐位相同,测试照旧是绿的。要真正证明省下了分配,看
+/// `tests/alloc_count.rs`(计数分配器:600 次打分 `score` 31200 字节、
+/// `score_only` 0 字节)。
+#[test]
+fn score_only_matches_score_bit_for_bit() {
+    let words = ["你好", "可以", "天气", "西安", "斯巴克", "龘", "不存在的词"];
+
+    // ① 通用 bigram 层(两个状态:句首 / 有上文)
+    let mut base = BigramLM::new();
+    base.add_unigram("你", 100);
+    base.add_unigram("好", 50);
+    base.add_unigram("可以", 30);
+    base.add_bigram("你", "好", 40);
+    for state in [base.initial_state(), Some("你".to_string())] {
+        for word in words {
+            assert_eq!(
+                base.score_only(&state, word).to_bits(),
+                base.score(&state, word).0.to_bits(),
+                "bigram:state={state:?} word={word}"
+            );
+        }
+    }
+
+    // ② 混合层(用户计数增益那一项最容易在改写时换掉加法顺序;
+    //    这里同时喂一元与二元计数,让两个 gain 都非零)
+    let user = UserLM::in_memory();
+    for word in ["你好", "可以", "斯巴克"] {
+        user.learn(None, word);
+    }
+    user.learn(Some("你"), "好");
+    let store = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user));
+    for state in [
+        store.initial_state(),
+        store.state_from_context(&LmContext {
+            tail: "你",
+            last_word: Some("你"),
+        }),
+    ] {
+        for word in words {
+            assert_eq!(
+                store.score_only(&state, word).to_bits(),
+                store.score(&state, word).0.to_bits(),
+                "mixed:word={word}"
+            );
+        }
+    }
+
+    // ③ 万象(字符级窗口):真实数据文件不存在就跳过
+    if let Some(path) = real_gram_path() {
+        let lm = LmStore::Wanxiang(WanxiangLM::open(&path).expect("打开万象 .gram 失败"));
+        for state in [
+            lm.initial_state(),
+            lm.state_from_context(&LmContext {
+                tail: "今天天气",
+                last_word: Some("天气"),
+            }),
+        ] {
+            for word in words {
+                assert_eq!(
+                    lm.score_only(&state, word).to_bits(),
+                    lm.score(&state, word).0.to_bits(),
+                    "wanxiang:word={word}"
+                );
+            }
+        }
+    }
+}

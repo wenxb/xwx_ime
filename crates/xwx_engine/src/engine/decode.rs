@@ -299,7 +299,7 @@ impl ImeEngine {
         let mut ranked: Vec<Candidate> = merged
             .into_iter()
             .map(|mut c| {
-                let (lm_score, _) = self.lm.score(&state, c.word.as_str());
+                let lm_score = self.lm.score_only(&state, c.word.as_str());
                 let dict_logp = if total_freq > 0 {
                     ((c.freq.max(1) as f64).log10() - log10_total) as f32
                 } else {
