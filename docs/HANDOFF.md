@@ -966,3 +966,44 @@ A 段(候选列表)与改动前**逐字节相同**——这次只改会话/IBus 
    改用仍然装满的 `xian`(精确层占满 100、简拼层保底 5)与 `ky`(精确层空、
    简拼层填满 100)来钉。
 
+
+## ㉓ 全项目「单文件超过 600 行」的拆分(2026-10-02)
+
+**起因**:用户要求「优化一下项目,把单文件超过 600 行的统统按合适的结构拆一下」。
+拆前实测(31 个 `.rs` / 21844 行,>600 行的 10 个):
+`lib.rs` 4661、`session.rs` 3743、`dict.rs` 2140、`tests/support/mod.rs` 1325、
+`user_lm.rs` 1006、`lm.rs` 908、`interactive_sequences.rs` 852、
+`focus_paging_delete.rs` 750、`wanxiang.rs` 679、`src/main.rs` 605。
+**拆后:0 个文件超过 600 行**(另:独立探针项目 `scripts/gram_probe/src/main.rs`
+956 → `main.rs` 38 + `gram.rs` 404 + `commands.rs` 534,它不在主 workspace 里)。
+
+**拆法**:①先把内联测试挪成 `foo/tests.rs` 或 `foo/tests/*.rs`(多数文件这一刀
+就够了);②仍超 600 的再按职责拆,并且**类型定义一律留在父模块**
+(`dict/mod.rs`、`session/mod.rs`、`engine/mod.rs`)——子模块是定义模块的后代,
+读私有字段本来就允许,只有跨模块调用的方法才需要标 `pub(super)`。
+
+**验收口径**(纯重构,行为零变化):
+- 每个阶段都跑同一份对拍:`cargo run --release --offline -p xwx_engine
+  --example regression_probe -- <out>`,与基线 `/tmp/refactor_baseline.txt`
+  比对。**必须过滤 `min_ms=` 计时行**(`grep -v 'min_ms='` 后 2303 行),
+  否则每行耗时都不同,diff 永远非空。
+- `just verify` 全绿(库单测 248 + bin 9 + 集成 50)、clippy `-D warnings` 无输出。
+- 拆测试时做**完整性核对**:脚本统计原文件所有顶层条目,确认每一个都落到了
+  某一组(「未分组=空」),条数不变——否则会静默丢用例。
+
+**搬代码的三条坑(都踩过,已修)**:
+1. **属性行属于它修饰的条目**:`#[derive(Debug, Clone, Copy, PartialEq, Eq)]`
+   留在原地就会套到下一个类型上,编译器报「Debug/Clone 冲突实现」;
+2. **相邻条目之间没有被任何区间覆盖就会整体丢失**:`SqliteDict` 结构体、
+   `read_u16/u32/u64` 三个读取器都这样掉过一次,只靠编译器报「找不到」才发现;
+   因此按行区间搬运必须**首尾相接**,且搬完扫一遍条目清单;
+3. `//!` 内层文档必须在文件最前面,拼接时要单独提取。
+
+**一个反直觉的坑**:`use rank::unreachable_tail;` 在 lib 构建里报「未使用」,
+但**测试构建里要用**——`#[cfg(test)]` 的调用者不算「使用」,把它从 import 列表
+删掉会让 `just verify`(含测试构建)失败。正解是让测试模块自己
+`use crate::engine::rank::unreachable_tail;`,而不是改引擎层的 import。
+
+**提交**:`5b21ff4`(测试设施 + 两个集成测试)→ `1a772b8`(src/main.rs)→
+`b6d0d4a`(wanxiang/lm/user_lm)→ `ee062e1`(dict)→ `5913197`(session)→
+`2e43abc`(lib/engine)→ 探针拆分。每阶段都是独立提交,便于逐段回滚。
