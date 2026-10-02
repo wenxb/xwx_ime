@@ -65,6 +65,23 @@ const MAX_SEGMENTATIONS: usize = 8;
 /// 预算耗尽时**保留已经收下的候选**(部分结果优于空结果),不报错。
 const MAX_MIXED_DFS_STEPS: usize = 20_000;
 
+/// 混合简拼的**探索上界**:收集池到这个条数就停止继续探索。
+///
+/// 取 [`MAX_LOOKUP_RESULTS`] 的 8 倍(4000),是实测标定的折中:
+/// - 早了不行——在 500(最终名额)就停时,截断按**探索顺序**发生,实测
+///   `meiy` 把词频最高的「没有」(504685,本该第 1)丢了,列表第 1 名
+///   「每一个」只有 500354;
+/// - 晚了也不行——完全不设上界时 DFS 会跑满 [`MAX_MIXED_DFS_STEPS`]
+///   预算,`zhongg` 单次查询 0.343ms → **4.13ms**(5ms 门槛);
+/// - 4000 配上「整 key 跳过」后,`zhongg` 2.8ms、`meiy` 1.3ms,
+///   而 26 个抽样输入的候选条数**全部不变**(只有 `meiy`/`zhongg`/`nih`
+///   这类「一个音节位下有几百个 key」的输入内容变好)。
+///
+/// 真正的质量决策仍然只在**[排序之后]**做(按词频取前
+/// [`MAX_LOOKUP_RESULTS`] 条),这里只是「看多少」的上界。
+const MAX_MIXED_COLLECT: usize = MAX_LOOKUP_RESULTS as usize * 8;
+
+
 /// 词库错误。
 #[derive(Debug, Error)]
 pub enum DictError {
@@ -576,6 +593,19 @@ impl MmapDict {
     }
 
     /// 解析一个词块（word_len:u8 + word + freq:u32 LE，按 freq 降序）。
+    /// 某个 key 的**最高词频**(词块里第一个词条的 freq)。
+    ///
+    /// 词块内 freq 降序(与 `abbrev.bin` 同约定,8 个 key 抽样实测非升序,
+    /// 含「一」130 条的大 key),所以这就是该 key 的天花板。
+    /// 只读头部几字节、**不做任何分配**——DFS 拿它做「整 key 跳过」的
+    /// 分支界限(见 [`MixedDfs::collect`]),每次跳过一个 key 省下的是
+    /// 几十次词条解析 + 字符串分配。
+    fn first_entry_freq(&self, ent_off: usize, ent_len: usize) -> Result<u64, DictError> {
+        let block = self.slice(ent_off, ent_len)?;
+        let wl = *block.first().ok_or(DictError::Corrupt("词块为空"))? as usize;
+        Ok(read_u32(block, 1 + wl)? as u64)
+    }
+
     fn parse_entries(&self, ent_off: usize, ent_len: usize) -> Result<Vec<(String, u64)>, DictError> {
         let block = self.slice(ent_off, ent_len)?;
         let mut out = Vec::new();
@@ -687,8 +717,11 @@ impl MmapDict {
     ///
     /// **成本**:单次查询的索引探测步数硬上限为 [`MAX_MIXED_DFS_STEPS`]
     /// (20_000 步),预算耗尽即停并保留已收候选——病态输入(`zzzz`、
-    /// `zhzhzhzh`)的最坏情况因此是常数。扫描同样带早停:
-    /// 凑够 [`MAX_LOOKUP_RESULTS`] 即止。
+    /// `zhzhzhzh`)的最坏情况因此是常数;收集池到 [`MAX_MIXED_COLLECT`]
+    /// 也停。**注意截断只发生在排序之后**(按词频取前
+    /// [`MAX_LOOKUP_RESULTS`] 条),收集期不做任何「谁先到谁留下」的决策
+    /// ——那正是 2026-10-02 修掉的 bug(`meiy` 下词频最高的「没有」被
+    /// 500 条早停丢掉,详见 [`MmapDict::lookup_mixed`] 的实现注释)。
     ///
     /// 音节表来自编译进二进制的静态表 `crate::segmenter::SYLLABLES`(410 项),
     /// 零扫描;**不依赖副索引存在**——本查询只走主索引,
@@ -714,6 +747,8 @@ impl MmapDict {
                 by_len,
                 out: &mut best,
                 budget: MAX_MIXED_DFS_STEPS,
+                threshold: 0,
+                threshold_at: 0,
             };
             dfs.dfs(0, &[], false, false)?;
         }
@@ -722,6 +757,11 @@ impl MmapDict {
             .map(|((word, py), freq)| Candidate::new(word, py, freq))
             .collect();
         out.sort_by_key(|c| std::cmp::Reverse(c.freq));
+        // **按词频截断**(而不是收集期先到先得):上限仍是 MAX_LOOKUP_RESULTS,
+        // 但留下的必须是分最高的那批。实测 `meiy`:旧口径 500 条里没有
+        // 「没有」(词频 504685,应为第 1),因为它的枚举分支排在靠后位置,
+        // 名额先被「每一个」(500354)等占满了。
+        out.truncate(MAX_LOOKUP_RESULTS as usize);
         Ok(out)
     }
     /// 混合简拼的**全拼**路径:**改动前的原实现,逐字节不动**。
@@ -813,7 +853,6 @@ impl MmapDict {
         Ok(out)
     }
 
-
 }
 
 /// 输入能否被**完整**切成一串音节(即「整串都是合法全拼」)。
@@ -856,6 +895,14 @@ struct MixedDfs<'a> {
     out: &'a mut std::collections::HashMap<(String, String), u64>,
     /// 剩余索引探测步数(二分迭代或读记录各 1 步),归零即停。
     budget: usize,
+    /// 收集池第 [`MAX_LOOKUP_RESULTS`] 名的**下界**(0 = 还没收满)。
+    ///
+    /// 只作下界用:它是「已收集集合」的第 N 名,后续还会收到更高分的条目,
+    /// 真实的第 N 名只会更高——用下界做整 key 跳过**不会误杀**
+    /// (见 [`MixedDfs::collect`])。
+    threshold: u64,
+    /// 上次算 `threshold` 时收集池的大小(翻倍才重算,O(log) 次)。
+    threshold_at: usize,
 }
 
 /// 把 `part` 接到空格分隔的前缀 `prefix` 之后(空前缀不加前导空格)。
@@ -928,6 +975,27 @@ impl MixedDfs<'_> {
         }
     }
 
+    /// 收集池超 [`MAX_MIXED_COLLECT`] 时**按词频**裁剪到一半。
+    ///
+    /// 为什么不早停:早停(收满即止)是按 DFS 探索顺序决定谁留下,会丢高频词
+    /// ——实测 `meiy` 撞上 500 条早停时,词频最高的「没有」(504685)竟不在
+    /// 列表里,而第 1 名「每一个」只有 500354。裁剪按分数,与探索顺序无关。
+    /// 正常情况下 `len < MAX_MIXED_COLLECT`,本函数只做一次整数比较。
+    /// 重新估计「收集池第 N 名的下界」——池子翻倍才重算一次。
+    ///
+    /// 不重算的代价只是少跳过几个 key(下界偏保守),不会误杀;每次重算
+    /// 是 O(池子大小) 的选择,所以按 2 倍增长触发,O(log) 次。
+    fn refresh_threshold(&mut self) {
+        let n = MAX_LOOKUP_RESULTS as usize;
+        if self.out.len() < n || self.out.len() < self.threshold_at.saturating_mul(2) {
+            return;
+        }
+        self.threshold_at = self.out.len();
+        let mut f: Vec<u64> = self.out.values().copied().collect();
+        f.select_nth_unstable_by(n - 1, |a, b| b.cmp(a));
+        self.threshold = f[n - 1];
+    }
+
     /// 收下 `prefix` 区间内的词条。`mid_syllable` = 前缀停在残缺音节上
     /// (末位首字母),此时该前缀下的每个 key 都在这一位继续,全部收下;
     /// 否则前缀是完整音节序列,只收与它完全相等的 key。
@@ -935,14 +1003,25 @@ impl MixedDfs<'_> {
         let dict = self.dict;
         let mut i = self.lower_bound(prefix)?;
         while i < dict.pinyin_count {
-            if self.out.len() >= MAX_LOOKUP_RESULTS as usize || self.budget == 0 {
+            if self.budget == 0 {
                 return Ok(());
             }
+            self.refresh_threshold();
             self.budget = self.budget.saturating_sub(1);
             let rec = dict.record(i)?;
             let k = dict.slice(dict.strings_off + rec.str_off, rec.str_len)?;
             if !k.starts_with(prefix) {
                 return Ok(());
+            }
+            // **整 key 跳过**(分支界限):词块内 freq 降序,若这个 key 的最高
+            // 词频都低于「收集池第 N 名的下界」,它一条都进不了最终列表。
+            // 没有这一条时,`zhongg` 要把「zhong g*」下几百个 key、8000+ 条
+            // 词条全部解析并分配字符串:0.343ms → 5.35ms(破 5ms 门槛)。
+            if self.out.len() >= MAX_LOOKUP_RESULTS as usize
+                && dict.first_entry_freq(dict.entries_off + rec.ent_off, rec.ent_len)? < self.threshold
+            {
+                i += 1;
+                continue;
             }
             // 完整音节前缀:key 按字节序排,与前缀相等的那条最先出现,
             // 之后的只会更长,故可直接收工(与旧实现 `key.len() == pb.len()`
@@ -958,9 +1037,6 @@ impl MixedDfs<'_> {
                 let e = self.out.entry((word, py.clone())).or_insert(0);
                 if freq > *e {
                     *e = freq;
-                }
-                if self.out.len() >= MAX_LOOKUP_RESULTS as usize {
-                    return Ok(());
                 }
             }
             i += 1;
@@ -979,7 +1055,11 @@ impl MixedDfs<'_> {
         mid_syllable: bool,
         used_literal: bool,
     ) -> Result<(), DictError> {
-        if self.out.len() >= MAX_LOOKUP_RESULTS as usize || self.budget == 0 {
+        // 探索上界:`MAX_MIXED_COLLECT`(8 倍于最终名额)。**不是** 500:
+        // 早停在 500 时按探索顺序截断会丢高频词(实测 `meiy` 把词频最高的
+        // 「没有」丢了),而完全不设上界会让 DFS 跑满 20_000 步预算
+        // (`zhongg` 0.343ms → 4.13ms)。8 倍是一个实测标定的折中。
+        if self.budget == 0 || self.out.len() >= MAX_MIXED_COLLECT {
             return Ok(());
         }
         let input = self.input;
@@ -1028,7 +1108,6 @@ impl MixedDfs<'_> {
         Ok(())
     }
 }
-
 
 /// 把输入切成「完整音节段 + 残余声母」,枚举前 `MAX_SEGMENTATIONS` 种切法。
 ///
@@ -1622,10 +1701,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn real_abbrev_mixed_truncates_by_frequency_not_by_exploration_order() {
+        // **T1(2026-10-02)**:收集期的早停必须按词频,不能按探索顺序。
+        //
+        // `meiy` = mei + y,第二个音节下挂着几百个 key(每X/没X/美X…)。
+        // 旧实现在收满 500 条就停,而截断发生在**排序之前**——按探索顺序
+        // 先到先得,于是词频最高的「没有」(504685)被丢掉,列表第 1 名反而是
+        // 词频 500354 的「每一个」。修法:收集期不做质量决策,排序后按词频
+        // 截断(探索上界提到 8 倍 + 整 key 跳过控制成本)。
+        //
+        // 失败见证:把 `lookup_mixed` 末尾的 `out.truncate(MAX_LOOKUP_RESULTS)`
+        // 去掉、改成收集期 `out.len() >= MAX_LOOKUP_RESULTS` 就返回 → 红。
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let dict = MmapDict::open(&dict_path).expect("词库加载失败")
+            .with_abbrev(&abbrev_path);
+        let res = dict.lookup_mixed("meiy").expect("meiy 查询失败");
+        let pos = res.iter().position(|c| c.word == "没有")
+            .unwrap_or_else(|| panic!("「没有」必须被召回(旧实现把它丢了): 前 5 = {:?}",
+                res.iter().take(5).map(|c| (&c.word, c.freq)).collect::<Vec<_>>()));
+        assert!(pos < 3, "「没有」应在前 3(它是这串里词频最高的): 第 {} 名", pos + 1);
+        // 列表本身必须是词频降序:截断按词频的前提。
+        assert!(
+            res.windows(2).all(|w| w[0].freq >= w[1].freq),
+            "返回值应按词频降序"
+        );
+        // 上限不变。
+        assert!(res.len() <= MAX_LOOKUP_RESULTS as usize, "仍不得超过 500 条");
+    }
 
     #[test]
     fn real_abbrev_early_stop_caps_results() {
-        // 早停:xx 命中上万条,返回不得超过 MAX_LOOKUP_RESULTS(500)。
+        // 副索引(`lookup_abbrev`)的早停:xx 命中上万条,返回不得超过
+        // MAX_LOOKUP_RESULTS(500)。副索引的每个 key 独立、块内已按 freq
+        // 降序,所以这里的截断本来就是「按质量」的;混合简拼那条路原来不是,
+        // 见 real_abbrev_mixed_truncates_by_frequency_not_by_exploration_order。
         let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
         let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
         if !dict_path.is_file() || !abbrev_path.is_file() {
