@@ -1,16 +1,16 @@
 # 实机验证清单
 
-> `cargo test` 有 **346** 个测试全绿（278 engine 单测 + 6 ibus 单测 + 9 bin +
-> **53 D-Bus 集成**），但**它仍不是实机可用的证据**。
+> `cargo test` 有 **347** 个测试全绿（278 engine 单测 + 6 ibus 单测 + 9 bin +
+> **54 D-Bus 集成**），但**它仍不是实机可用的证据**。
 >
 > **2026-10-01 更新**：根 `tests/` 现在有一组 **D-Bus 集成测试**，
 > 跑真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`，已自动化下面清单里的
 > **一部分**（英文模式透传、`CommitText`/`UpdatePreeditText`/
 > `UpdateLookupTable` 信号内容与字段顺序、`FocusOut`、候选点击、翻页、
-> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性）。12 个文件（每个文件一组场景，原来是 5 个）：
+> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性、总线往返延迟）。13 个文件（每个文件一组场景，原来是 5 个）：
 > `verbatim_url`(7)、`wire_abbrev`(5)、`mods_keys`(4)、`prefix_commit`(1)、
 > `paging`(7)、`blocklist_delete`(2)、`focus_lifecycle`(4)、`punctuation_paging`(1)、
-> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)。
+> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)、`wire_perf`(1)。
 >
 > **回归基线**（codex 审查 Q1）：`tests/baselines/regression_v2.txt` 是
 > `examples/regression_probe.rs --format v2` 的输出（2515 行），旁边
@@ -24,6 +24,10 @@
 > 直接报错不降级、按键走真实会话路径；打印每个场景的 p50/p95/max 与超线样本，
 > 任一场景稳态 p95 超过 12ms 时非零退出。启动预热（`ImeEngine::prewarm`）的依据
 > 就是它抓到的「新进程首次走到混合/简拼形状 ~26ms」尖峰。
+> >
+> **D-Bus 层**同一件事:`tests/wire_perf.rs` 量一次 `ProcessKeyEvent` 往返
+> (私有总线 + 真引擎进程,debug 装配),打印分位并对 p95 ≤ 100ms 做宽带断言,
+> 防止「引擎很快、总线上很慢」被漏掉。
 >
 > **但它用的是私有总线，不是真实 ibus-daemon + 真实应用**——下面这份清单
 > 仍然要敲，因为它验的是 daemon / GNOME Shell / 应用三者与引擎的

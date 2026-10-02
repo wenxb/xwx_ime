@@ -1311,3 +1311,7 @@ codex 审查第二批第一项:在**生产装配**上量逐键延迟,并报分�
 - **门槛**:`just verify` **346 用例全绿**(278 engine + 6 ibus + 9 bin + 53 集成),
   clippy `-D warnings` 无输出;`regression_probe` 不受影响(预热只读、且不由探针调用),
   `tests/baselines/regression_v2.txt` 未变。
+- **D-Bus 层**:`tests/wire_perf.rs` 量一次 `ProcessKeyEvent` 往返(私有总线 + 真引擎
+  进程,debug 装配):102 键 `p50=2.975ms p95=6.953ms max=7.288ms`(四个脚本各 3 轮),
+  断言 p95 ≤ 100ms(宽带,防 flaky)加「至少一半按键被引擎真的处理过」(样本成立),
+  并把「引擎层 3ms + 总线往返 3~7ms」两段分开记录。

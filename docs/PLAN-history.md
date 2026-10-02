@@ -994,4 +994,6 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 - 探针立刻抓到 `weis` 形状的首触 ~26ms(超过 12ms 预算 2 倍多),
   `ImeEngine::prewarm` 把它压掉(25.929ms → 5.847ms max,超线样本 1 → 0),
   并配只读不变式单测(预热不得学习/造词/改屏蔽表)。
-- 门槛:`just verify` 346 用例全绿、clippy 干净;详见 `docs/HANDOFF.md` ㉙。
+- D-Bus 层补上 `tests/wire_perf.rs`(真总线一次往返的分位,debug 装配,
+  `p50=2.975ms p95=6.953ms max=7.288ms`),第二批第一项到此闭环。
+- 门槛:`just verify` 347 用例全绿、clippy 干净;详见 `docs/HANDOFF.md` ㉙。
