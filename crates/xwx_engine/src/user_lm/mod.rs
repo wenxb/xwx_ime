@@ -178,32 +178,28 @@ impl UserLM {
     /// (来自会话的 `last_word`;原始字母/标点上屏后该值为 `None`,
     /// 此时只记一元计数)。返回距上次落盘的净增学习次数。
     pub fn learn(&self, prev: Option<&str>, word: &str) -> u32 {
-        let mut t = self.clone_tables_for_write();
-        Self::learn_into(&mut t, prev, word);
-        self.commit_tables(t)
+        self.mutate_tables(|t| Self::learn_into(t, prev, word))
     }
 
-    /// copy-on-write 取出一份可写的计数表(写路径统一入口):
-    /// 独占时直接接管,共享时深拷贝——打分线程持有的旧快照不受影响。
-    fn clone_tables_for_write(&self) -> UserTables {
-        let mut guard = self.tables.write().unwrap_or_else(|p| p.into_inner());
-        match Arc::try_unwrap(std::mem::take(&mut *guard)) {
-            Ok(t) => t,
-            Err(shared) => UserTables {
-                unigrams: shared.unigrams.clone(),
-                bigrams: shared.bigrams.clone(),
-                entries: shared.entries.clone(),
-                blocklist: shared.blocklist.clone(),
-            },
+    /// 写路径的唯一入口:在**写锁之内**完成「取得可写表 → 修改 → 发布」。
+    ///
+    /// 旧实现(`clone_tables_for_write` + `commit_tables`)先用 `mem::take`
+    /// 把共享表换成**空表**、随即释放锁,再改、再提交,于是:
+    /// 1. 窗口里其它线程(查询打分、学习、flush)读到的是**空模型**——
+    ///    屏蔽项、计数、造词条目全部短暂消失;
+    /// 2. 两个写者各拿一份拷贝,后提交的覆盖先提交的(丢更新)。
+    ///
+    /// (codex 审查 D1,P0。)
+    ///
+    /// 现在:独占时 `Arc::make_mut` **原地**改(零拷贝),只有打分线程还持有
+    /// 旧快照时才深拷贝一份;占位空表从不发布。闭包内不得回调 `self`
+    /// (会自己等自己的写锁)。
+    fn mutate_tables(&self, f: impl FnOnce(&mut UserTables)) -> u32 {
+        {
+            let mut guard = self.tables.write().unwrap_or_else(|p| p.into_inner());
+            let t = Arc::make_mut(&mut *guard);
+            f(t);
         }
-        // 注意:guard 在这里已释放给调用方继续 mutate 之前必须重新
-        // 拿锁的场景不存在——commit_tables 会重新拿锁写回。
-    }
-
-    /// 把改完的计数表写回并累加 dirty(与 [`Self::learn`] 原路径一致)。
-    fn commit_tables(&self, t: UserTables) -> u32 {
-        let mut guard = self.tables.write().unwrap_or_else(|p| p.into_inner());
-        *guard = Arc::new(t);
         self.dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
     }
 
@@ -235,15 +231,15 @@ impl UserLM {
     /// 返回距上次落盘的净增学习次数(与 [`Self::learn`] 共用同一
     /// dirty 计数与回写调度——造词与调频是同一份用户数据的两个面)。
     pub fn add_entry(&self, word: &str, pinyin_key: &str) -> u32 {
-        let mut t = self.clone_tables_for_write();
-        let words = t.entries.entry(pinyin_key.to_string()).or_default();
-        if !words.iter().any(|w| w == word) {
-            words.push(word.to_string());
-        }
-        if t.entries.len() > MAX_USER_ENTRIES {
-            Self::decay_entries(&mut t);
-        }
-        self.commit_tables(t)
+        self.mutate_tables(|t| {
+            let words = t.entries.entry(pinyin_key.to_string()).or_default();
+            if !words.iter().any(|w| w == word) {
+                words.push(word.to_string());
+            }
+            if t.entries.len() > MAX_USER_ENTRIES {
+                Self::decay_entries(t);
+            }
+        })
     }
 
     /// 删候选(editor 的 Ctrl+Delete,gear-audit 第 6 节):
@@ -269,22 +265,22 @@ impl UserLM {
     /// 幂等:重复屏蔽同一条不产生变化。返回 dirty(与 learn/add_entry
     /// 共用同一回写调度,屏蔽表随同一份文件落盘)。
     pub fn block_candidate(&self, word: &str, pinyin_key: &str) -> u32 {
-        let mut t = self.clone_tables_for_write();
-        t.blocklist.insert(block_key(pinyin_key, word));
-        if let Some(words) = t.entries.get_mut(pinyin_key) {
-            words.retain(|w| w != word);
-            if words.is_empty() {
-                t.entries.remove(pinyin_key);
+        self.mutate_tables(|t| {
+            t.blocklist.insert(block_key(pinyin_key, word));
+            if let Some(words) = t.entries.get_mut(pinyin_key) {
+                words.retain(|w| w != word);
+                if words.is_empty() {
+                    t.entries.remove(pinyin_key);
+                }
             }
-        }
-        // 计数连根拔:一元 + 所有指向它的二元 + 它作为上文的二元。
-        t.unigrams.remove(word);
-        t.bigrams.retain(|_, inner| {
-            inner.remove(word);
-            !inner.is_empty()
-        });
-        t.bigrams.remove(word);
-        self.commit_tables(t)
+            // 计数连根拔:一元 + 所有指向它的二元 + 它作为上文的二元。
+            t.unigrams.remove(word);
+            t.bigrams.retain(|_, inner| {
+                inner.remove(word);
+                !inner.is_empty()
+            });
+            t.bigrams.remove(word);
+        })
     }
 
     /// 屏蔽表条数(测试/日志用)。

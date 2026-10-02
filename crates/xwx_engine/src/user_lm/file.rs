@@ -44,8 +44,10 @@ enum Section {
     Blocklist,
 }
 
-/// 计数表本体(不跨线程共享;共享由 [`UserLM`] 的 `RwLock` 承担)。
-#[derive(Debug, Default)]
+/// 计数表本体。共享由 [`UserLM`] 的 `RwLock<Arc<..>>` 承担:写路径独占时
+/// 原地改(`Arc::make_mut`),打分线程持有旧快照时才深拷贝一份——因此需要
+/// `Clone`(2026-10-03,codex 审查 D1)。
+#[derive(Debug, Default, Clone)]
 pub(super) struct UserTables {
     /// 一元计数:词 -> 上屏次数。
     pub(super) unigrams: HashMap<String, u64>,

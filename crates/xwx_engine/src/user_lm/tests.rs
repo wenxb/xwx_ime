@@ -317,3 +317,63 @@ fn legacy_file_with_blocklist_section_loads() {
     assert!(!lm.snapshot().is_blocked("zi zao", "自造"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 写路径必须是「取表—改—发布」的**原子**操作(codex 审查 D1,P0)。
+///
+/// 旧实现用 `mem::take` 把共享表换成空表再释放锁:窗口里别的线程读到空模型
+/// (屏蔽项、计数全消失),两个写者还会互相覆盖。这里让 4 个写者并发 learn
+/// (词有重叠,丢更新会体现为总数变少),读者同时断言屏蔽项从不消失。
+#[test]
+fn concurrent_writes_never_publish_an_empty_table() {
+    use std::sync::{Arc as StdArc, Barrier};
+
+    let lm = StdArc::new(UserLM::in_memory());
+    lm.block_candidate("测试词", "ce shi ci");
+    assert_eq!(lm.blocklist_len(), 1);
+
+    let writers = 4usize;
+    let per_writer = 500usize;
+    let words = 32usize;
+    let barrier = StdArc::new(Barrier::new(writers + 2));
+    let mut handles = Vec::new();
+
+    for w in 0..writers {
+        let lm = StdArc::clone(&lm);
+        let barrier = StdArc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            for i in 0..per_writer {
+                lm.learn(None, &format!("词{}", (w * 7 + i) % words));
+            }
+        }));
+    }
+    {
+        let lm = StdArc::clone(&lm);
+        let barrier = StdArc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            for _ in 0..200_000 {
+                assert_eq!(
+                    lm.blocklist_len(),
+                    1,
+                    "写路径的窗口里发布了空表:屏蔽项短暂消失"
+                );
+            }
+        }));
+    }
+    barrier.wait();
+    for h in handles {
+        h.join().expect("线程 panic");
+    }
+
+    let snap = lm.snapshot();
+    let total: u64 = (0..words)
+        .map(|i| lm.counts_with(&snap, None, &format!("词{i}")).0 as u64)
+        .sum();
+    assert_eq!(
+        total,
+        (writers * per_writer) as u64,
+        "并发学习丢了更新:计数总数少于学习次数"
+    );
+    assert_eq!(lm.blocklist_len(), 1);
+}
