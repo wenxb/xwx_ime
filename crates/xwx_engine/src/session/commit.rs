@@ -207,9 +207,19 @@ impl InputSession {
         if !COIN_ALL_SEGMENTS_SINGLE_CHAR {
             return true;
         }
-        self.coin_buffer
+        if !self
+            .coin_buffer
             .iter()
             .all(|(w, _)| w.chars().count() == 1)
+        {
+            return false;
+        }
+        // 3. 总长 ≤ [`MAX_COIN_CHARS`]——超过上限时 [`Self::check_coin_limit`]
+        //    会调 `break_coin_run` 来**丢弃**,如果这里仍判够格,就会反过来
+        //    造出一条 25+ 字的用户词条(codex 审查 D10)。上限与「像不像
+        //    一个想复用的短语」是两件事,但**够格**必须同时满足两者。
+        let chars: usize = self.coin_buffer.iter().map(|(w, _)| w.chars().count()).sum();
+        chars <= MAX_COIN_CHARS
     }
 
     /// 把上屏文本追加进有界尾部并更新 `last_word`。
@@ -300,6 +310,13 @@ impl InputSession {
         let text = self.confirmed_text();
         self.replay_confirmed();
         self.break_coin_run();
+        // **焦点切换同时是 LM 上下文边界**(codex 审查 D10):不复位的话,
+        // 复用同一个会话实例时下一个焦点会继承前一个焦点的 `last_word`,
+        // 并据此学习跨焦点 bigram(在微信里选完词、切到浏览器继续打字,
+        // 两边不该互为上文)。`reset()` 本身**刻意**不清上下文(同一次
+        // 输入里的分段上屏要靠它),所以边界必须在这里显式划。
+        self.committed_tail.clear();
+        self.last_word = None;
         self.reset();
         text
     }
@@ -319,6 +336,10 @@ impl InputSession {
             SessionOutput::Commit(text)
         } else {
             self.english_mode = !self.english_mode;
+            // **模式切换也是造词边界**(codex 审查 D10):空闲时切走再切回来,
+            // 缓冲里上一段的字不该和下一段的字粘成一个词。`reset()` 刻意
+            // 不清缓冲(分段上屏要跨多次上屏累积),所以这里显式结算。
+            self.break_coin_run();
             self.reset();
             SessionOutput::Noop
         }

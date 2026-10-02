@@ -209,6 +209,12 @@ impl InputSession {
                     // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
                     // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
                     // (段留在组合里),标点就没地方落地了。
+                    // **标点/大写是造词段的边界**(codex 审查 D10):逐字选
+                    // 「张」「三」后打标点、再选「丰」,不结算的话三段的单字会
+                    // 跨标点粘成「张三丰」——标点两侧不是同一段。
+                    // 位置在提交之前:标点这一刻的候选属于**新一段**(它跟着
+                    // 标点一起上屏),不该并进上一段再一起结算。
+                    self.break_coin_run();
                     let out = match self.candidates.get(self.cursor).cloned() {
                         Some(c) => {
                             // **后缀守恒(codex 审查 D2)**:候选只覆盖输入的一部分时,
@@ -252,6 +258,9 @@ impl InputSession {
                     // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
                     // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
                     // (段留在组合里),标点就没地方落地了。
+                    // 同标点分支:大写结束组合也是造词边界(codex 审查 D10),
+                    // 且在提交之前划。
+                    self.break_coin_run();
                     let out = match self.candidates.get(self.cursor).cloned() {
                         Some(c) => {
                             // 后缀守恒:与标点分支同一条规则(见那里的注释)。

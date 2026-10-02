@@ -434,3 +434,80 @@ fn coin_buffer_cap_drops_overlong_run() {
     assert!(user.entry_len() >= 1 || buffered <= 2,
         "超限应触发结算: entry_len={} buffered={buffered}", user.entry_len());
 }
+
+/// 组合中打标点也是造词边界(codex 审查 D10)。
+///
+/// 既有 `coining_does_not_cross_punctuation` 只覆盖了**空闲时**打标点;
+/// 拼音非空(还有候选高亮)时走的是另一条分支——那条以前只 `push_tail`,
+/// 不结算造词缓冲,于是标点两侧的单字会粘成一个词。
+#[test]
+fn punctuation_while_composing_also_breaks_the_coin_run() {
+    let (engine, mut s) = session_for_coin(&[
+        ("张", "zhang", 100),
+        ("三", "san", 100),
+        ("丰", "feng", 100),
+    ]);
+    let user = engine.user_lm().expect("应有用户层");
+
+    type_and_commit(&mut s, "zhang", "张");
+    type_and_commit(&mut s, "san", "三");
+    // 拼音非空、有候选时打逗号:应结算「张三」并结束组合。
+    s.handle(InputEvent::Char('f')).expect("按键失败");
+    let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+    assert!(matches!(out, SessionOutput::Commit(_)), "逗号应上屏: {out:?}");
+
+    assert_eq!(user.entry_len(), 1, "标点时应结算「张三」(而不是把它带过标点)");
+    let snap = user.snapshot();
+    assert_eq!(snap.lookup_entries("zhang san"), &["张三".to_string()]);
+
+    // 标点后再选「丰」:标点两侧的片段不许连成一条词。
+    type_and_commit(&mut s, "feng", "丰");
+    s.handle(InputEvent::Char('x')).expect("按键失败");
+    s.handle(InputEvent::Enter).expect("回车失败");
+    let snap = user.snapshot();
+    assert!(
+        snap.lookup_entries("zhang san feng").is_empty(),
+        "不该跨标点造出「张三丰」"
+    );
+}
+
+/// 中英模式切换也是造词边界(codex 审查 D10):空闲切走再切回来,
+/// 两边的单字不许粘成一个词。
+#[test]
+fn toggling_mode_breaks_the_coin_run() {
+    let (engine, mut s) = session_for_coin(&[("张", "zhang", 100), ("三", "san", 100), ("丰", "feng", 100)]);
+    let user = engine.user_lm().expect("应有用户层");
+
+    type_and_commit(&mut s, "zhang", "张");
+    type_and_commit(&mut s, "san", "三");
+    // 空闲时切英文、再切回来(两次 ToggleAscii)。
+    s.handle(InputEvent::ToggleAscii).expect("不应失败");
+    s.handle(InputEvent::ToggleAscii).expect("不应失败");
+    assert_eq!(user.entry_len(), 1, "切模式时应结算「张三」");
+
+    type_and_commit(&mut s, "feng", "丰");
+    s.handle(InputEvent::Char('x')).expect("按键失败");
+    s.handle(InputEvent::Enter).expect("回车失败");
+
+    let snap = user.snapshot();
+    assert!(
+        snap.lookup_entries("zhang san feng").is_empty(),
+        "不该跨模式切换造出「张三丰」"
+    );
+}
+
+/// 超长缓冲必须**丢弃**,不能反过来造出一条 25+ 字的用户词条(codex 审查 D10)。
+#[test]
+fn over_long_coin_buffer_is_discarded_not_coined() {
+    let (engine, mut s) = session_for_coin(&[("甲", "jia", 100)]);
+    let user = engine.user_lm().expect("应有用户层");
+    // 直接铺满缓冲(每个片段单字,数量超过 MAX_COIN_CHARS)。
+    // 必须**全是单字**(否则不被「可复用短语」判据放行,测不到长度这一条)。
+    for _ in 0..(MAX_COIN_CHARS + 1) {
+        s.coin_buffer.push(("甲".to_string(), "jia".to_string()));
+    }
+    assert!(!s.is_reusable_phrase(), "超长缓冲不够格造词");
+    s.break_coin_run();
+    assert_eq!(user.entry_len(), 0, "超长缓冲必须只清空、不造词");
+    assert!(s.coin_buffer.is_empty(), "缓冲仍要清掉");
+}
