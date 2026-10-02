@@ -125,6 +125,7 @@ mod basic;
 mod commit;
 mod punct_verbatim;
 mod coin;
+mod apostrophe;
 mod paging_delete;
 mod prefix_mixed;
 mod url_dot;

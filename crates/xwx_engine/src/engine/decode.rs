@@ -172,6 +172,7 @@ impl ImeEngine {
         &self,
         pinyin: &str,
         ctx: &LmContext<'_>,
+        bounds: Option<&[usize]>,
     ) -> Result<Vec<Candidate>, EngineError> {
         if !pinyin.is_ascii() {
             return Ok(Vec::new());
@@ -188,12 +189,23 @@ impl ImeEngine {
         // 只在枚举路径置 true,其余路径为 false,去重行为与旧版一致。
         let mut enum_expand_used = false;
 
-        let segmented = (1..=pinyin.len())
-            .rev()
-            .find(|&k| !self.segmenter.segment(&pinyin[..k]).is_empty());
+        // **强制切分点同样约束兜底**(codex 审查 D9):旧实现把清洗串当普通串
+        // 重新切分,`xi'anq` 于是切出 `xian`(跨了 `'`)→ 召回「先/现/显/线」,
+        // `'` 在整串解不出时形同不存在。这里用**与格构建逐字相同**的判据
+        // (`ImeEngine::key_respects_boundaries`)筛切法:穿界的音节一律不要。
+        // `bounds` 为 None 时下面每次判断都恒真,无 `'` 输入逐字节不变。
+        let segmented = (1..=pinyin.len()).rev().find(|&k| {
+            self.segmenter
+                .segment(&pinyin[..k])
+                .iter()
+                .any(|chain| Self::key_respects_boundaries(&chain.join(" "), bounds))
+        });
         if let Some(k) = segmented {
             for seg in self.segmenter.segment(&pinyin[..k]) {
                 let joined = seg.join(" ");
+                if !Self::key_respects_boundaries(&joined, bounds) {
+                    continue; // 这条切法跨了 `'`:整条丢掉
+                }
                 // 覆盖范围(分段上屏):`dict.lookup(joined)` 命中的词恰好
                 // 覆盖被切成音节的那段前缀 `pinyin[..k]` ⇒ `k` 字节;
                 // 首音节词只覆盖**第一个音节**⇒ 它的字节长度。
@@ -261,7 +273,14 @@ impl ImeEngine {
         // 这类**比输入字母还多字**的词一并捞进来(实测 100 条里 4 条)。用户口径:
         // 候选的字数不得超过输入字母数。只在这一层过滤——用户 LM 里学过的词
         // 不在此列,那是显式行为。
-        merged.retain(|c| c.pinyin.split(' ').count() <= pinyin.len());
+        //
+        // **同一条 retain 兼管强制切分点**:前缀联想拿到的候选只保证「词以输入
+        // 开头」,音节怎么切由词库决定——`zh'on` 的 `zhong` 就是一条穿界的 key
+        // (codex 审查 D9)。`bounds` 为 None 时该判据恒真、不扫 key。
+        merged.retain(|c| {
+            c.pinyin.split(' ').count() <= pinyin.len()
+                && Self::key_respects_boundaries(&c.pinyin, bounds)
+        });
 
         let state = self.lm.state_from_context(ctx);
         // 与 decode_beam 同一打分公式：log10(freq/总词频) + lm_weight × logp

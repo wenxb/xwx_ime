@@ -34,6 +34,34 @@ fn window_has_vowel(window: &str) -> bool {
         }
     }
 
+    /// 音节 `[pos, pos + len)` 是否**穿过**了强制切分点。
+    ///
+    /// 判据与格构建逐字相同:分隔符落在音节**内部**(`pos < x < pos + len`)
+    /// 才非法;落在音节边界上合法——那正是用户敲 `'` 想要的切分。
+    /// 抽成函数是为了让**兜底路径**用同一条判据(codex 审查 D9:兜底曾把
+    /// 清洗串当普通串重新切分,`xi'anq` 因此召回了跨界的「先」)。
+    pub(super) fn syllable_crosses_boundary(pos: usize, len: usize, bounds: Option<&[usize]>) -> bool {
+        bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x < pos + len))
+    }
+
+    /// 一条空格分隔的拼音 key(`xi an`)是否与强制切分点相容。
+    ///
+    /// 用在兜底的前缀联想上:那里拿到的候选只保证「词以输入开头」,
+    /// 音节怎么切是词库说了算——`zh'on` 的 `zhong` 就是一条跨界的 key。
+    pub(super) fn key_respects_boundaries(key: &str, bounds: Option<&[usize]>) -> bool {
+        if bounds.is_none() {
+            return true; // 无 `'` 输入:恒真,零开销(不扫 key)
+        }
+        let mut pos = 0usize;
+        for syl in key.split(' ') {
+            if Self::syllable_crosses_boundary(pos, syl.len(), bounds) {
+                return false;
+            }
+            pos += syl.len();
+        }
+        true
+    }
+
     /// 候选收口的统一过滤:把被用户 Ctrl+Delete 屏蔽的候选从最终
     /// 列表里滤掉(在排序、截断、合并、回声兜底**全部完成后**——
     /// 这样屏蔽不改变任何「保留候选」的相对排序与得分,只做删除)。
@@ -424,7 +452,7 @@ fn window_has_vowel(window: &str) -> bool {
             // (边界落在音节*边界*上是合法的、正是消歧要的切分;落在音节
             // *内部*才非法——如 `xian` 单音节跨 2)。`bounds` 为 None
             // (无 `'` 输入)时此分支一次都不进,与改动前逐字节一致。
-            if bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x < pos + len)) {
+            if Self::syllable_crosses_boundary(pos, len, bounds) {
                 continue;
             }
             // 归一成词库写法(`lue`→`lve`、`nue`→`nve`)后再判合法性,且

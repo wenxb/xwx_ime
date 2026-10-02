@@ -1158,3 +1158,65 @@ D6/D7/D8/D10/D11/D12**(D5、D9、D13 与 A4/Q1 待做)。每个修法都有「�
   确认上屏的是显示的那条」。
 - `page_size` 仍固定 9(`DEFAULT_PAGE_SIZE`),面板若配成别的值,页码推导会
   与面板不一致——本轮不改(`page_size` 属冻结常量口径,需 owner 裁决)。
+
+## ㉗ D9:分隔符(`'`)约束兜底,回声回原文(2026-10-03)
+
+### 两个缺陷(都已复现)
+
+`'` 原本只在**格构建**里当强制切分点(`collect_chain_edges` 拒绝穿过它的音节),
+两条路绕开了它:
+
+1. **兜底路径**把清洗串当普通串重新切分。「最长可切分前缀」在 `xianq` 上切出
+   `xian`——穿过位置 2 的分隔符——于是 `xi'anq` 的前 12 条候选全是
+   `pinyin=xian` 的「先/现/显/线…」。实测(真实词库):
+   `xi'anq` → 0|先 1|现 2|显 3|线 …(全部 key `xian`);
+   `'` 在整串解不出时**形同不存在**。
+2. **回声候选的文本来自清洗串**:`zz'zz` 的回声 `word` 是 `zzzz`,空格/点选
+   上屏成 `zzzz`——用户敲的分隔符被静默吞掉。
+
+### 修法(一条判据两处复用 + 文本只认原文)
+
+- 判据抽成 `ImeEngine::syllable_crosses_boundary(pos, len, bounds)`
+  (**与格构建逐字相同**:分隔符落在音节内部才非法,落在音节边界上合法),
+  格构建改为调用它;新增 `key_respects_boundaries(key, bounds)` 用于
+  「音节怎么切由词库决定」的候选(key 是空格分隔的音节串)。
+- `fallback_candidates(pinyin, ctx, bounds)` 现在收边界:
+  ① 选「最长可切分前缀」时要求**存在一条不穿界的切法**;
+  ② 逐条切法再筛一遍(穿界整条丢);
+  ③ 末尾统一的 retain 加判据 —— 前缀联想分支的 key(`zh'on` 的 `zhong`)
+  也是这么被挡住的。`bounds` 为 None 时三个判断恒真、不扫 key,无 `'` 输入
+  **逐字节不变**。
+- 回声与逃生口的文本改为取自 `raw`(归一化前的原文),覆盖范围仍按干净串算、
+  再经 `fill_covered` 映射回原文——`xi'anq` 的「西安」因此 `covered = 5`
+  (`xi'an` 的原文字节数),分段上屏吃掉它之后 `q` 仍留在组合里。
+- 顺带核实:简拼/混拼层**本来就**在含 `'` 时整层跳过(见 `lookup.rs` 的
+  `if bounds.is_none()`),所以不存在「兜底堵住了、简拼层又漏回来」的缺口。
+
+### 证据(旧实现必红)
+
+`crates/xwx_engine/src/session/tests/apostrophe.rs`(新模块,同时把原先散在
+`paging_delete.rs` 的四条 `'` 用例收拢过来):
+
+| 用例 | 旧实现上的表现 |
+|---|---|
+| `fallback_never_crosses_the_separator` | 红:候选里出现 `pinyin == "xian"` 的「先」 |
+| `every_pinyin_candidate_respects_the_separator` | 红:泛化判据抓到穿界的 key |
+| `echo_and_enter_keep_the_raw_separator_input` | 红:回声 `word` 是 `zzzz` |
+| `separator_segment_then_the_rest_stays_editable` | 红:空格的 preedit 是 `先q` 而不是 `西安q` |
+
+同文件里搬过来的四条既有用例(消歧 / 不进 key / 可编辑缓冲 / 边界不 panic)
+在旧实现上仍是绿的——说明这批新用例测的是新语义,不是把旧断言反转。
+回归探针 2322 行(不含 `'` 输入)与基线**逐字节一致**。
+
+### 有意变更(旧 golden 作废)
+
+含 `'` 输入的候选表**变了**:`xi'anq` 不再给出「先/现/显/线」这一族,改为
+边界内的「西安/西岸」+ 尾巴留在组合里;`zz'zz` 这类无解输入的回声文本从
+清洗串改成原文。无 `'` 输入不受影响。
+
+### 未测/遗留
+
+- 含 `'` 的**长串**只覆盖了手工构造的几条(`xi'an`/`xi'anq`/`'xian`/`xian'`/
+  `xi''an`/`xi'a`);`'` 与容错弧(打错 + 分隔符同时出现)的交互没有专门用例。
+- 真实词库上的 `'` 用例(`data/dict.bin`)本轮没加——本模块用内存词库,
+  真实词库的等价覆盖在 `session/tests/prefix_mixed.rs` 那类测试里是另一套口径。

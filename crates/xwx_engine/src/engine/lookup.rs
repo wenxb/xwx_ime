@@ -39,6 +39,11 @@ impl ImeEngine {
         if pinyin.is_empty() {
             return Ok(Vec::new());
         }
+        // **原文**(含 `'`)从这里起一直留着:下面的归一化只服务查词
+        // (干净串 + 边界表),但「回显/逃生口」这类**要展示给用户**的文本
+        // 只能来自原文(codex 审查 D9:旧实现回显的是清洗串,`zz'zz` 上屏
+        // 成 `zzzz`)。
+        let raw = pinyin;
         // **非拼音文本在这里就挡住**(codex 审查 D12):这些字符会进到按
         // **字节**切片的排序代码(`rank.rs` 的 `inp[..cp_len]`),调用
         // `lookup_candidates("你")` 直接 panic——库调用方与探针可以击穿进程。
@@ -113,7 +118,7 @@ impl ImeEngine {
         // 兜底不能因为有了容错就省掉:它给的「最长可切分前缀 + 首音节」
         // 候选正是分段上屏要选的第一步(见 commit_candidate)。
         let ranked: Vec<Candidate> = if paths.is_empty() {
-            self.fallback_candidates(pinyin, ctx)?
+            self.fallback_candidates(pinyin, ctx, bounds)?
         } else {
             self.lattice_candidates(pinyin, ctx, &lattice)?
         };
@@ -221,9 +226,11 @@ impl ImeEngine {
         // (词、覆盖范围、层都一样,分数是回声的 0),补了反而改掉它的分数,
         // 让 `zhzhzhzh` 这类输入的对拍出现无意义差异。
         if !explained && !ranked.is_empty() {
-            let mut escape = Self::echo_candidate(pinyin);
+            // 逃生口的**文本是原文**(codex 审查 D9):它代表「原样上屏」,
+            // 而用户敲的是 `zz'zz` 不是清洗后的 `zzzz`。
+            let mut escape = Self::echo_candidate(raw);
             escape.score = ESCAPE_HATCH_SCORE;
-            escape.covered = pinyin.len();
+            escape.covered = pinyin.len(); // 覆盖范围仍按干净串算,下面统一映射回原文
             ranked.push(escape);
         }
 
@@ -232,8 +239,9 @@ impl ImeEngine {
         // (tests/blocklist_delete.rs 的 `deleting_every_candidate_…` 钉着
         // 这条);反过来把回声放到过滤之后,会让删除全部候选后仍留一个
         // 「原样上屏」条目,窗口永远收不起来。
+        // 文本同样只来自原文(D9)。
         if ranked.is_empty() {
-            ranked.push(Self::echo_candidate(pinyin));
+            ranked.push(Self::echo_candidate(raw));
         }
         self.filter_blocked(&mut ranked);
         Self::fill_covered(&mut ranked, pinyin.len(), bounds);
