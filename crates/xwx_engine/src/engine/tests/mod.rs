@@ -21,6 +21,7 @@ fn sort_bucket(inp: &str, c: &Candidate) -> usize {
     }
 }
 
+mod input;
 mod lookup;
 mod beam_lm;
 mod fuzzy;

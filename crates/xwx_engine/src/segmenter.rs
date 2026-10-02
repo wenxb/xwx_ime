@@ -120,6 +120,24 @@ pub(crate) fn canonical_syllable(syl: &str) -> &str {
     }
 }
 
+/// 输入切片 `input[pos..pos + len]` 是不是一个合法音节;是则返回**规范
+/// 写法**(查词库用的形式),不是则 `None`。
+///
+/// 这是「拿输入切片去查音节表」的唯一原语(codex 审查 A1):归一化与
+/// 合法性一起做完,调用方不再各写一份「先 `canonical_syllable` 再
+/// `SYLLABLES.contains`」。漏掉归一化的一方会把合法的 `lue`/`nue`
+/// 当成「解释不了的字母」——[`crate::engine::rank::unreachable_tail`]
+/// 原先正是这样,排序的 u_min 桶与格构建对同一输入给出不同答案。
+///
+/// 查的是**编译期静态表**、`binary_search` O(log 412)、零分配:热路径
+/// 上每次 `sort_candidates` 都要调几十次,不能在这里建 `HashSet`
+/// (实测会把击键延迟放大 7~50 倍,见 `unreachable_tail` 的注释)。
+pub(crate) fn syllable_at(input: &str, pos: usize, len: usize) -> Option<&str> {
+    let slice = input.get(pos..pos + len)?;
+    let canon = canonical_syllable(slice);
+    SYLLABLES.binary_search(&canon).is_ok().then_some(canon)
+}
+
 /// 容错解码用的「音节级 ≤1 次编辑」索引:输入窗口 → 可达的规范音节 + 代价。
 ///
 /// # 依据(业界标准做法,不是自创)

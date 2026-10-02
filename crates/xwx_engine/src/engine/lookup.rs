@@ -39,11 +39,6 @@ impl ImeEngine {
         if pinyin.is_empty() {
             return Ok(Vec::new());
         }
-        // **原文**(含 `'`)从这里起一直留着:下面的归一化只服务查词
-        // (干净串 + 边界表),但「回显/逃生口」这类**要展示给用户**的文本
-        // 只能来自原文(codex 审查 D9:旧实现回显的是清洗串,`zz'zz` 上屏
-        // 成 `zzzz`)。
-        let raw = pinyin;
         // **非拼音文本在这里就挡住**(codex 审查 D12):这些字符会进到按
         // **字节**切片的排序代码(`rank.rs` 的 `inp[..cp_len]`),调用
         // `lookup_candidates("你")` 直接 panic——库调用方与探针可以击穿进程。
@@ -54,13 +49,12 @@ impl ImeEngine {
         }
 
         // B2 音节分隔符:`'` 是用户敲的**强制切分点**(`xi'an` 消歧出
-        // 「西安」)。这里把它归一化成「干净串 + 边界表」两个量:
-        // - `pinyin`:去掉 `'` 的干净串。`'` 不进词典 key、不进
-        //   `Candidate.pinyin`(词典 key 是空格分隔音节);
-        // - `boundaries`:每个 `'` 在干净串中对应位置的**字节偏移**
-        //   (`xi'an` → 干净串 `xian` + `[2]`),即「不允许任何音节/边
-        //   跨越」的位置表,贯穿格构建、beam、后向 DP 与排序的 u_min
-        //   桶([`Self::build_lattice`] 与 [`unreachable_tail`] 的注释)。
+        // 「西安」)。归一化成「干净串 + 边界表」两个量:
+        // - 干净串:去掉 `'` 的串。`'` 不进词典 key、不进 `Candidate.pinyin`
+        //   (词典 key 是空格分隔音节),但它**是**原文的一部分;
+        // - 边界表:每个 `'` 在干净串中的**字节偏移**(`xi'an` → 干净串
+        //   `xian` + `[2]`),即「不允许任何音节/边跨越」的位置表,贯穿格
+        //   构建、beam、后向 DP 与排序的 u_min 桶。
         //
         // **只删 `'` 不传边界是错的**(上一版实现):删完 `xi'an` 变回
         // `xian`,而 `xian` 本身是合法音节,`[xian]` 这条单音节切法原样
@@ -71,34 +65,20 @@ impl ImeEngine {
         //
         // 归一化在这里做(而不是会话层):让「展示给用户的串」与
         // 「查词典的串」解耦——会话/preedit 保留用户敲的 `xi'an`,
-        // 引擎内部只认干净拼音。无 `'` 输入走 `Cow::Borrowed` +
-        // 空边界表,零分配,既有路径**逐字节不变**(判退化的硬约束)。
-        let (pinyin, boundaries): (std::borrow::Cow<'_, str>, Vec<usize>) =
-            if pinyin.contains('\'') {
-                let mut clean = String::with_capacity(pinyin.len());
-                let mut bounds = Vec::new();
-                for ch in pinyin.chars() {
-                    if ch == '\'' {
-                        // `'` 是单字节 ASCII,clean.len() 即干净串中的字节偏移
-                        bounds.push(clean.len());
-                    } else {
-                        clean.push(ch);
-                    }
-                }
-                (std::borrow::Cow::Owned(clean), bounds)
-            } else {
-                (std::borrow::Cow::Borrowed(pinyin), Vec::new())
-            };
-        let pinyin: &str = &pinyin;
-        if pinyin.is_empty() {
+        // 引擎内部只认干净拼音。三套坐标(原文 / 干净串 / 候选规范拼音)
+        // 由 [`super::input::NormalizedInput`] 一处收口(codex 审查 A1);
+        // 无 `'` 输入零分配,既有路径**逐字节不变**(判退化的硬约束)。
+        let input = super::input::NormalizedInput::new(pinyin);
+        // 原文(含 `'`)从这里起一直留着:回显/逃生口这类**要展示给
+        // 用户**的文本只能来自它(codex 审查 D9:旧实现回显清洗串,
+        // `zz'zz` 上屏成 `zzzz`)。
+        let raw = input.raw();
+        let pinyin: &str = input.clean();
+        if input.is_empty() {
             // 输入全是 `'`(如 `'`、`''`):归一化后为空,无候选。
             return Ok(Vec::new());
         }
-        let bounds: Option<&[usize]> = if boundaries.is_empty() {
-            None
-        } else {
-            Some(&boundaries)
-        };
+        let bounds: Option<&[usize]> = input.bounds();
 
         // **一次查询取一代用户数据(codex 审查 A3)**:格构建、容错重枚举、
         // 简拼合并、屏蔽过滤全部复用这一份快照。`UserLmSnapshot` 是
@@ -262,7 +242,7 @@ impl ImeEngine {
             ranked.push(Self::echo_candidate(raw));
         }
         self.filter_blocked(&mut ranked, user_snapshot.as_ref());
-        Self::fill_covered(&mut ranked, pinyin.len(), bounds);
+        Self::fill_covered(&mut ranked, &input);
         Ok(ranked)
     }
 

@@ -1492,3 +1492,49 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - **顺带修掉的缺陷**:后向 DP 第一版在「预算 0 + 零编辑边」时会读自己那一行
   ——真实精确格全是零编辑边,会在生产查询里直接越界;改成「本行先入容器再填」,
   并用 `zero_edit_readings_hold_at_every_budget_including_zero` 钉住。
+
+## ㉟ 输入解释结果共享化:`NormalizedInput` + 音节匹配原语(codex 审查 A1)(2026-10-03)
+
+审查第二批 A1(P1),本次做的是它的**结构性一半**;排序改用真实覆盖长度的
+行为修订留作独立提交(审查本身也要求「行为修订与纯结构提交分开」)。
+
+- **问题**:同一次输入归一化被写了三遍——`engine/lookup.rs`(原文 → 干净串 +
+  边界)、`engine/rank.rs::sort_candidates`(又一遍)、`engine/lattice.rs:30`
+  的 `original_covered_len`(第三遍:干净串覆盖长度 → 原文长度)。三处只能靠
+  注释同步;`rank.rs` 的 `unreachable_tail` 还直接查 `SYLLABLES`,**漏了 üe
+  归一化**,与格构建/词典层的口径不一致(`lue`/`nue` 在格那边是合法音节,
+  在 u_min 表这边要看别的切法).
+- **改法**:
+  - 新增 `crates/xwx_engine/src/engine/input.rs` 的 `NormalizedInput`
+    (原文 / 干净串 / 边界表 + `to_raw_len`),把「原文是展示坐标、干净串是
+    切分坐标、候选拼音是词典坐标」写进类型注释;无 `'` 走 `Cow::Borrowed`
+    零分配(与改动前逐字节一致);`to_raw_len` 内部钳位,让「原文坐标 ≤
+    raw.len()」成为类型级不变量。`fill_covered` 改收 `&NormalizedInput`,
+    `original_covered_len` 删除。
+  - `crates/xwx_engine/src/segmenter.rs` 新增 `syllable_at(input, pos, len)
+    -> Option<&str>`:归一化 + 静态表 `binary_search`(零分配、O(log 412),
+    热路径可用)合一,是「拿输入切片查音节表」的唯一原语;
+    `rank.rs::unreachable_tail` 改用它。
+- **不变量测试**(`crates/xwx_engine/src/engine/tests/input.rs`,5 条):
+  1. `normalized_input_keeps_raw_clean_and_bounds_apart`——三套坐标 + 映射
+     (`xi'an` 覆盖 `xi` 时原文长度 3 而不是 2);
+  2. `syllable_matching_has_a_single_normalization`——静态表每个音节(含
+     `lue`/`nue`/`lve`/`nve`)在 u_min 表里都「从 0 可达」,`lu`/`nu` 不被
+     当成 `lv`/`nv`;
+  3. `candidates_cover_a_nonzero_prefix_in_raw_coordinates`——非回声候选的
+     `covered` 落在 `1..=raw.len()`;
+  4. `separator_blocks_syllables_but_not_words`——`xi'an` 的「西安」跨分隔符
+     合法,但没有任何候选的音节横跨 `'`;
+  5. `frozen_outlier_en_recalls_words_with_untyped_syllables`——把审查点名的
+     `en` 旧例外(召回「婀娜多姿」= e nuo duo zi)钉住,说了「改它要单独批准」。
+- **验证**:`just verify` **362 用例全绿**(292 engine + 6 ibus + 9 bin + 55
+  集成;上一版 357 ⇒ 新增 5);clippy `-D warnings` 无输出;
+  `regression_probe --format v1` 2322 行与基线 `/tmp/codex_batch1_nt.txt`
+  **diff 0 行**(纯结构改动,逐字节不退化);`perf_probe --repeat 3 --prewarm`
+  稳态 p50 0.258ms / p95 1.568ms / max 2.453ms、超线 0(前一版 p50 0.271 /
+  p95 1.508,噪声内)。
+- **未做(A1 的另一半,留待独立提交)**:排序第三键改用**真实 clean 覆盖**
+  (`Candidate.covered` 的干净串坐标)而不是用候选拼音长度 `cp_len` 推断消费
+  位置——容错弧与混拼前缀的真实消费位置与 `cp_len` 不等,目前靠
+  `cp_len > inp.len()` 与 `SpellingKind::Abbrev` 两个特例把大多数情况挡在 0
+  桶,属于「口径不清但没被观测到退化」。改它会让候选表变化,须单独批准。

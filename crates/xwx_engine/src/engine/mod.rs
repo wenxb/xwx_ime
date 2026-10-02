@@ -370,6 +370,7 @@ use rank::{merge_with_abbrev, ordered_candidates, prune_beam, sort_candidates};
 
 mod api;
 mod decode;
+mod input;
 mod lattice;
 mod lookup;
 mod rank;

@@ -1055,3 +1055,17 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 - 规格:`docs/HANDOFF.md` ㉞。
 - 下一步(审查顺序):A1/A2 坐标与来源显式化、P2 剩余三项(候选借用 / 排序
   装饰键所有权 / UI 更新区分内容与光标),随后 Q3/Q4/Q5 与第三批。
+
+## 十二、codex 审查第二批:A1 输入解释结果共享化
+
+审查 A1(P1)的结构性一半(行为修订分开做)。
+
+- 新增 `crates/xwx_engine/src/engine/input.rs`(`NormalizedInput`:原文 /
+  干净串 / 边界表 + `to_raw_len`),`lookup.rs`、`rank.rs`、`lattice.rs`
+  的三份归一化/映射收口到一处;`original_covered_len` 删除。
+- 新增 `segmenter::syllable_at`(归一化 + 静态表二分,零分配),
+  `rank.rs::unreachable_tail` 不再裸查 `SYLLABLES`(原先漏 üe 归一化)。
+- 新用例 5 条(`engine/tests/input.rs`):三套坐标分离、音节匹配单一口径、
+  候选覆盖落在 `1..=raw.len()`、分隔符只挡音节不挡词、`en` 旧例外冻结。
+- 验收:`just verify` 362 全绿;对拍 2322 行 diff 0;perf p95 1.568ms。
+- 未做:排序第三键改用真实 clean 覆盖(改候选表,需单独批准)。

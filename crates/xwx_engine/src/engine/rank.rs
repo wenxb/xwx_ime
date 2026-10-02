@@ -40,32 +40,14 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
     // 可免的那部分未解释),与词频、LM 分在同一量纲竞争——系数经
     // 实测标定(见常量注释),让 `zhongguo` 的「中/种」压过段内词,
     // 但不再出现裸 u 硬键的「生僻组合词淹没高频单字」。
-    // `inp` 是排序时的查询串:可能含 B2 的 `'`(会话层把原始输入串直接
-    // 传进来)。排序首键 u_min 桶要与格构建/beam/后向 DP 用**同一份**
-    // 「不许跨 `'`」的可达性,故在这里把 `'` 归一化成边界表(与
-    // `lookup_candidates` 开头的归一化同式);无 `'` 时 `bounds` 为
-    // `None`,`unreachable_tail` 走原有零开销路径。
-    let (inp_clean, bounds_vec): (std::borrow::Cow<'_, str>, Vec<usize>) =
-        if inp.contains('\'') {
-            let mut clean = String::with_capacity(inp.len());
-            let mut bounds = Vec::new();
-            for ch in inp.chars() {
-                if ch == '\'' {
-                    bounds.push(clean.len());
-                } else {
-                    clean.push(ch);
-                }
-            }
-            (std::borrow::Cow::Owned(clean), bounds)
-        } else {
-            (std::borrow::Cow::Borrowed(inp), Vec::new())
-        };
-    let inp: &str = &inp_clean;
-    let bounds: Option<&[usize]> = if bounds_vec.is_empty() {
-        None
-    } else {
-        Some(&bounds_vec)
-    };
+    // `inp` 是排序时的查询串。排序首键 u_min 桶要与格构建/beam/后向 DP
+    // 用**同一份**「不许跨 `'`」的可达性,故在这里归一化成干净串 + 边界
+    // 表——归一化本身走共享的 [`super::input::NormalizedInput`](codex 审查
+    // A1:原先 `lookup.rs`、本文件、`lattice.rs` 各写一份);无 `'` 时它
+    // 零分配,`unreachable_tail` 也走原有零开销路径。
+    let normalized = super::input::NormalizedInput::new(inp);
+    let inp: &str = normalized.clean();
+    let bounds: Option<&[usize]> = normalized.bounds();
     let umin = unreachable_tail(inp, bounds);
     // 预计算每个候选的数值键:`sort_by` 每次比较调两次 `sort_key`,
     // 而 `sort_key` 里的 `unexplained_letters` / `cp_len` 都要对
@@ -217,7 +199,10 @@ pub(super) fn unreachable_tail(inp: &str, bounds: Option<&[usize]>) -> Vec<usize
                     return false;
                 }
             }
-            SYLLABLES.binary_search(&&inp[i..i + l]).is_ok()
+            // 音节匹配走共享原语(A1):归一化(üe 的 `lue`/`nue`)与合法
+            // 性一起做,和格构建/词典层同一口径。旧实现在这里直接查
+            // `SYLLABLES`,漏了归一化——`lue` 被当成解释不了的字母。
+            segmenter::syllable_at(inp, i, l).is_some()
         });
     }
     (0..=n)

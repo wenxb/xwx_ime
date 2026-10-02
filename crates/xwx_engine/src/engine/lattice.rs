@@ -17,24 +17,16 @@ fn window_has_vowel(window: &str) -> bool {
         .any(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u' | b'v'))
 }
 
-/// 把「干净串里的字节前缀长度」映射回**原始输入串**里的长度。
-    ///
-    /// `'` 只是强制切分符(见 [`ImeEngine::lookup_candidates`] 的归一化),
-    /// 但它在用户**看到的**串里占一个字节。分段上屏要消耗的是原文长度,
-    /// 且口径必须是「吃掉落在覆盖范围内的分隔符 + 紧跟其后的那一个」:
-    /// 覆盖停在分隔符前(`xi'an` 覆盖 `xi`)时,原文长度含那个 `'`(3),
-    /// 否则上屏「西」之后 preedit 会剩下 `'an`——前导分隔符既无意义,又会被
-    /// 用户当成多出来的字符。
-    ///
-    /// `bounds` 为空(输入不含 `'`,绝大多数场景)时是**恒等映射**,零开销。
-    pub(super) fn original_covered_len(clean_len: usize, bounds: Option<&[usize]>) -> usize {
-        match bounds {
-            None => clean_len,
-            Some(b) => clean_len + b.iter().filter(|&&x| x <= clean_len).count(),
-        }
-    }
+// 把「干净串里的字节前缀长度」映射回**原始输入串**里的长度,已收进
+// `super::input::NormalizedInput::to_raw_len`(codex 审查 A1 把归一化、
+// 边界表与这条换算集中到一处)。
+//
+// 口径是「吃掉落在覆盖范围内的分隔符 + 紧跟其后的那一个」:覆盖停在
+// 分隔符前(`xi'an` 覆盖 `xi`)时,原文长度含那个 `'`(3),否则上屏
+// 「西」之后 preedit 会剩下 `'an`——前导分隔符既无意义,又会被用户
+// 当成多出来的字符。
 
-    /// 音节 `[pos, pos + len)` 是否**穿过**了强制切分点。
+/// 音节 `[pos, pos + len)` 是否**穿过**了强制切分点。
     ///
     /// 判据与格构建逐字相同:分隔符落在音节**内部**(`pos < x < pos + len`)
     /// 才非法;落在音节边界上合法——那正是用户敲 `'` 想要的切分。
@@ -241,15 +233,16 @@ fn window_has_vowel(window: &str) -> bool {
     /// 自动保持旧行为,不会退化成「只消耗 0 字节」。
     ///
     /// `clean_len` 是干净串(去掉 `'`)的字节长度,`bounds` 是每个 `'`
-    /// 在干净串中的偏移。映射口径见 [`original_covered_len`]。
-    pub(super) fn fill_covered(cands: &mut [Candidate], clean_len: usize, bounds: Option<&[usize]>) {
+    /// 在干净串中的偏移。映射口径见
+    /// [`super::input::NormalizedInput::to_raw_len`]。
+    pub(super) fn fill_covered(cands: &mut [Candidate], input: &super::input::NormalizedInput<'_>) {
         for c in cands.iter_mut() {
             let clean = if c.covered == 0 {
-                clean_len
+                input.clean_len()
             } else {
-                c.covered.min(clean_len)
+                c.covered.min(input.clean_len())
             };
-            c.covered = Self::original_covered_len(clean, bounds);
+            c.covered = input.to_raw_len(clean);
         }
     }
 
