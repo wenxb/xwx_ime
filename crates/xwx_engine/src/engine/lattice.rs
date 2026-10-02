@@ -218,10 +218,17 @@ fn window_has_vowel(window: &str) -> bool {
             };
             c.score = dict_logp + lm_score * self.lm_weight;
             // spelling 保持来源给的值(见上面 `raw` 的注释),这里不再覆盖。
-            // 简拼候选覆盖整串(它的 key 就是整串的缩写),分段上屏时
+            // 简拼候选**默认**覆盖整串(它的 key 就是整串的缩写),分段上屏时
             // 一次吃掉全部输入。此刻 `pinyin` 是干净串,写入的是干净串
             // 坐标;调用方 [`Self::fill_covered`] 负责映射回原文长度。
-            c.covered = pinyin.len();
+            //
+            // 例外:前缀混拼读法(见 `MmapDict::lookup_mixed` 的 (4))已经带上
+            // 了**真实覆盖**(`womenjintqubeij` 的「我们今天」= 9),不能在这里
+            // 被抹成整串长度——那会让它一次吃掉全部输入,剩下的 `qubeij` 就
+            // 没了落点。只有缺省值 0 才回填。
+            if c.covered == 0 {
+                c.covered = pinyin.len();
+            }
             // lookup_abbrev(前缀命中多个简拼 key)与 lookup_mixed(多种
             // 切法)都可能重复命中同一词,简拼层内部仍按 (word, pinyin) 去重。
             let entry = best

@@ -42,6 +42,15 @@ pub(super) const MAX_MIXED_DFS_STEPS: usize = 20_000;
 /// [`MAX_LOOKUP_RESULTS`] 条),这里只是「看多少」的上界。
 pub(super) const MAX_MIXED_COLLECT: usize = MAX_LOOKUP_RESULTS as usize * 8;
 
+/// 途中「停在残缺音节上」的读法最多记这么多条(见 [`MixedDfs::prefix_readings`])。
+///
+/// 整串覆盖不了时,这些读法是「覆盖输入前缀」的混拼候选来源——用户报的
+/// `womenjintqubeij` 只能确认到「我」「门禁」,缺的就是 `wo men jin t*`
+/// →「我们今天」(覆盖前 9 个字母)这条读法。每条读法要各收一次池子,
+/// 条数直接决定兜底分支的额外成本,故设上限;DFS 是深度优先,深位置的
+/// 读法先被记下。
+pub(super) const MAX_PREFIX_READINGS: usize = 96;
+
 /// 末尾「半音节」读法要求尾巴至少这么长。
 ///
 /// 取 2 而不是 1:单个字母的尾巴(`n`、`x`、`z`)是**首字母缩写**的职责
@@ -216,6 +225,12 @@ pub(super) struct MixedDfs<'a> {
     pub(super) threshold: u64,
     /// 上次算 `threshold` 时收集池的大小(翻倍才重算,O(log) 次)。
     pub(super) threshold_at: usize,
+    /// 途中「停在残缺音节上」的读法:(主索引前缀, 已消耗字节数)。
+    ///
+    /// `None` = 不记录。整串**覆盖不了**时,这些读法就是「覆盖输入前缀」的
+    /// 混拼候选来源(见 [`MmapDict::lookup_mixed`] 的前缀收集);整串被覆盖时
+    /// 它们没有用武之地,故由调用方决定要不要付这份记账成本。
+    pub(super) prefix_readings: Option<&'a mut Vec<(Vec<u8>, usize)>>,
 }
 
 /// 把 `part` 接到空格分隔的前缀 `prefix` 之后(空前缀不加前导空格)。
@@ -429,6 +444,22 @@ impl MixedDfs<'_> {
                 self.dfs(pos + c.len(), &base, true, used_literal)?;
             } else {
                 // 中间首字母:把该音节的剩余字母从索引里枚举出来再往下走。
+                // 顺手记下「停在这个残缺音节上」的读法(`wo men jin t`):
+                // 它覆盖输入的前 `pos + c.len()` 个字母,整串覆盖不了时
+                // 就是「我们今天」这类前缀候选的来源(见 `prefix_readings`)。
+                //
+                // `used_literal` 门槛与`pos == input.len()` 那一支同口径:
+                // **纯首字母串**(`zgr`/`n`)是副索引的职责,这条通道一个
+                // 候选都不该产(`dict::tests::real_abbrev_mixed_requires_a_full_syllable`
+                // 与 `engine::tests::abbrev::engine_without_abbrev_index_degrades_gracefully`
+                // 钉的就是这条)。
+                if used_literal {
+                    if let Some(rec) = self.prefix_readings.as_mut() {
+                        if rec.len() < MAX_PREFIX_READINGS {
+                            rec.push((base.clone(), pos + c.len()));
+                        }
+                    }
+                }
                 for t in self.distinct_tokens(&base)? {
                     let mut full = base.clone();
                     full.extend_from_slice(&t);

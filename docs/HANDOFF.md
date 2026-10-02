@@ -1007,3 +1007,44 @@ A 段(候选列表)与改动前**逐字节相同**——这次只改会话/IBus 
 **提交**:`5b21ff4`(测试设施 + 两个集成测试)→ `1a772b8`(src/main.rs)→
 `b6d0d4a`(wanxiang/lm/user_lm)→ `ee062e1`(dict)→ `5913197`(session)→
 `2e43abc`(lib/engine)→ 探针拆分。每阶段都是独立提交,便于逐段回滚。
+
+## ㉔ 兜底分支补「覆盖输入前缀」的混拼读法(2026-10-03)
+
+**现象(用户报)**:`womenjintqubeij` 实际只能一段段确认到「我」「门禁」,剩下的
+`tqubeij` 收不了尾。
+
+**根因**(用真实会话 API 复现,不是 `commit_trace`):`MmapDict::lookup_mixed`
+的 `MixedDfs::dfs` **只在 `pos == input.len()` 收候选**——混拼读法必须覆盖整串
+才产出。整串覆盖不了时只剩 `fallback_candidates` 的单字/短词联想,于是
+「我们今天」(覆盖前 9 个字母:`wo men jin t*`)根本不在候选里,用户没法确认它;
+而**剩余串本身没问题**(`qubeij` → 去北京,一次空格 `Commit`)。
+
+**改动**:
+- `dict/mixed.rs`:`MixedDfs` 途中记「停在残缺音节上」的读法
+  (`prefix_readings`,上限 `MAX_PREFIX_READINGS = 96`)。门槛用既有的
+  `used_literal`:**纯首字母串仍归副索引**(`zgr` 一个候选都不产,两条既有
+  契约测试钉着这条)。
+- `dict/lookup.rs`:`best`(整串池)为空时,按覆盖**从长到短**逐条收,
+  **只取第一条有候选的读法**(= 现在能确认的最长一段),每条留词频前
+  `PREFIX_READING_QUOTA = 8` 条,预算共享 `MAX_PREFIX_COLLECT_STEPS = 8000`。
+- `engine/lattice.rs`:`c.covered` **只在 0 时**回填整串长度——前缀读法带
+  真实覆盖(`womenjintqubeij` 的「我们今天」= 9),分段上屏确认它时只吃掉
+  前一段,剩下的串继续出候选。
+
+**只在 `best.is_empty()` 时启用**:能整串覆盖的输入、全拼路径、格路径一律
+不变(结构上隔离,不靠测量)。
+
+**验收**:
+- 新增 `session::tests::prefix_mixed::real_dict_prefix_mixed_reading_keeps_the_rest_resolvable`
+  (真实会话 API):第一次空格确认「我们今天」,第二次空格提交 `我们今天去北京`;
+- `just verify` 313 用例全绿(库 249 + bin 9 + ibus 5 + 集成 50),clippy 无输出;
+- 对拍(`regression_probe`,过滤 `min_ms=`,2303 行):**5 个输入变、纯新增 0 消失**
+  (`nihoa` 50→57、`niqhao` 50→58、`qnihao` 53→54、`womemjintianqugongyuan` 23→24、
+  `womenjinxtianqugongyuan` 23→25);
+- 延迟:`+0.05~0.07ms`,最大 6.42ms(前 6.36ms)。
+
+**被否决的两条路**(都实测过,别再走):
+- 「每个 span 各查一次」的朴素枚举:15 字母 **85ms**,远超 12ms 门槛;
+- 所有读法一起收:第一次空格只吃掉 `wom`(3 个字母,`我们` 在简拼层里凭
+  分数压过 `我们今天`),剩下的 `enjintqubeij` 照旧收不了尾——**只取最长那条**
+  才是用户心智里的「一次吃掉一段」。

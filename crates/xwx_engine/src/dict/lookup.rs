@@ -2,8 +2,24 @@
 //! 三个入口都做「收集池 → 排序 → 截断」,质量决策一律在排序之后。
 
 use super::mixed::{is_full_pinyin, partial_tail_readings, segment_input, MixedDfs, EMPTY_FIRST,
-                   MAX_MIXED_COLLECT, MAX_MIXED_DFS_STEPS, MIN_PARTIAL_TAIL};
+                   MAX_MIXED_COLLECT, MAX_MIXED_DFS_STEPS, MAX_PREFIX_READINGS,
+                   MIN_PARTIAL_TAIL};
 use super::{Candidate, DictError, MmapDict, MAX_LOOKUP_RESULTS};
+
+/// 每条「停在残缺音节上」的前缀读法最多留几个候选。
+///
+/// 一个读法下的词条动辄几百上千条(`wo men jin t*` 下有 `我们今天`、
+/// `我们今天下午`……),而用户要的是「能确认一段」:每个读法留词频最高的
+/// 几条就够。注意这是**最终名额**,与 `MAX_MIXED_COLLECT`(收集期的名义
+/// 上界)是两个口径。
+const PREFIX_READING_QUOTA: usize = 8;
+
+/// 前缀收集一次查询**共享**的索引探测步数。
+///
+/// 与 `MAX_MIXED_DFS_STEPS` 分开记账:后者是「整串能不能被覆盖」的探索
+/// 预算,前者是「覆盖不了时补前缀候选」的预算。它是**共享**的(不是每条
+/// 读法各一份),否则 96 条读法 × 20000 步会把兜底分支拖垮。
+const MAX_PREFIX_COLLECT_STEPS: usize = 8_000;
 
 impl MmapDict {
     /// 纯简拼查询:`zgr` → 直接二分副索引,返回带全拼的词条。
@@ -112,6 +128,9 @@ impl MmapDict {
 
         let mut best: std::collections::HashMap<(String, String), u64> =
             std::collections::HashMap::new();
+        // 途中「停在残缺音节上」的读法(覆盖输入前缀的混拼候选来源,
+        // 见下面的 (4))。整串被覆盖时用不到,记账成本只是一次 push。
+        let mut prefix_readings: Vec<(Vec<u8>, usize)> = Vec::new();
 
         // (1)(2) 两条既有路:**整串合法全拼** 精确匹配 / 否则交错 DFS。
         // 全拼那条路的候选构造本身逐字节未变(见
@@ -136,6 +155,7 @@ impl MmapDict {
                 budget: MAX_MIXED_DFS_STEPS,
                 threshold: 0,
                 threshold_at: 0,
+                prefix_readings: Some(&mut prefix_readings),
             };
             dfs.dfs(0, &[], false, false)?;
         }
@@ -175,6 +195,7 @@ impl MmapDict {
                 budget: MAX_MIXED_DFS_STEPS,
                 threshold: partial_threshold,
                 threshold_at: 0,
+                prefix_readings: None,
             };
             // 门槛先设成「池子里现有最差的一条」:半音节区间动辄几千条
             // (`xian` 的 `xiang*`、`sh` 的 `sh*`),而**比现有最差还差**的
@@ -202,6 +223,71 @@ impl MmapDict {
             }
         }
 
+        // (4) **前缀混拼读法(2026-10-03)**:整串覆盖不了时(`best` 为空),
+        // 把 DFS 途中「停在残缺音节上」的读法各收一遍池子——它们覆盖的是
+        // 输入的**前缀**,不是整串。
+        //
+        // 用户报的 `womenjintqubeij` 只能一段段确认到「我」「门禁」,剩下的
+        // `tqubeij` 收不了尾:缺的就是这条通道(`wo men jin t*` →「我们今天」,
+        // 覆盖前 9 个字母;而剩下的 `qubeij` 自己就能出「去北京」)。
+        //
+        // **只在 `best` 为空时启用**:整串能被覆盖时旧通道已经给出候选,
+        // 再加前缀读法会改变那些输入的候选表——那是另一件事,不做。
+        let mut prefixes: std::collections::HashMap<(String, String), (u64, usize)> =
+            std::collections::HashMap::new();
+        if best.is_empty() && !prefix_readings.is_empty() {
+            // 长读法优先:它覆盖更多输入,正是用户想确认的那一段。
+            prefix_readings.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            prefix_readings.dedup();
+            prefix_readings.truncate(MAX_PREFIX_READINGS);
+            // 预算**共享**(不是每条读法各一份),见 `MAX_PREFIX_COLLECT_STEPS`。
+            let mut budget = MAX_PREFIX_COLLECT_STEPS;
+            for (key, covered) in &prefix_readings {
+                if budget == 0 {
+                    break;
+                }
+                let mut pool: std::collections::HashMap<(String, String), u64> =
+                    std::collections::HashMap::new();
+                let mut dfs = MixedDfs {
+                    dict: self,
+                    input: input.as_bytes(),
+                    by_first: &EMPTY_FIRST,
+                    by_all: &[],
+                    out: &mut pool,
+                    budget,
+                    threshold: 0,
+                    threshold_at: 0,
+                    prefix_readings: None,
+                };
+                // `mid_syllable = true`:读法末尾是残缺音节(`...jin t`),
+                // 该前缀下的 key 都在这一位继续;`collect` 的「一字一字母」
+                // 判据保证后面不会带出「一个字母都没打」的音节。
+                dfs.collect(key, true)?;
+                budget = dfs.budget;
+                if pool.is_empty() {
+                    // 这条读法下没有词,看下一条(更短的)。
+                    continue;
+                }
+                // **只取「有候选的最长那条读法」**:它才是「现在能确认的
+                // 最长一段」(用户按空格就该吃掉它)。更短的读法(`wo m` →
+                // 我们,只覆盖 3 个字母)会把候选表灌满,还凭简拼层压在有用
+                // 的长读法前面——实测 `womenjintqubeij` 第一次空格只吃掉
+                // `wom`,剩下的 `enjintqubeij` 照旧收不了尾。
+                let mut hits: Vec<((String, String), u64)> = pool.into_iter().collect();
+                hits.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                for ((word, py), freq) in hits.into_iter().take(PREFIX_READING_QUOTA) {
+                    let e = prefixes.entry((word, py)).or_insert((0, *covered));
+                    if freq > e.0 {
+                        e.0 = freq;
+                    }
+                    if *covered > e.1 {
+                        e.1 = *covered;
+                    }
+                }
+                break;
+            }
+        }
+
         // 缩写读法 → `Abbrev`;补全读法 → `Exact`(层序见上面 `completions`
         // 的注释)。同一 (词, 拼音) 被两条路同时命中时**保留缩写那一份**
         // ——更保守:层序更低,不会被这条新通道抬上去。
@@ -218,7 +304,21 @@ impl MmapDict {
             if seen.contains(&(word.clone(), py.clone())) {
                 continue;
             }
+            seen.insert((word.clone(), py.clone()));
             out.push(Candidate::new(word, py, freq));
+        }
+
+        // 前缀混拼读法:层序同缩写(`Abbrev`——末位音节只给了首字母),
+        // 但**覆盖范围是真实前缀**(`covered > 0`),于是分段上屏确认它时
+        // 只吃掉输入的前一段,剩下的串继续出候选。
+        for ((word, py), (freq, covered)) in prefixes {
+            if seen.contains(&(word.clone(), py.clone())) {
+                continue;
+            }
+            let mut c = Candidate::new(word, py, freq);
+            c.spelling = crate::candidate::SpellingKind::Abbrev;
+            c.covered = covered;
+            out.push(c);
         }
         // **确定性排序**:同频词必须按 (词, 全拼) 定序,不能依赖 `HashMap`
         // 的迭代顺序——那是每个进程随机化的,实测同一二进制两次运行,
