@@ -689,6 +689,7 @@ impl ImeEngine {
             .fold(f32::NEG_INFINITY, f32::max);
         // 容错弧的定位:精确格上「走不动」的位置(见 `first_stalls`)。
         // 一个都没有 ⇒ 精确解码本来就能走到底 ⇒ 不需要容错。
+        //
         let stalls = Self::first_stalls(&lattice, pinyin.len());
         // 容错能不能把整串读完(只有它真的读完过,才谈得上「不需要逃生口」)。
         let mut tolerant_explains = false;
@@ -1146,10 +1147,18 @@ fn window_has_vowel(window: &str) -> bool {
         }
         let user_entries = crate::user_lm::user_entries_snapshot(&self.lm);
         let mut cache: HashMap<String, Vec<Candidate>> = HashMap::new();
-        for &stall in stalls {
-            let from = stall.saturating_sub(MAX_TYPO_WINDOW);
-            let to = (stall + 1).min(n.saturating_sub(1));
-            for start in from..=to {
+        // **从哪里重新枚举链**:从 0 起到最深的错处为止。
+        //
+        // - 不能只枚举错处附近:`shenem` 的「什么」需要 [shen][me] 这条
+        //   **从 0 起、止于 6** 的整链边(`em`→`me` 的调换弧覆盖错处 5),
+        //   起点被卡在 ≥1 时它永远生成不出来,「什么」整条丢掉(第 ③ 期
+        //   收尾时就是这样丢的,靠点名目标的 oracle 才抓回来)。
+        // - 错处之后的部分由弧自己沿链走完,不需要单独当起点。
+        // - **每个起点只枚举一次**(而不是对每个错处各来一遍):错处位置集合
+        //   内部的链枚举大量重复,去重后长串上的开销从 5 份降到 1 份。
+        if let Some(&deepest) = stalls.iter().max() {
+            let to = (deepest + 1).min(n.saturating_sub(1));
+            for start in 0..=to {
                 let mut budget = MAX_TOLERANT_CHAINS_PER_START;
                 let mut chain: Vec<&str> = Vec::new();
                 self.collect_chain_edges(
