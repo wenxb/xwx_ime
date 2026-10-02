@@ -37,6 +37,17 @@ use crate::lm::{BigramLM, LmError, MixedLM};
 
 /// 用户模型默认文件名(落在 `$XDG_DATA_HOME/xwx/` 下)。
 pub const USER_LM_FILE_NAME: &str = "user_bigram.txt";
+
+/// **开发期**用户模型文件名(与上面同目录,后缀 `.dev`)。
+///
+/// `debug_assertions` 打开的构建默认用它(见 `src/main.rs`),这样
+/// `just dev` 起的调试引擎**不会把开发时打的字混进真实用户模型**——
+/// 这个文件里装着三段状态(一元/二元计数、造词条目、Ctrl+Delete 屏蔽表),
+/// 混进去会污染真实使用时的排序,而且很难清干净。
+///
+/// 与真实文件相邻(`$XDG_DATA_HOME/xwx/user_bigram.dev.txt`)是为了好对比、
+/// 好手工删除;`XWX_USER_LM_PATH` 仍然优先于本默认值(集成测试靠它隔离)。
+pub const USER_LM_DEV_FILE_NAME: &str = "user_bigram.dev.txt";
 /// 距上次落盘累计多少次学习上屏后,值得再写一次盘。
 ///
 /// 落盘代价是「序列化全表 + write + rename」(数千条时约 1MB、毫秒级),

@@ -159,6 +159,13 @@ gdbus call --session --dest org.freedesktop.IBus --object-path /org/freedesktop/
 # 输出里应能看到 XWX 拼音输入法
 ```
 
+**开发期的用户模型是独立的**：`debug` 构建默认读写
+`$XDG_DATA_HOME/xwx/user_bigram.dev.txt`，不会把你开发时打的字混进真实用户模型
+（真实文件里装着计数、造词、Ctrl+Delete 屏蔽表三段状态）。`just install` 装的是
+`release` 二进制，实机用的仍是 `user_bigram.txt`；`XWX_USER_LM_PATH` 优先级最高，
+集成测试靠它隔离。启动日志会打印实际用了哪个文件（`用户学习模型已接入 path=…`）。
+
+
 ## 数据准备
 
 首次运行词库为空，输入法不会出候选。准备词库：
@@ -190,7 +197,7 @@ cargo test -p xwx_engine                  # 只跑引擎（切分/词库/LM/会�
 cargo test -p xwx_ibus                    # 协议序列化与按键翻译测试
 ```
 
-当前基线 **285 passed / 0 failed / 1 ignored** = 236 单元（223 引擎 + 5 协议
+当前基线 **286 passed / 0 failed / 1 ignored** = 237 单元（223 引擎 + 5 协议
 + 8 二进制）+ **49 D-Bus 集成**。
 
 > 测试分三层，**别把上层当成下层的证据**：

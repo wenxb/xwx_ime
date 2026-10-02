@@ -37,7 +37,9 @@ pub use dict::{DictError, DictStore, Dictionary, MmapDict, SqliteDict};
 pub use lm::{BigramLM, LanguageModel, LmContext, LmError, LmState, LmStore};
 pub use lm::{MixedLM, MixedState, USER_COUNT_GAIN_R};
 pub use recognizer::{recognize, Recognized, URL_PREFIXES};
-pub use user_lm::{UserLM, FLUSH_LEARN_THRESHOLD, MAX_USER_UNIGRAMS, USER_LM_FILE_NAME};
+pub use user_lm::{
+    UserLM, FLUSH_LEARN_THRESHOLD, MAX_USER_UNIGRAMS, USER_LM_DEV_FILE_NAME, USER_LM_FILE_NAME,
+};
 pub use segmenter::{Segmenter, SYLLABLES};
 pub use session::{InputEvent, InputSession, SessionOutput, SessionUpdate};
 pub use wanxiang::{WanxiangConfig, WanxiangLM, WanxiangState};

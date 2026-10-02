@@ -749,3 +749,32 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
   已不成立（半音节读法走主索引）；改成断**纯首字母串**（副索引真正的职责）。
 - `abbrev_quota_is_floor_not_cap`：旧断言「`zhongguo` 不应有简拼层」已不成立
   （整串全拼也会有末尾补全）；改成断「**前 10 名仍是精确层**」（配额不挤占精确层）。
+
+---
+
+## 2026-10-02（五）开发期用户模型隔离
+
+`just dev` 起的调试引擎原先读写**真实的** `~/.local/share/xwx/user_bigram.txt`，
+开发时打的字会混进真实用户模型（计数 / 造词 / Ctrl+Delete 屏蔽表三段都在同一文件，
+污染后很难清）。
+
+- 引擎侧新增 `USER_LM_DEV_FILE_NAME = "user_bigram.dev.txt"`；
+- `src/main.rs` 的 `user_lm_file_name()`：`debug_assertions` 打开时默认用它，
+  否则用真实文件名。优先级：`XWX_USER_LM_PATH`（集成测试靠它隔离）> debug 默认
+  > release 默认。启动日志本就打印实际路径，所以「用了哪个文件」一眼可见；
+- `just install` 装的是 release 二进制，实机不受影响（已核对 justfile）；
+- 测试 `debug_builds_default_to_the_dev_user_model_file`：断「当前 profile 的期望值」
+  以及**两个常量必须不同**（防止有人改成同名让隔离静默失效）。
+
+真机验证：临时 `XDG_DATA_HOME` + 软链词库跑 debug 二进制，日志给出
+`path=…/user_bigram.dev.txt`，真实文件 mtime 一字未动。
+
+> ⚠ **这次验证踩了个坑（已修）**：用**真实二进制** + 临时 `XDG_DATA_HOME` 跑，
+> 会让它找不到 IBus 总线地址 → 它**自己拉起一个 `ibus-daemon`**，而这个 daemon
+> 带着已被删除的临时数据目录，随后按 component XML 拉起的引擎**找不到词库**。
+> 处理：杀掉被污染的引擎与 daemon，用干净环境重启 `ibus-daemon -rdx`，
+> 触发 `ibus engine xwx` 重新拉起引擎，核对新引擎环境干净、`ProcessKeyEvent(n)`
+> 返回 `(true,)`，真实用户模型全程未被触碰。
+> **教训：验证要用隔离的 IBus 环境（集成测试那套私有总线），或者干脆别跑真实
+> 二进制**——只改 `XDG_DATA_HOME` 会把总线地址一起改没。另：`ProcessKeyEvent`
+> 签名是 `(keyval, keycode, state)`，探针里参数错位会得到 `(false,)` 的假象。

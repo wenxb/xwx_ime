@@ -173,7 +173,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 路径沿用 resolve_data_path 约定(与 dict.bin 同处),文件名
     // `user_bigram.txt`(与 user_lm.rs 的 open_or_create 读写的 bigram
     // 文本格式匹配,见 USER_LM_FILE_NAME)。
-    let user_lm_path = resolve_data_path("XWX_USER_LM_PATH", xwx_engine::USER_LM_FILE_NAME);
+    //
+    // **开发期隔离**:`debug_assertions` 打开的构建默认改用
+    // `user_bigram.dev.txt`——`just dev` 起的调试引擎不该把开发时打的字
+    // 混进真实用户模型(计数/造词/屏蔽表三段都在同一个文件里)。
+    // 优先级:环境变量 `XWX_USER_LM_PATH` > debug 默认 > release 默认;
+    // 集成测试一律显式设环境变量,因此不受这里影响。`just install` 装的是
+    // release 二进制,实机用的仍是真实文件。
+    let user_lm_path = resolve_data_path("XWX_USER_LM_PATH", user_lm_file_name());
     let engine = engine.with_user_lm(xwx_engine::UserLM::open_or_create(&user_lm_path));
     tracing::info!(path = %user_lm_path.display(), "用户学习模型已接入");
     let engine = Arc::new(engine);
@@ -340,6 +347,18 @@ fn ibus_address() -> Option<String> {
 
 /// 解析数据文件路径：环境变量覆盖 > `$XDG_DATA_HOME/xwx/<name>` >
 /// `~/.local/share/xwx/<name>`。
+/// 用户模型**默认**文件名(不含环境变量覆盖):debug 构建走开发文件。
+///
+/// 抽成独立函数是为了可测——隐式默认值必须能被一条断言钉住,
+/// 否则「debug 不污染真实数据」这件事就只剩注释里的一句话。
+fn user_lm_file_name() -> &'static str {
+    if cfg!(debug_assertions) {
+        xwx_engine::USER_LM_DEV_FILE_NAME
+    } else {
+        xwx_engine::USER_LM_FILE_NAME
+    }
+}
+
 fn resolve_data_path(env_key: &str, file_name: &str) -> PathBuf {
     if let Ok(p) = std::env::var(env_key) {
         return PathBuf::from(p);
@@ -495,6 +514,29 @@ mod tests {
             xdg.join("xwx").join("wanxiang-lts-zh-hans.gram")
         );
         assert_eq!(choice.source, LmSource::ProbedGram);
+    }
+
+    #[test]
+    fn debug_builds_default_to_the_dev_user_model_file() {
+        // 开发期隔离:debug 构建的**默认**用户模型文件名必须是 `.dev` 那个,
+        // release 必须是真实文件名——否则 `just dev` 打的字会混进真实用户
+        // 模型(计数/造词/屏蔽表三段同文件,污染后很难清)。
+        //
+        // 一条测试在同一个 profile 下只能验自己那一半,所以两边都断:
+        // 当前 profile 的期望值 + 「两个常量必须不同」(防止有人把它们改成
+        // 同一个名字,让整个隔离静默失效)。
+        assert_ne!(
+            xwx_engine::USER_LM_DEV_FILE_NAME,
+            xwx_engine::USER_LM_FILE_NAME,
+            "开发文件名与真实文件名不能相同,否则隔离形同虚设"
+        );
+        let expected = if cfg!(debug_assertions) {
+            xwx_engine::USER_LM_DEV_FILE_NAME
+        } else {
+            xwx_engine::USER_LM_FILE_NAME
+        };
+        assert_eq!(user_lm_file_name(), expected);
+        assert_eq!(expected.ends_with(".dev.txt"), cfg!(debug_assertions));
     }
 
     #[test]
