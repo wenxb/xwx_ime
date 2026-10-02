@@ -1315,3 +1315,32 @@ codex 审查第二批第一项:在**生产装配**上量逐键延迟,并报分�
   进程,debug 装配):102 键 `p50=2.975ms p95=6.953ms max=7.288ms`(四个脚本各 3 轮),
   断言 p95 ≤ 100ms(宽带,防 flaky)加「至少一半按键被引擎真的处理过」(样本成立),
   并把「引擎层 3ms + 总线往返 3~7ms」两段分开记录。
+
+## ㉚ A3:一次查询用同一代用户数据(2026-10-03)
+
+codex 审查 A3(P1):格构建、后向 DP/首词评分、简拼合并、屏蔽过滤**各自**
+取用户快照,并发学习/删除时同一次查询会混用不同代的 `entries`/`counts`/`blocklist`。
+
+- **改法**:在 `crates/xwx_engine/src/engine/lookup.rs::lookup_candidates` 的
+  归一化之后取**一次** `user_entries_snapshot(&self.lm)`,往下传给
+  `build_lattice(pinyin, bounds, user)`、`build_tolerant_lattice(…, user)`
+  与 `filter_blocked(&mut ranked, user)`
+  (`crates/xwx_engine/src/engine/lattice.rs` 三处签名加参数,函数体不再自取)。
+  `UserLmSnapshot` 是 `Arc<UserTables>` 的克隆(O(1)),所以「同一代」既便宜又
+  天然一致。`decode_paths`(`pub(crate)`,只被测试/调试调用)自取一代并在文档里
+  写明理由,生产查询走 `lookup_candidates` 的统一快照。
+- **验证(契约级,不靠并发撞时序)**:新模块
+  `crates/xwx_engine/src/engine/tests/query_snapshot.rs` 两条用例——
+  `blocked_filter_uses_the_generation_it_was_given`、
+  `lattice_build_uses_the_generation_it_was_given`;每条都做了**旧行为见证**:
+  临时把对应函数改回「自己取快照」,该条即红(两条都已实测,红在
+  「本次查询不该看见中途的删除/新造条目」的断言上)。
+- **行为对拍**:`regression_probe --format v1` 2322 行与
+  `/tmp/codex_batch1_nt.txt` **diff 0 行**(单线程下取快照的时机变化不影响结果;
+  变化只在并发语义上)。
+- **门槛**:`just verify` **349 用例全绿**(280 engine + 6 ibus + 9 bin + 54 集成),
+  clippy `-D warnings` 无输出。
+- **审查说的「后一步」仍未做**:把用户存储访问从 `LmStore::Mixed` 内部抽出
+  (`lm/mod.rs` 的 `MixedLM::state_from_context` 仍在查询开始时自取一份计数快照;
+  它与本次的快照同源——同一个 `UserLM`——但严格说仍是两次取)。这一步属于
+  A1/A2 的「坐标与来源显式化」范围。

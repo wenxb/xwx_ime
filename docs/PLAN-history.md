@@ -997,3 +997,13 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 - D-Bus 层补上 `tests/wire_perf.rs`(真总线一次往返的分位,debug 装配,
   `p50=2.975ms p95=6.953ms max=7.288ms`),第二批第一项到此闭环。
 - 门槛:`just verify` 347 用例全绿、clippy 干净;详见 `docs/HANDOFF.md` ㉙。
+
+## 七、codex 审查第二批:A3 一次查询一代用户数据
+
+- 审查原文:「查询开始取得一个 QueryContext,包含用户快照、词频总量、规范化输入;
+  所有阶段复用」——本轮实现其中的**用户快照**部分:格构建、容错重枚举、屏蔽过滤
+  共用 `lookup_candidates` 顶部取的**一代**(`Arc<UserTables>` 克隆)。
+- 规格:`docs/HANDOFF.md` ㉚;两条契约用例 + 各自的旧行为见证;
+  `regression_probe --format v1` 对基线 diff **0 行**;`just verify` 349 用例全绿。
+- 下一步(审查顺序):DAG 可达性替代生产 beam(性能 P1);
+  「把用户存储访问从 `LmStore::Mixed` 内部抽出」并入 A1/A2。

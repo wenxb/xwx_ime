@@ -18,7 +18,11 @@ impl ImeEngine {
         if pinyin.is_empty() {
             return Ok(Vec::new());
         }
-        self.decode_beam_with_lattice(pinyin, ctx, k, &self.build_lattice(pinyin, None)?)
+        // 独立算法接口(只被测试/调试调用,见 `decode_paths` 的文档):
+        // 这里自取一代快照。生产查询走 `lookup_candidates`,那里一次查询
+        // 只取一代、并把它传给格构建与屏蔽过滤(codex 审查 A3)。
+        let user = crate::user_lm::user_entries_snapshot(&self.lm);
+        self.decode_beam_with_lattice(pinyin, ctx, k, &self.build_lattice(pinyin, None, user.as_ref())?)
     }
 
     /// 与 [`Self::decode_beam`] 相同，但格子由调用方传入（分层便于

@@ -29,3 +29,4 @@ mod abbrev_quota;
 mod personalization;
 mod completion;
 mod prewarm;
+mod query_snapshot;

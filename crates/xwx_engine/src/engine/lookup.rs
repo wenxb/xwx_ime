@@ -100,7 +100,16 @@ impl ImeEngine {
             Some(&boundaries)
         };
 
-        let lattice = self.build_lattice(pinyin, bounds)?;
+        // **一次查询取一代用户数据(codex 审查 A3)**:格构建、容错重枚举、
+        // 简拼合并、屏蔽过滤全部复用这一份快照。`UserLmSnapshot` 是
+        // `Arc<UserTables>` 的克隆(O(1)),所以「同一代」既便宜又天然一致;
+        // 各阶段各自取快照时,并发学习/删除会让同一次查询前后看到不同的表。
+        // LM 打分那一侧的快照由 `MixedLM` 在查询开始建状态时取
+        // (`lm/mod.rs` 的 `state_from_context`);把用户存储访问从
+        // `LmStore::Mixed` 内部也抽出来是审查说的后一步。
+        let user_snapshot = crate::user_lm::user_entries_snapshot(&self.lm);
+
+        let lattice = self.build_lattice(pinyin, bounds, user_snapshot.as_ref())?;
         let paths = self.decode_beam_with_lattice(pinyin, ctx, BEAM_WIDTH, &lattice)?;
         // **容错解码的门槛(结构性)**:精确路径解不出整串,或整串根本
         // 切不开。打对的输入两条都不成立 ⇒ 一次都不进容错分支,零开销、
@@ -165,7 +174,7 @@ impl ImeEngine {
             // 容错格与精确格**分开建**:精确格逐字节不变,容错只在需要时
             // 重来一次。合并后重排截断,层序(精确 → 模糊 → 简拼)照旧。
             let tolerant_lattice =
-                self.build_tolerant_lattice(pinyin, bounds, &lattice, &stalls)?;
+                self.build_tolerant_lattice(pinyin, bounds, &lattice, &stalls, user_snapshot.as_ref())?;
             // 「容错格上有没有走到底的读法」用**后向 DP** 判,不跑 beam:
             // beam 是 O(位置 × 桶宽 × 桶内边数),长串上要几万次 LM 打分
             // (实测这一步就吃掉 10ms,是延迟超标的主因);而后向 DP 每条边
@@ -243,7 +252,7 @@ impl ImeEngine {
         if ranked.is_empty() {
             ranked.push(Self::echo_candidate(raw));
         }
-        self.filter_blocked(&mut ranked);
+        self.filter_blocked(&mut ranked, user_snapshot.as_ref());
         Self::fill_covered(&mut ranked, pinyin.len(), bounds);
         Ok(ranked)
     }

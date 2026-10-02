@@ -66,11 +66,17 @@ fn window_has_vowel(window: &str) -> bool {
     /// 列表里滤掉(在排序、截断、合并、回声兜底**全部完成后**——
     /// 这样屏蔽不改变任何「保留候选」的相对排序与得分,只做删除)。
     ///
-    /// 快照取自用户层(若有):无用户层时一次都不查,**空屏蔽表时
-    /// 候选列表逐字节不变**(判退化的结构性保证)。回声候选的
+    /// **快照由调用方传入(codex 审查 A3)**:一次查询只取一代用户数据,
+    /// 过滤用的必须是查询开始那一刻的表——自己在这里再取一次,就会出现
+    /// 「本次查询前半段用旧代、这里用新代」的混用。无用户层时一次都不查,
+    /// **空屏蔽表时候选列表逐字节不变**(判退化的结构性保证)。回声候选的
     /// (key, word) = (输入串, 输入串),天然撞不上任何屏蔽键。
-    pub(super) fn filter_blocked(&self, ranked: &mut Vec<Candidate>) {
-        let Some(snap) = crate::user_lm::user_entries_snapshot(&self.lm) else {
+    pub(super) fn filter_blocked(
+        &self,
+        ranked: &mut Vec<Candidate>,
+        user: Option<&crate::user_lm::UserLmSnapshot>,
+    ) {
+        let Some(snap) = user else {
             return;
         };
         ranked.retain(|c| !snap.is_blocked(&c.pinyin, &c.word));
@@ -331,13 +337,13 @@ fn window_has_vowel(window: &str) -> bool {
         bounds: Option<&[usize]>,
         exact: &[Vec<LatticeEdge>],
         stalls: &[usize],
+        user_entries: Option<&crate::user_lm::UserLmSnapshot>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let n = pinyin.len();
         let mut lattice: Vec<Vec<LatticeEdge>> = exact.to_vec();
         if !pinyin.is_ascii() || stalls.is_empty() {
             return Ok(lattice);
         }
-        let user_entries = crate::user_lm::user_entries_snapshot(&self.lm);
         let mut cache: HashMap<String, Vec<Candidate>> = HashMap::new();
         // **从哪里重新枚举链**:从 0 起到最深的错处为止。
         //
@@ -355,7 +361,7 @@ fn window_has_vowel(window: &str) -> bool {
                 let mut chain: Vec<&str> = Vec::new();
                 self.collect_chain_edges(
                     pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
-                    user_entries.as_ref(), bounds, true, Some(stalls), 0, 0.0, true,
+                    user_entries, bounds, true, Some(stalls), 0, 0.0, true,
                 )?;
             }
         }
@@ -367,8 +373,9 @@ fn window_has_vowel(window: &str) -> bool {
         &self,
         pinyin: &str,
         bounds: Option<&[usize]>,
+        user_entries: Option<&crate::user_lm::UserLmSnapshot>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
-        self.build_lattice_with(pinyin, bounds, false, None)
+        self.build_lattice_with(pinyin, bounds, false, None, user_entries)
     }
 
     /// 构造格子;`tolerant` 打开**容错解码**:
@@ -388,16 +395,16 @@ fn window_has_vowel(window: &str) -> bool {
         bounds: Option<&[usize]>,
         tolerant: bool,
         stalls: Option<&[usize]>,
+        user_entries: Option<&crate::user_lm::UserLmSnapshot>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let n = pinyin.len();
         let mut lattice: Vec<Vec<LatticeEdge>> = (0..=n).map(|_| Vec::new()).collect();
         if !pinyin.is_ascii() {
             return Ok(lattice);
         }
-        // 造词条目快照:一次查询取一次(Arc 克隆 O(1)),与 LM 打分
-        // 使用的用户计数快照同源(同一份 Arc,不同字段)。引擎没挂
-        // 用户层时为 None,下面的合并一次都不发生。
-        let user_entries = crate::user_lm::user_entries_snapshot(&self.lm);
+        // 造词条目快照由调用方给(codex 审查 A3):一次查询只取一代,
+        // 与 LM 打分使用的用户计数快照同源。引擎没挂用户层时为 None,
+        // 下面的合并一次都不发生。
         let mut cache: HashMap<String, Vec<Candidate>> = HashMap::new();
         // 长串试过把容错预算从 64 降到 16:延迟只从 13~20ms 降到 12~16ms
         // (仍超 12ms 门槛),却把「我们今天」这种深一点的整句读法饿掉了
@@ -414,7 +421,7 @@ fn window_has_vowel(window: &str) -> bool {
             let mut chain: Vec<&str> = Vec::new();
             self.collect_chain_edges(
                 pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
-                user_entries.as_ref(), bounds, tolerant, stalls, 0, 0.0, false,
+                user_entries, bounds, tolerant, stalls, 0, 0.0, false,
             )?;
         }
         Ok(lattice)
