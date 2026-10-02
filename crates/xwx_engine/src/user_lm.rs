@@ -8,7 +8,7 @@
 //!   「`last_word` 置 `None`」的同一判断,见 [`crate::session`])。
 //! - **怎么生效**:不打分时修改通用模型,而是由 [`crate::lm::MixedLM`]
 //!   把「万象/通用模型分」与「用户模型分」在 log10 概率域线性插值,
-//!   用户层命中时以 [`crate::lm::MIX_USER_WEIGHT`] 的权重压过通用统计。
+//!   用户层命中时按 [`crate::lm::USER_COUNT_GAIN_R`] 给计数增益。
 //! - **共享与并发**:引擎被所有会话共享(`Arc<ImeEngine>`,ibus 层每个
 //!   输入上下文一个会话),计数表本体包在 `RwLock` 里;打分热路径
 //!   不加锁——[`Self::snapshot`] 返回的不可变快照内置在
@@ -78,19 +78,22 @@ enum Section {
     Blocklist,
 }
 
-// 这里曾有一个 `NEUTRAL_LOG_PROB = -1.0`(用户层对「没学过」的词给的
-// 中性分)。它已删除,原因是一次实测到的**学习反而降权**:
+// 用户层的打分口径,经历过一次「学习反而降权」事故(2026-10-02),
+// 结论是:**这一层只提供计数,不提供概率**。
 //
-// 用户层自己的概率按**用户语料规模**归一化,与通用模型量纲不可比。
-// 真实 `~/.local/share/xwx/user_bigram.txt`(Σc+vocab ≈ 175)下,计数 1 ≈
-// log10(2/175) = -1.94、计数 3 ≈ -1.64——**全在中性分 -1.0 之下**。
-// 于是「可以」(用户学过 3 次)在简拼 `ky` 里被压到第 11 名,而同串
-// 从没学过的「跨越」白拿 -1.15。中性分是个绝对量纲,用户多打一些字
-// (分母变大)结论就翻转,属于不可用的修法。
+// 事故形态:旧实现把用户层当概率模型,按**用户自己的语料规模**归一化,
+// 再与通用层做概率域插值。真实 `~/.local/share/xwx/user_bigram.txt`
+// (Σc+vocab ≈ 175)下,学过 3 次的「可以」算出 log10(4/175) = -1.64,
+// 比「没学过」的中性分 -1.0 还低——学过的词反而被压到没学过的词后面
+// (简拼 `ky` 里「可以」第 11 名,跨串的「跨越」白拿 -1.15)。
+// 更糟的是这个量纲随用户打字量漂移:实测同一句「学 1 次目标词」的加分
+// 从 +11.45(语料 1 条)掉到 +7.45(语料 10001 条),重度用户的个人化
+// 比新用户弱 4 个数量级。
 //
-// 现在的口径:没证据就**不下结论**(`evidence_log10_prob` 返回 `None`),
-// 由混合层原样回退通用层;有证据时才插值,且不低于通用层。见
-// [`crate::lm::MixedLM::score`]。
+// 现在的口径:`UserLmSnapshot::counts` 只回**计数**(一元/二元),
+// 混合层按 [`crate::lm::USER_COUNT_GAIN_R`] 把它换算成加法项
+// (`log10(1 + c·R)`)。计数与语料规模无关,0 次就是 +0(逐位回退通用层),
+// 学习因此**永不降权**,也不可能出现「用户用得越多、个人化越弱」。
 
 /// 计数表本体(不跨线程共享;共享由 [`UserLM`] 的 `RwLock` 承担)。
 #[derive(Debug, Default)]
@@ -99,8 +102,6 @@ struct UserTables {
     unigrams: HashMap<String, u64>,
     /// 二元计数:前词 -> (后词 -> 上屏次数)。
     bigrams: HashMap<String, HashMap<String, u64>>,
-    /// 上屏次数总和 Σc(w)(一元概率归一化分母)。
-    unigram_total: u64,
     /// 造词条目:拼音 key(音节空格分隔,与词典 key 同格式)-> 词列表。
     ///
     /// 与 unigrams/bigrams 的分工:计数表管「学过的词该排多靠前」
@@ -140,33 +141,22 @@ pub struct UserLmSnapshot {
 }
 
 impl UserLmSnapshot {
-    /// log10 P(word | prev) 的**用户层证据**:`None` = 这个词没有任何
-    /// 个人证据,混合层据此原样回退通用层(见文件头那段说明)。
+    /// 用户层对该词的**计数证据**:`(一元计数, 二元计数)`。
     ///
-    /// 有证据时与 [`BigramLM::log10_prob`] 同链(bigram → unigram),
-    /// 分母用快照自己的统计;概率的绝对量纲只在本层内部自洽,
-    /// **不跨层比较**——跨层由 [`crate::lm::MixedLM::score`] 在概率域
-    /// 插值,且插值结果不低于通用层。
-    fn evidence_log10_prob(&self, prev: Option<&str>, word: &str) -> Option<f32> {
+    /// 0 表示没有证据——混合层据此逐位回退通用层(见文件头说明)。
+    /// **只给计数、不给概率**:用户层是「稀疏观察表」,它的概率分母是
+    /// 用户自己的语料规模,与通用层量纲不可比(「学习反而降权」事故的
+    /// 根因);计数是纯增量证据,换算成加分的比例由
+    /// [`crate::lm::USER_COUNT_GAIN_R`] 单点决定,且与语料规模无关。
+    fn counts(&self, prev: Option<&str>, word: &str) -> (u32, u32) {
         let t = &*self.tables;
-        // 词表规模 = 已有 key 数(维护一个独立 vocab 字段反而要处理
-        // 「计数衰减到 0 的词是否还算词表」的歧义,key 数定义更清晰)。
-        let vocab = t.unigrams.len() as f32;
-        if let Some(prev) = prev {
-            if let Some(&c) = t.bigrams.get(prev).and_then(|m| m.get(word)) {
-                let ch = t.unigrams.get(prev).copied().unwrap_or(0) as f32;
-                let denom = ch + vocab;
-                if denom > 0.0 {
-                    return Some(((c as f32 + 1.0) / denom).log10());
-                }
-            }
-        }
-        let cw = t.unigrams.get(word).copied().unwrap_or(0) as f32;
-        let denom = t.unigram_total as f32 + vocab;
-        if cw > 0.0 && denom > 0.0 {
-            return Some(((cw + 1.0) / denom).log10());
-        }
-        None
+        let to_u32 = |c: u64| c.min(u32::MAX as u64) as u32;
+        let uni = to_u32(t.unigrams.get(word).copied().unwrap_or(0));
+        let bi = to_u32(
+            prev.and_then(|p| t.bigrams.get(p).and_then(|m| m.get(word)).copied())
+                .unwrap_or(0),
+        );
+        (uni, bi)
     }
 
     /// 按拼音 key(音节空格分隔,与词典 key 同格式)查造词条目。
@@ -320,7 +310,6 @@ impl UserLM {
         Ok(UserTables {
             unigrams: bigram.unigrams,
             bigrams: bigram.bigrams,
-            unigram_total: bigram.unigram_total,
             entries,
             blocklist,
         })
@@ -344,7 +333,6 @@ impl UserLM {
             Err(shared) => UserTables {
                 unigrams: shared.unigrams.clone(),
                 bigrams: shared.bigrams.clone(),
-                unigram_total: shared.unigram_total,
                 entries: shared.entries.clone(),
                 blocklist: shared.blocklist.clone(),
             },
@@ -363,7 +351,6 @@ impl UserLM {
     /// 把一次学习写进计数表(内部;衰减/测试也走这里)。
     fn learn_into(t: &mut UserTables, prev: Option<&str>, word: &str) {
         *t.unigrams.entry(word.to_string()).or_insert(0) += 1;
-        t.unigram_total += 1;
         if let Some(prev) = prev {
             *t.bigrams
                 .entry(prev.to_string())
@@ -401,21 +388,24 @@ impl UserLM {
     }
 
     /// 删候选(editor 的 Ctrl+Delete,gear-audit 第 6 节):
-    /// 「屏蔽 + 能删则删」一体完成。
+    /// 「屏蔽 + 连根拔」一体完成。
     ///
-    /// 对一条候选 `(word, pinyin_key)` 做两件事:
+    /// 对一条候选 `(word, pinyin_key)` 做三件事:
     /// 1. **屏蔽**:插入 blocklist——无论它是词库词还是用户造词,此后
     ///    该候选在候选收口处被滤掉(`lib.rs` 的统一过滤点),重查同
     ///    拼音不再出现。词库只读(mmap),这是词库词唯一可行的删除形态;
     /// 2. **能删则删**:若它同时是用户造词条目(`entries` 里有),把那条
-    ///    词条也删掉——屏蔽管「不再出现」,但留着词条会让它继续占
-    ///    `MAX_USER_ENTRIES` 名额、继续被 unigram 计数引用,语义上
-    ///    「用户亲手删掉自己造的词」就该连根拔。
+    ///    词条也删掉——留着词条会让它继续占 `MAX_USER_ENTRIES` 名额;
+    /// 3. **计数一起清**(2026-10-02 起):删掉该词的一元计数、所有
+    ///    「某词 → 它」的二元计数、以及「它 → 某词」的上下文计数。
     ///
-    /// 不动 unigrams/bigrams 计数:那是「上屏频次」的统计,删候选是
-    /// 「不想再见到它」,两件事分开——留着计数只影响 LM 打分里一个
-    /// 再也浮不上来的词,无害;清掉反而会让「误删后重新上屏」丢失
-    /// 已积累的调频。
+    /// 第 3 条为什么必须有(旧实现刻意**不**动计数,当时的理由是
+    /// 「删候选 ≠ 抹掉频次」):屏蔽键是 `(拼音, 词)`,而计数是按**词**
+    /// 记的——只屏蔽的话,同一个词在**别的拼音路径**上照样带着计数被
+    /// 加分(多音字串味),用户看到「删了它,换个打法又冒出来还更靠前」。
+    /// 更直接的是:计数正是排名的燃料,燃料不清就等于没删。
+    /// 「误删后重新上屏会丢已积累的调频」这点代价明确接受——用户按下
+    /// Ctrl+Delete 就是明确表态,而误删的恢复成本只是再选几次。
     ///
     /// 幂等:重复屏蔽同一条不产生变化。返回 dirty(与 learn/add_entry
     /// 共用同一回写调度,屏蔽表随同一份文件落盘)。
@@ -428,6 +418,13 @@ impl UserLM {
                 t.entries.remove(pinyin_key);
             }
         }
+        // 计数连根拔:一元 + 所有指向它的二元 + 它作为上文的二元。
+        t.unigrams.remove(word);
+        t.bigrams.retain(|_, inner| {
+            inner.remove(word);
+            !inner.is_empty()
+        });
+        t.bigrams.remove(word);
         self.commit_tables(t)
     }
 
@@ -453,7 +450,6 @@ impl UserLM {
             });
             !inner.is_empty()
         });
-        t.unigram_total = t.unigrams.values().sum();
         info!(
             unigrams = t.unigrams.len(),
             "用户模型条数超限,已执行全局计数衰减(÷2)"
@@ -638,18 +634,16 @@ impl UserLM {
             .len()
     }
 
-    /// 内部查询打分(供 [`crate::lm::MixedLM`] 调用)。
-    ///
-    /// 返回 `None` = 无个人证据(混合层回退通用层),`Some(logp)` =
-    /// 用户层自己的概率(量纲只在本层内部自洽)。
-    pub(crate) fn evidence_with(
+    /// 内部查询计数(供 [`crate::lm::MixedLM`] 调用):`(一元, 二元)`,
+    /// 0 = 无证据(混合层据此逐位回退通用层)。
+    pub(crate) fn counts_with(
         &self,
         snap: &UserLmSnapshot,
         prev: Option<&str>,
         word: &str,
-    ) -> Option<f32> {
+    ) -> (u32, u32) {
         let _ = self; // 打分只依赖快照,不需要锁
-        snap.evidence_log10_prob(prev, word)
+        snap.counts(prev, word)
     }
 }
 
@@ -685,29 +679,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn learn_produces_evidence_for_committed_word() {
+    fn learn_produces_counts_for_committed_word() {
+        // 计数口径(2026-10-02 起):这一层只回计数,不回概率。
         let lm = UserLM::in_memory();
-        let before = lm.evidence_with(&lm.snapshot(), None, "斯巴克");
-        assert!(before.is_none(), "没学过就不该有证据: {before:?}");
+        assert_eq!(
+            lm.counts_with(&lm.snapshot(), None, "斯巴克"),
+            (0, 0),
+            "没学过就没有任何计数"
+        );
         for _ in 0..5 {
             lm.learn(None, "斯巴克");
         }
-        let after = lm.evidence_with(&lm.snapshot(), None, "斯巴克");
-        assert!(after.is_some(), "学习后应产生 unigram 证据: {after:?}");
-        // 上文搭配也应命中:中→国 学过后,有中上文时也有证据
+        assert_eq!(
+            lm.counts_with(&lm.snapshot(), None, "斯巴克"),
+            (5, 0),
+            "5 次上屏 ⇒ 一元计数 5"
+        );
+        // 二元单独记:中→国 学 5 次,一元也各 +5
         for _ in 0..5 {
             lm.learn(Some("中"), "国");
         }
         let snap = lm.snapshot();
-        let with_prev = lm.evidence_with(&snap, Some("中"), "国");
-        let no_prev = lm.evidence_with(&snap, None, "国");
-        assert!(
-            with_prev.is_some() && no_prev.is_some(),
-            "bigram 与 unigram 两条路都应有证据: {with_prev:?} / {no_prev:?}"
+        assert_eq!(
+            lm.counts_with(&snap, Some("中"), "国"),
+            (5, 5),
+            "有上文「中」时:一元 5 + 二元(中→国) 5"
         );
-        assert!(
-            with_prev > no_prev,
-            "bigram 分母更小(只看「中」后接什么),分值应更高: {with_prev:?} vs {no_prev:?}"
+        assert_eq!(
+            lm.counts_with(&snap, None, "国"),
+            (5, 0),
+            "没有上文时只有一元计数,二元不给分"
+        );
+        assert_eq!(
+            lm.counts_with(&snap, Some("今天"), "国"),
+            (5, 0),
+            "上文不匹配时不产生二元计数"
         );
     }
 
@@ -731,10 +737,10 @@ mod tests {
         {
             let lm = UserLM::open_or_create(&path);
             let snap = lm.snapshot();
-            let with_prev = lm.evidence_with(&snap, Some("今天"), "天气");
-            let unknown = lm.evidence_with(&snap, None, "没学过的词");
+            let with_prev = lm.counts_with(&snap, Some("今天"), "天气");
+            let unknown = lm.counts_with(&snap, None, "没学过的词");
             assert!(
-                with_prev.is_some() && unknown.is_none(),
+                with_prev.0 > 0 && with_prev.1 > 0 && unknown == (0, 0),
                 "重载后学习效果应仍在: {with_prev:?} vs {unknown:?}"
             );
         }
@@ -778,12 +784,9 @@ mod tests {
         let n = lm.unigram_len();
         assert!(n <= MAX_USER_UNIGRAMS, "衰减后条数应回到上限内: {n}");
         let snap = lm.snapshot();
-        let hot = lm.evidence_with(&snap, None, "常用词");
-        let cold = lm.evidence_with(&snap, None, "长尾词0");
-        assert!(
-            hot > cold,
-            "高频词应在衰减后仍高于长尾: {hot:?} vs {cold:?}"
-        );
+        let (hot, _) = lm.counts_with(&snap, None, "常用词");
+        let (cold, _) = lm.counts_with(&snap, None, "长尾词0");
+        assert!(hot > cold, "高频词应在衰减后仍高于长尾: {hot} vs {cold}");
     }
 
     #[test]
@@ -910,17 +913,36 @@ mod tests {
     }
 
     #[test]
-    fn block_candidate_leaves_counts_alone() {
-        // 屏蔽不动 unigram/bigram 计数:那是「上屏频次」的统计,
-        // 删候选是「不想再见到它」,两件事分开(留着计数只影响一个
-        // 再也浮不上来的词的打分,无害;清掉反而丢调频)。
+    fn block_candidate_clears_counts_too() {
+        // **语义变更（2026-10-02）**：旧断言是「屏蔽不动计数」，
+        // 现在改成「屏蔽连计数一起清」，理由见 `block_candidate` 文档：
+        // ① 屏蔽键是 (拼音, 词)，而计数按**词**记——不清的话同一个词
+        //    在别的拼音路径上仍带着计数被加分（多音字串味）；
+        // ② 计数就是排名的燃料，燃料不清等于没删。
         let lm = UserLM::in_memory();
         lm.learn(None, "某词");
         lm.learn(Some("某词"), "下一词");
-        let before_uni = lm.unigram_len();
+        assert_eq!(lm.counts_with(&lm.snapshot(), None, "某词"), (1, 0));
+        assert_eq!(lm.counts_with(&lm.snapshot(), Some("某词"), "下一词"), (1, 1));
+
         lm.block_candidate("某词", "mou ci");
-        assert_eq!(lm.unigram_len(), before_uni, "屏蔽不应动 unigram 计数");
-        assert!(lm.snapshot().is_blocked("mou ci", "某词"));
+
+        assert!(lm.snapshot().is_blocked("mou ci", "某词"), "仍要进屏蔽表");
+        assert_eq!(
+            lm.counts_with(&lm.snapshot(), None, "某词"),
+            (0, 0),
+            "被删的词一元计数应清零"
+        );
+        assert_eq!(
+            lm.counts_with(&lm.snapshot(), Some("某词"), "下一词"),
+            (1, 0),
+            "指向它的二元计数应清掉(只剩「下一词」自己的一元计数)"
+        );
+        assert_eq!(
+            lm.counts_with(&lm.snapshot(), Some("旁词"), "某词"),
+            (0, 0),
+            "任何上文下它都不该再有计数"
+        );
     }
 
     #[test]

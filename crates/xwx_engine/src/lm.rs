@@ -265,27 +265,55 @@ impl LanguageModel for BigramLM {
 // 混合语言模型(第 5 步:通用模型 + 用户学习模型)
 // ---------------------------------------------------------------------------
 
-/// 混合模型里用户层的权重(log10 概率域线性插值)。
+/// 用户层「计数增益」的标定常数:**上屏一次 ≈ 该词词频提高 R 倍**。
 ///
-/// 取值 0.7 的理由:
-/// - 主流输入法(Rime/搜狗)的语义都是「个人习惯压过通用统计」——
-///   用户亲手选过的词,下次几乎一定要排在通用高频词前面;
-/// - 但不能是 1.0:新用户模型只有几百条计数,没有任何平滑兜底能力,
-///   纯用户模型会把通用语料(万象 624 万键)的覆盖率优势清零;
-/// - 0.7 让用户层一次上屏(计数 1 的 unigram ≈ log10(2/(N+V)))就
-///   带来约 1.4~2 个数量级的可见提升,3~5 次稳定压过词频 10 倍差;
-///   同时给通用层留 0.3 的底,用户从没碰过的搭配仍由通用模型排序。
+/// 个人化的口径是**计数驱动**的加法项(不是概率插值,见 [`MixedLM`]):
+/// 用户层第 c 次上屏某个词,给它的 LM 分加
+/// `log10(1 + c·R)`。取 R = 1000(2026-10-02 实测标定,真实词库 + 万象):
 ///
-/// 评测验证见 `examples/learn_eval.rs` 报告数字。
-pub const MIX_USER_WEIGHT: f32 = 0.7;
+/// - 一次上屏 = **+3.0 log10**(≈ ×1000 等效词频)——实测同类候选之间
+///   「盖过第 1 名」需要的分差只有 0.002~3.7(`ky` 0.005 / `xian` 0.91 /
+///   `nihao` 1.96 / `zhongguo` 2.12 / `weishenme` 3.70),所以 R=1000 时
+///   **一次误选/一次正确选择都能在同类候选里登顶**,与主流输入法
+///   「选过的词排前面」一致;
+/// - 三次上屏 = +3.6,十次 = +4.0,三十次 ≈ +4.5——**单调、收敛**
+///   (log 增长),引用计数越多越靠前但不会无限霸屏;
+/// - **翻不过「整词 vs 逐字」那道结构墙**:实测只覆盖前缀的单字落后
+///   13.7~14.7 log10(`women` 的「我」、`diannao` 的「电」),按本曲线
+///   要上屏 5×10¹⁰ 次以上才会翻过去——结构上不可能,这条护栏是刻意的
+///   (否则打过一次「我」,以后 `women` 永远先出「我」)。
+///
+/// 为什么不用概率插值(旧实现):用户层的概率分母是**用户自己的语料规模**,
+/// 与通用层量纲不可比。实测同一句「学 1 次目标词」,加分随无关语料从
+/// +11.45(1 条)掉到 +7.45(10001 条)——重度用户的个人化比新用户弱
+/// 4 个数量级;而计数与语料规模无关(由
+/// `mixed_boost_independent_of_corpus_size` 钉住)。
+pub const USER_COUNT_GAIN_R: f32 = 1000.0;
 
-/// 两层加权混合语言模型:通用层(万象 / bigram)+ 用户学习层。
+/// 单个计数项的加分(0 次 = 不加分,曲线在 0 处连续)。
 ///
-/// 插值发生在 **log10 概率域**:
-/// `log10( (1-w)·P_base(word|ctx) + w·P_user(word|prev) )`,
-/// 即在概率域做线性插值再取对数(Kneser 意义的 mixture);
-/// 用户层无上文/无命中时退回它自己的 unigram/未知词兜底,因此
-/// 「学过」的信号永远 ≥ 兜底,而通用层负责用户没碰过的广阔长尾。
+/// 抽成独立函数是为了让「与语料规模无关」这条性质可被直接测:
+/// 它只吃计数,不碰任何分母。
+pub(crate) fn count_gain(c: u32) -> f32 {
+    if c == 0 {
+        0.0
+    } else {
+        (1.0 + c as f32 * USER_COUNT_GAIN_R).log10()
+    }
+}
+
+/// 混合语言模型:通用层(万象 / bigram)+ 用户学习层。
+///
+/// 口径是 **backoff + 计数增益**(不是概率插值):
+/// `score = base(word|ctx) + Σ count_gain(c)`,
+/// 计数来自用户层的一元(词被上屏几次)与二元(该词跟在上一词后上屏几次)。
+/// 三条性质都由这个形状直接给出:
+///
+/// - **没有证据就不改变通用层**(c=0 ⇒ 加分为 0,逐位相同)——旧实现给
+///   「没学过」的词发一个绝对中性分,导致用户层的绝对量纲(随语料规模
+///   变化)把学过的词压到没学过的词下面;
+/// - **学习永不降权**(加分 ≥ 0),负证据走 Ctrl+Delete 的屏蔽表;
+/// - **与用户语料规模无关**(加分只吃计数)。
 ///
 /// 为什么做成独立模型而不是给 `ImeEngine` 加 `user_lm` 字段:
 /// 调用方(beam 解码/兜底/会话)只跟 `LanguageModel` 一个接口打交道,
@@ -302,15 +330,13 @@ pub struct MixedLM {
     base: Box<LmStore>,
     /// 用户层(自己打字攒的,内部可变;学习由会话钩子驱动)。
     user: UserLM,
-    /// 用户层权重(见 [`MIX_USER_WEIGHT`])。
-    user_weight: f32,
 }
 
 impl std::fmt::Debug for MixedLM {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MixedLM")
             .field("base", &self.base)
-            .field("user_weight", &self.user_weight)
+            .field("gain_r", &USER_COUNT_GAIN_R)
             .finish_non_exhaustive()
     }
 }
@@ -334,12 +360,16 @@ pub struct MixedState {
 impl MixedLM {
     /// 构造混合模型。`base` 不能自身再是 `Mixed`(嵌套混合没有意义,
     /// 调用方直接搭两层即可)。
-    pub fn new(base: LmStore, user: UserLM, user_weight: f32) -> Self {
+    ///
+    /// 没有权重参数:个人化的强度由 [`USER_COUNT_GAIN_R`] 单点决定,
+    /// 且与用户语料规模无关(旧实现的 `user_weight` 是概率域插值权重,
+    /// 已被计数增益取代)。
+    pub fn new(base: LmStore, user: UserLM) -> Self {
         debug_assert!(
             !matches!(base, LmStore::Mixed(_)),
             "混合模型不应再嵌套混合"
         );
-        MixedLM { base: Box::new(base), user, user_weight: user_weight.clamp(0.0, 1.0) }
+        MixedLM { base: Box::new(base), user }
     }
 
     /// 用户层句柄(学习/落盘走这里;打分不需要它)。
@@ -361,33 +391,15 @@ impl LanguageModel for MixedLM {
 
     fn score(&self, state: &MixedState, word: &str) -> (f32, MixedState) {
         let (base_logp, base_next) = self.base.score(&state.base, word);
-        let evidence =
-            self.user
-                .evidence_with(&state.snap, state.user_prev.as_deref(), word);
-        // 没有个人证据 ⇒ 原样用通用层(backoff),不拿中性常数顶替。
-        // 旧实现给「没学过」的词一个绝对中性分,而用户层自己的概率按
-        // **用户语料规模**归一化,两者量纲不可比,实测出现「学习反而
-        // 降权」:简拼 `ky` 下用户学过的「可以」被压到第 11 名。
-        // 详见 `user_lm.rs` 文件头。
-        let mixed = match evidence {
-            None => base_logp,
-            Some(user_logp) => {
-                // 概率域线性插值(分数是 log10,先回概率再加权再取对数)。
-                // log10(10^x + 10^y) = max + log10(1 + 10^(min-max)),数值稳定。
-                let w = self.user_weight;
-                let bx = base_logp + (1.0 - w).log10();
-                let ux = user_logp + w.log10();
-                let (hi, lo) = if bx >= ux { (bx, ux) } else { (ux, bx) };
-                let interpolated = hi + (1.0 + 10f32.powf(lo - hi)).log10();
-                // 学习永不降权:计数只有**正证据**(负证据是 Ctrl+Delete
-                // 的屏蔽表,不在计数里),故插值结果钳在通用层之上——
-                // 用户自己的语料再小,学过也不该比没学过更差。由
-                // `mixed_learning_never_demotes` 测量守住。
-                interpolated.max(base_logp)
-            }
-        };
+        // 个人化 = 计数增益的**加法项**,不碰通用层的量纲:
+        // 一元计数(这个词被上屏几次)+ 二元计数(它跟在上一词后又几次)。
+        // 两个计数各自过 `count_gain`,0 次时加 0(逐位回退通用层)。
+        let (c_uni, c_bi) = self
+            .user
+            .counts_with(&state.snap, state.user_prev.as_deref(), word);
+        let boost = count_gain(c_uni) + count_gain(c_bi);
         (
-            mixed,
+            base_logp + boost,
             MixedState {
                 base: Box::new(base_next),
                 user_prev: Some(word.to_string()),
@@ -607,8 +619,7 @@ mod tests {
         let store = LmStore::Mixed(MixedLM::new(
             LmStore::Bigram(base),
             UserLM::in_memory(),
-            MIX_USER_WEIGHT,
-        ));
+                    ));
         let s0 = store.state_from_context(&LmContext {
             tail: "今天",
             last_word: Some("今天"),
@@ -641,7 +652,7 @@ mod tests {
         // 混合层插入一个 0.3/0.7 线性插值,绝对分会被改写;
         // 本测试只断言「信号存在」,因此断言前先确认两层各有多少
         // log10 增益,数值放对注释里,断言仍只比较相对大小。
-        let store = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user, MIX_USER_WEIGHT));
+        let store = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user));
 
         // 用户层独有能力:「星冰乐→斯巴克」是通用层没有的
         let ctx = LmContext { tail: "星冰乐", last_word: Some("星冰乐") };
@@ -656,11 +667,10 @@ mod tests {
         let inner = LmStore::Mixed(MixedLM::new(
             LmStore::Bigram(BigramLM::new()),
             UserLM::in_memory(),
-            MIX_USER_WEIGHT,
-        ));
+                    ));
         // debug_assert 在测试构建(debug)下触发 panic;
-        // release 下 clamp 生效但语义上仍禁止(见 MixedLM::new 文档)。
-        let _ = MixedLM::new(inner, UserLM::in_memory(), MIX_USER_WEIGHT);
+        // release 下 debug_assert 被编译掉,但语义上仍禁止(见 MixedLM::new 文档)。
+        let _ = MixedLM::new(inner, UserLM::in_memory());
     }
 
     #[test]
@@ -668,8 +678,7 @@ mod tests {
         let store = LmStore::Mixed(MixedLM::new(
             LmStore::Bigram(BigramLM::new()),
             UserLM::in_memory(),
-            MIX_USER_WEIGHT,
-        ));
+                    ));
         let (s, _) = store.score(&store.initial_state(), "任何词");
         assert!(s.is_finite(), "两层都空时混合分仍应有限");
     }
@@ -703,8 +712,7 @@ mod tests {
         let store = LmStore::Mixed(MixedLM::new(
             LmStore::Bigram(base),
             user,
-            MIX_USER_WEIGHT,
-        ));
+                    ));
 
         // 空上下文(句首):last_word = None。
         let st = store.state_from_context(&LmContext::empty());
@@ -735,6 +743,90 @@ mod tests {
         assert!(c.last_word.is_none(), "last_word 必须为 None(否则用户层走 bigram)");
     }
 
+    /// 计数增益的**梯度**:1/2/5/20 次严格递增,且逐位等于 `log10(1+c·R)`。
+    ///
+    /// 这是「引用计数」语义的落点:选得越多分越高。旧实现在这条线上
+    /// 几乎无区分(计数 1 → -2.10、计数 3 → -1.90,只差 0.2),而真正
+    /// 决定排序的是「学过 vs 没学过」那道 9 个数量级的断崖。
+    #[test]
+    fn mixed_boost_is_graded_by_count() {
+        let user = UserLM::in_memory();
+        let store = LmStore::Mixed(MixedLM::new(LmStore::Bigram(BigramLM::new()), user));
+        let plain = LmStore::Bigram(BigramLM::new());
+        let (base, _) = plain.score(&plain.initial_state(), "可以");
+        let LmStore::Mixed(m) = &store else {
+            panic!("应为混合模型");
+        };
+
+        let mut prev = f32::NEG_INFINITY;
+        let mut done = 0u32;
+        for target in [1u32, 2, 5, 20] {
+            while done < target {
+                m.user().learn(None, "可以");
+                done += 1;
+            }
+            let (s, _) = store.score(&store.initial_state(), "可以");
+            let expect = (1.0 + target as f32 * USER_COUNT_GAIN_R).log10();
+            assert!(
+                (s - base - expect).abs() < 1e-4,
+                "学到 {target} 次的加分应为 log10(1+{target}·R)={expect}: 实测 {}",
+                s - base
+            );
+            assert!(s > prev, "计数增加后分必须严格上升: {prev} -> {s}");
+            prev = s;
+        }
+    }
+
+    /// **加分与用户语料规模无关**(新口径的结构性收益)。
+    ///
+    /// 旧实现是概率插值,用户层的分母是自己的语料规模:实测同一句
+    /// 「学 1 次目标词」的加分从 +11.45(语料 1 条)掉到 +7.45(语料
+    /// 10001 条)——重度用户的个人化比新用户弱 4 个数量级。计数口径下
+    /// 这两次必须**逐位相同**。
+    #[test]
+    fn mixed_boost_independent_of_corpus_size() {
+        let user = UserLM::in_memory();
+        let store = LmStore::Mixed(MixedLM::new(LmStore::Bigram(BigramLM::new()), user));
+        let LmStore::Mixed(m) = &store else {
+            panic!("应为混合模型");
+        };
+        m.user().learn(None, "可以");
+        let (small, _) = store.score(&store.initial_state(), "可以");
+
+        for i in 0..10_000 {
+            m.user().learn(None, &format!("无关噪声词{i}"));
+        }
+        let (big, _) = store.score(&store.initial_state(), "可以");
+        assert_eq!(
+            small, big,
+            "同一计数的加分享不得随语料规模变化(旧实现差 4 个数量级): {small} vs {big}"
+        );
+    }
+
+    /// 二元证据在一元之上**再加一份**(匹配上文时更高)。
+    #[test]
+    fn mixed_bigram_evidence_adds_on_top() {
+        let user = UserLM::in_memory();
+        let store = LmStore::Mixed(MixedLM::new(LmStore::Bigram(BigramLM::new()), user));
+        let LmStore::Mixed(m) = &store else {
+            panic!("应为混合模型");
+        };
+        for _ in 0..3 {
+            m.user().learn(Some("星冰乐"), "斯巴克"); // 一元 3 + 二元(星冰乐→斯巴克) 3
+        }
+        let ctx = store.state_from_context(&LmContext {
+            tail: "",
+            last_word: Some("星冰乐"),
+        });
+        let (with_prev, _) = store.score(&ctx, "斯巴克");
+        let (no_prev, _) = store.score(&store.initial_state(), "斯巴克");
+        assert!(
+            (with_prev - no_prev - count_gain(3)).abs() < 1e-4,
+            "匹配上文应在一元增益之上再加一份二元增益 {}: {with_prev} vs {no_prev}",
+            count_gain(3)
+        );
+    }
+
     /// **没有个人证据的词,混合分必须与通用层逐位相同**(backoff)。
     ///
     /// 旧实现给「没学过」的词一个绝对中性分 `-1.0`,于是用户层里
@@ -752,7 +844,7 @@ mod tests {
         plain.add_unigram("天气", 500);
         let user = UserLM::in_memory();
         user.learn(None, "斯巴克"); // 只学过这一个词
-        let mixed = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user, MIX_USER_WEIGHT));
+        let mixed = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user));
         let plain = LmStore::Bigram(plain);
 
         for word in ["天气", "没见过的词"] {
@@ -785,7 +877,7 @@ mod tests {
         let mut base = BigramLM::new();
         base.add_unigram("跨越", 10_000);
         let user = UserLM::in_memory();
-        let mixed = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user, MIX_USER_WEIGHT));
+        let mixed = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user));
         let LmStore::Mixed(m) = &mixed else {
             panic!("应为混合模型");
         };

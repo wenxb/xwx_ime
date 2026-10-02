@@ -35,7 +35,7 @@ pub use candidate::{Candidate, SpellingKind};
 pub use corrector::{expand_fuzzy, expand_fuzzy_scored, ConfusionPair, COMMON_CONFUSION_PAIRS};
 pub use dict::{DictError, DictStore, Dictionary, MmapDict, SqliteDict};
 pub use lm::{BigramLM, LanguageModel, LmContext, LmError, LmState, LmStore};
-pub use lm::{MixedLM, MixedState, MIX_USER_WEIGHT};
+pub use lm::{MixedLM, MixedState, USER_COUNT_GAIN_R};
 pub use recognizer::{recognize, Recognized, URL_PREFIXES};
 pub use user_lm::{UserLM, FLUSH_LEARN_THRESHOLD, MAX_USER_UNIGRAMS, USER_LM_FILE_NAME};
 pub use segmenter::{Segmenter, SYLLABLES};
@@ -397,7 +397,7 @@ impl ImeEngine {
     /// (beam/兜底/会话)不需要任何改动——这正是枚举分发的意义。
     pub fn with_user_lm(mut self, user: UserLM) -> Self {
         let base = std::mem::replace(&mut self.lm, LmStore::Bigram(BigramLM::new()));
-        self.lm = LmStore::Mixed(MixedLM::new(base, user, MIX_USER_WEIGHT));
+        self.lm = LmStore::Mixed(MixedLM::new(base, user));
         self
     }
 
@@ -2781,6 +2781,96 @@ mod tests {
             score_of(&with_user, "可以") > score_of(&with_user, "跨越"),
             "学过的「可以」应高于没学过的「跨越」"
         );
+    }
+
+    /// **同类候选:选过一次就登顶**(计数增益口径,2026-10-02)。
+    ///
+    /// 实测(真实词库;测试环境不挂 `.gram`,分差与挂了时逐位相同):
+    /// `xian` 第 1 名「先」比第 10 名「闲」高 **0.913** log10,而一次上屏的
+    /// 计数增益是 `log10(1 + 1×USER_COUNT_GAIN_R)` = **3.0** > 0.913
+    /// ⇒ 一次误选就登顶。这正是用户要的「选过的词排在前面」。
+    ///
+    /// 失败见证:把 `USER_COUNT_GAIN_R` 调到 ≤ 9(一次增益 < 0.913)→ 红。
+    #[test]
+    fn real_dict_single_pick_tops_same_class_rivals() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path))
+            .expect("词库加载失败")
+            .with_user_lm(crate::UserLM::in_memory());
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+        let rank_of = |w: &str| {
+            engine
+                .lookup_candidates("xian", &LmContext::empty())
+                .expect("查询失败")
+                .iter()
+                .position(|c| c.word == w)
+                .map(|i| i + 1)
+        };
+
+        let before = rank_of("闲").expect("「闲」应在候选里");
+        assert!(before > 1, "学习前「闲」不该在第一位: 第 {before}");
+        engine
+            .user_lm()
+            .expect("引擎应挂用户层")
+            .learn(None, "闲");
+        assert_eq!(
+            rank_of("闲"),
+            Some(1),
+            "选过一次的「闲」在同类候选里应登顶"
+        );
+    }
+
+    /// **结构墙**:只覆盖前缀的单字,计数增益也翻不过「整词」。
+    ///
+    /// 实测(不挂 `.gram`):`women` 的「我」落后整词「我们」**10.088** log10,
+    /// 按计数增益曲线要翻过去得选 ≈ 1.2×10⁷ 次;`diannao` 的「电」差
+    /// **11.604**、`zhongguoren` 的「中国」差 **10.568**。
+    ///
+    /// 这条护栏是刻意的:否则打过一次「我」,以后 `women` 永远先出「我」
+    /// ——那是「输入法坏了」,不是「个人化」。
+    ///
+    /// 失败见证:把 `USER_COUNT_GAIN_R` 抬到 10¹¹ 量级(或去掉逐字拆解的
+    /// 补全罚分)→ 红。
+    #[test]
+    fn real_dict_structural_wall_survives_learning() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path))
+            .expect("词库加载失败")
+            .with_user_lm(crate::UserLM::in_memory());
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+        let user = engine.user_lm().expect("引擎应挂用户层");
+
+        let mut learned = 0usize;
+        for n in [1usize, 3, 10, 100] {
+            while learned < n {
+                user.learn(None, "我");
+                learned += 1;
+            }
+            let cands = engine
+                .lookup_candidates("women", &LmContext::empty())
+                .expect("查询失败");
+            let pos_word = cands
+                .iter()
+                .position(|c| c.word == "我们")
+                .unwrap_or_else(|| panic!("「我们」应在候选里(学过 {n} 次)"));
+            let pos_char = cands
+                .iter()
+                .position(|c| c.word == "我")
+                .unwrap_or_else(|| panic!("「我」应在候选里(学过 {n} 次)"));
+            assert_eq!(cands[0].word, "我们", "学过 {n} 次「我」后整词仍须第一");
+            assert!(
+                pos_char > pos_word,
+                "学过 {n} 次「我」仍不得压过整词「我们」: 我 @{pos_char}, 我们 @{pos_word}"
+            );
+        }
     }
 
     /// 回声语义未变(真实词库 + 简拼):`zgr` 现在有真实简拼候选,

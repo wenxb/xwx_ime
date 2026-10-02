@@ -10,7 +10,7 @@
 > [`docs/gear-audit.md`](docs/gear-audit.md) 组件审计 ·
 > [`docs/design-batch1.md`](docs/design-batch1.md) 早期设计。
 >
-> **当前状态**：测试 **278 passed / 1 ignored**（229 单元 + 49 D-Bus 集成），
+> **当前状态**：测试 **283 passed / 1 ignored**（234 单元 + 49 D-Bus 集成），
 > clippy `-D warnings` **全绿**；仓库无远端。gear 审计已清零——简拼（纯 + 混合）、
 > 中文标点、可编辑输入缓冲、Shift 大写、造词、`,`/`.` 翻页、`'` 分隔符、
 > Ctrl+Delete、邮箱/网址识别全部可用，全拼行为无退化。
@@ -96,6 +96,7 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 | recognizer（gear 审计最后一项） | 邮箱/网址不再被切拼音（`www` 不再出「万维网」） |
 | 2026-10-01 三个「文档宣称 ≠ 实际」 | 模糊拼音接成 `XWX_FUZZY`（**默认关**）；造词判据收紧；README 重写 |
 | 2026-10-02 用户层「学习反而降权」 | 用户层改 **backoff**，学过的词不再被绝对中性分压低；`ky` 里「可以」第 11 → 第 1 |
+| 2026-10-02 个人化改**计数增益** | `score = 通用层分 + log10(1 + c·1000)`；与语料规模无关，一次上屏 +3.0（同类候选登顶），选得越多越高，且翻不过「整词 vs 逐字」的结构墙 |
 
 ### 别再试（否定性结论，逐条保留）
 
@@ -113,7 +114,7 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 
 ### ⚠ 实机验证（现在最该做的一件事）
 
-**278 passed 里已含 49 条 D-Bus 集成测试**（私有总线 + 真实引擎进程），
+**283 passed 里已含 49 条 D-Bus 集成测试**（私有总线 + 真实引擎进程），
 所以下面这些路径**不再是「结构上摸不到」**——已被自动化覆盖：
 英文模式透传（`engine.rs` 的 `process_key_event` 直接 `return false`）、
 `UpdatePreeditText` / `UpdateLookupTable` / `CommitText` 三个信号的内容与字段
@@ -247,7 +248,8 @@ fcitx5 抢总线名的交互——集成层用的是**私有总线**，这些验
 | 模糊 + 造词 + LM 探查后 | 222（209 / 5 / 8） |
 | D-Bus 集成层修好后 | 271（209 / 5 / 8 + 集成 49） |
 | 混合简拼任意位置缩写后 | **275（213 / 5 / 8 + 集成 49）** |
-| 用户层 backoff 修复后（2026-10-02） | **278（216 / 5 / 8 + 集成 49）** |
+| 用户层 backoff 修复后（2026-10-02） | 278（216 / 5 / 8 + 集成 49） |
+| 个人化改计数增益后（2026-10-02） | **283（221 / 5 / 8 + 集成 49）** |
 
 **集成层 49 条 = 5 个文件**：`passthrough_contract` 7、
 `focus_paging_delete` 14、`signal_payloads` 7、`interactive_sequences` 16、

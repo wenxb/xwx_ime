@@ -1362,11 +1362,11 @@ mod tests {
         );
         let user = engine.user_lm().expect("引擎应有用户层");
         let snap = user.snapshot();
-        let learned = user.evidence_with(&snap, None, "测试");
-        let unknown = user.evidence_with(&snap, None, "没学过的词");
+        let learned = user.counts_with(&snap, None, "测试");
+        let unknown = user.counts_with(&snap, None, "没学过的词");
         assert!(
-            learned.is_some() && unknown.is_none(),
-            "候选词上屏应产生用户层证据,没学过的词不应有证据: {learned:?} vs {unknown:?}"
+            learned.0 > 0 && unknown == (0, 0),
+            "候选词上屏应产生计数,没学过的词不应有计数: {learned:?} vs {unknown:?}"
         );
 
         let before = user.unigram_len();

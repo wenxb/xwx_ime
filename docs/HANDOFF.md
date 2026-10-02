@@ -15,7 +15,7 @@
 ```
 git log --oneline    →  21 个提交（工作区还有本轮未提交的改动）
 cargo test --workspace --offline
-                     →  278 passed / 0 failed / 1 ignored（= 216 + 5 + 8 单元 + 49 集成）
+                     →  283 passed / 0 failed / 1 ignored（= 221 + 5 + 8 单元 + 49 集成）
 cargo clippy --workspace --all-targets -- -D warnings
                      →  全绿（这是硬门槛，见 PLAN.md 第三节「工程卫生」）
 ```
