@@ -1046,7 +1046,19 @@ fn window_has_vowel(window: &str) -> bool {
     ) -> Result<Vec<Candidate>, EngineError> {
         let raw: Vec<Candidate> = match &self.dict {
             DictStore::Mmap(d) => {
+                // **层序由来源标定**:
+                // - `lookup_abbrev`(首字母副索引)是缩写层 → `Abbrev`;
+                // - `lookup_mixed` 自己分两种:交错 DFS / 全拼路的候选是缩写
+                //   (末位音节只给首字母)→ `Abbrev`;**末尾半音节补全**的候选
+                //   是精确前缀读法(输入是它拼音的前缀,只是没打完)→ 留
+                //   `Exact`,与格子里「打字中的补全词」同层。
+                // 所以这里**不再统一覆盖** spelling:统一覆盖会把「北京/你好/
+                // 没有」按缩写层压到所有精确候选之后(实测 `beijin` 的北京从
+                // #1 掉到 #35),而那正是本次要修的行为。
                 let mut v = d.lookup_abbrev(pinyin)?;
+                for c in &mut v {
+                    c.spelling = SpellingKind::Abbrev;
+                }
                 v.extend(d.lookup_mixed(pinyin)?);
                 v
             }
@@ -1076,7 +1088,7 @@ fn window_has_vowel(window: &str) -> bool {
                 0.0
             };
             c.score = dict_logp + lm_score * self.lm_weight;
-            c.spelling = SpellingKind::Abbrev;
+            // spelling 保持来源给的值(见上面 `raw` 的注释),这里不再覆盖。
             // 简拼候选覆盖整串(它的 key 就是整串的缩写),分段上屏时
             // 一次吃掉全部输入。此刻 `pinyin` 是干净串,写入的是干净串
             // 坐标;调用方 [`Self::fill_covered`] 负责映射回原文长度。
@@ -3432,6 +3444,13 @@ mod tests {
     ///
     /// 失败见证:分别去掉这三处的过滤 → `wsm`(78 条超长)、`zho`(13 条)、
     /// `sh`(1 条)各自变红。
+    ///
+    /// **2026-10-02 收严到「每个字都得有字母」**:上面那条只挡「字数 >
+    /// 字母数」,挡不住「残缺音节之后又接了一整个音节」——`yij`(3 字母)配
+    /// `yi jing shi`(3 字)正好放行,用户报的「`yij` 出现已经是」就是它。
+    /// 判据换成 `MixedDfs::collect` 里的「残缺音节之后不许再有音节」后,
+    /// 期望词表里的 `zho`→中国 也一并消失(「国」一个字母都没打),
+    /// 改成断言 `zho`→中。
     #[test]
     fn real_dict_candidates_never_exceed_one_character_per_letter() {
         let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
@@ -3459,7 +3478,7 @@ mod tests {
             ("zgr", "中国人"),
             ("zgr", "这个人"),
             ("ky", "可以"),
-            ("zho", "中国"),
+            ("zho", "中"),
             ("xian", "西安"),
         ] {
             let cands = engine.lookup_candidates(input, &ctx).expect("查询失败");
@@ -3467,6 +3486,40 @@ mod tests {
                 cands.iter().any(|c| c.word == word),
                 "`{input}` 仍须给出「{word}」: {:?}",
                 cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// **补全读法要进第一页**(2026-10-02):末尾半音节补全(`beijin` → `bei jing`)
+    /// 是「精确前缀」读法,层序必须与格子里「打字中的补全词」同为 `Exact`;
+    /// 标成 `Abbrev` 它就会排在**所有**精确候选之后,用户第一页只看得到单字。
+    ///
+    /// 失败见证:把 `dict.rs::lookup_mixed` 里 T2 那一轮的层序标回 `Abbrev`
+    /// (等价于 `abbrev_candidates` 恢复「统一覆盖 spelling」)→ 四条全红
+    /// (`beijin` 的北京 #1 → #35、`niha` 的你好 #2 → #26、`meiyo` 的没有
+    /// #1 → #32、`zhongguor` 的中国 #4 → #80)。
+    #[test]
+    fn real_dict_partial_syllable_completions_reach_the_first_page() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+        let ctx = LmContext::empty();
+        for (input, want, max_rank) in [
+            ("beijin", "北京", 3),
+            ("niha", "你好", 3),
+            ("meiyo", "没有", 2),
+            ("zhongguor", "中国", 10),
+        ] {
+            let cands = engine.lookup_candidates(input, &ctx).expect("查询失败");
+            let rank = cands.iter().position(|c| c.word == want).map(|i| i + 1);
+            assert!(
+                matches!(rank, Some(r) if r <= max_rank),
+                "`{input}` 的「{want}」应在前 {max_rank} 名(实测 {rank:?}): {:?}",
+                cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
             );
         }
     }
@@ -3858,7 +3911,15 @@ mod tests {
         // 换成 u_min 桶:0 桶的简拼目标词仍排在段内精确字(u_min>0 桶)
         // 之前,但「拼音凑巧等长」的生僻组合词不再凭裸 u=0 浮上第一页;
         // 同桶内的层序保证由二元组字典序断言原样钉住,不是放松)。
-        for input in ["zhongguor", "nih", "renm"] {
+        //
+        // **用例从 `zhongguor`/`nih`/`renm` 换成 `xian`/`ky`**
+        // (2026-10-02 二):「每个字都得有字母」收严后,那三个输入召不满
+        // 100 条了(实测 `zhongguor` 24、`nih` 43),而它们当时能装满,
+        // 靠的正是被规则排除掉的长词(中国人民/你好吗/人民医院…)。
+        // 配额语义没动,换两个仍然装满的输入来钉:「`xian`」精确层占满
+        // 100 条、简拼层仍保底 5 条;「`ky`」精确层为空、简拼层填满 100 条
+        // (配额是保底不是封顶的另一面)。
+        for input in ["xian", "ky"] {
             let cands = engine
                 .lookup_candidates(input, &LmContext::empty())
                 .expect("查询失败");

@@ -816,13 +816,23 @@ impl MmapDict {
         // 不值得扫。精确剪枝:块内 freq 降序,key 的天花板低于门槛 ⇒ 该 key
         // 一条都挤不进来。
         let partial_threshold = best.values().copied().min().unwrap_or(0);
+        // 这批候选**单独收池**:它们是「精确前缀补全」读法——输入是候选拼音
+        // 的前缀,只是最后一个音节还没打完(`beijin` → `bei jing`)。层序上
+        // 与格子里「打字中的补全词」同类,最终标 `Exact`;而 (1)(2) 两条路给
+        // 的是**缩写**读法(末位音节只给首字母,`zhongg` → 中国)→ 标 `Abbrev`。
+        // 层序不同直接决定「北京/你好/没有」能不能与精确候选同台比分数:
+        // 实测 `beijin` 的北京 #35 → #1、`niha` 的你好 #26 → #2、
+        // `meiyo` 的没有 #32 → #1。**两池合并会反过来**把 `beijing` 的
+        // 「被禁锢」这类低频缩写词抬进第一页,所以不能并成一个 map。
+        let mut completions: std::collections::HashMap<(String, String), u64> =
+            std::collections::HashMap::new();
         {
             let mut dfs = MixedDfs {
                 dict: self,
                 input: input.as_bytes(),
                 by_first: &EMPTY_FIRST,
                 by_all: &[],
-                out: &mut best,
+                out: &mut completions,
                 budget: MAX_MIXED_DFS_STEPS,
                 threshold: partial_threshold,
                 threshold_at: 0,
@@ -853,10 +863,24 @@ impl MmapDict {
             }
         }
 
-        let mut out: Vec<Candidate> = best
-            .into_iter()
-            .map(|((word, py), freq)| Candidate::new(word, py, freq))
-            .collect();
+        // 缩写读法 → `Abbrev`;补全读法 → `Exact`(层序见上面 `completions`
+        // 的注释)。同一 (词, 拼音) 被两条路同时命中时**保留缩写那一份**
+        // ——更保守:层序更低,不会被这条新通道抬上去。
+        let mut out: Vec<Candidate> = Vec::with_capacity(best.len() + completions.len());
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::with_capacity(best.len());
+        for ((word, py), freq) in best {
+            seen.insert((word.clone(), py.clone()));
+            let mut c = Candidate::new(word, py, freq);
+            c.spelling = crate::candidate::SpellingKind::Abbrev;
+            out.push(c);
+        }
+        for ((word, py), freq) in completions {
+            if seen.contains(&(word.clone(), py.clone())) {
+                continue;
+            }
+            out.push(Candidate::new(word, py, freq));
+        }
         // **确定性排序**:同频词必须按 (词, 全拼) 定序,不能依赖 `HashMap`
         // 的迭代顺序——那是每个进程随机化的,实测同一二进制两次运行,
         // `sh` 第 28 名「谁」的拼音在 `shei`/`shui` 之间跳、`zh` 的简拼层
@@ -1259,16 +1283,6 @@ impl MixedDfs<'_> {
     /// 否则前缀是完整音节序列,只收与它完全相等的 key。
     fn collect(&mut self, prefix: &[u8], mid_syllable: bool) -> Result<(), DictError> {
         let dict = self.dict;
-        // **一字一字母**(2026-10-02):`mid_syllable` 时前缀停在末位声母上,
-        // 而字节前缀匹配会把「这个音节之后**还有**音节」的 key 一起扫进来
-        // (`wei shen m` 既命中 `wei shen me`,也命中 `wei shen me yao`)。
-        // 后者比输入字母还多字,按用户口径必须排除。前缀里的空格数 + 1 是它
-        // 已占的音节位,残余部分每多一个空格就再多一个字。
-        let prefix_spaces = if mid_syllable {
-            prefix.iter().filter(|&&b| b == b' ').count()
-        } else {
-            0
-        };
         let mut i = self.lower_bound(prefix)?;
         while i < dict.pinyin_count {
             if self.budget == 0 {
@@ -1281,14 +1295,16 @@ impl MixedDfs<'_> {
             if !k.starts_with(prefix) {
                 return Ok(());
             }
-            // 字数不得超过输入字母数(见上)。key 顺序不与音节数单调,故只跳过
-            // 这一条,不能像 `!mid_syllable` 那样提前收工。
-            if mid_syllable
-                && prefix_spaces
-                    + 1
-                    + k[prefix.len()..].iter().filter(|&&b| b == b' ').count()
-                    > self.input.len()
-            {
+            // **一字一字母**(2026-10-02):`mid_syllable` 时前缀停在末位声母上,
+            // 而字节前缀匹配会把「这个音节之后**还有**音节」的 key 一起扫进来
+            // (`wei shen m` 既命中 `wei shen me`,也命中 `wei shen me yao`;
+            // `yij` 既命中 `yi jing`,也命中 `yi jing shi`)。后面那些音节
+            // **一个字母都没打**,按用户口径(每个字都要有字母)必须排除。
+            // 旧判据拿「候选字数 ≤ 输入字母数」把关,`yij`(3 字母)配「已经是」
+            // (3 字)正好放行——漏的正是这一类(用户报 `yij` 出现「已经是」)。
+            // key 顺序不与音节数单调,故只跳过这一条,不能像 `!mid_syllable`
+            // 那样提前收工。
+            if mid_syllable && k[prefix.len()..].contains(&b' ') {
                 i += 1;
                 continue;
             }
@@ -1997,7 +2013,7 @@ mod tests {
         //   于是 你好(hao)/北京(jing)/没有(you)全被排除。
         //
         // 失败见证:把 `lookup_mixed` 里那段半音节补充(partial_tail_readings
-        // 那一轮)注释掉 → 四条全红。
+        // 那一轮)注释掉 → 「你好」「北京」「没有」三条全红。
         let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
         let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
         if !dict_path.is_file() || !abbrev_path.is_file() {
@@ -2006,7 +2022,7 @@ mod tests {
         let dict = MmapDict::open(&dict_path).expect("词库加载失败")
             .with_abbrev(&abbrev_path);
         for (input, want) in [
-            ("zho", "中国"),     // 尾巴整个是半音节(zhong)
+            ("zho", "中"),       // 尾巴整个是半音节(zhong):只补到「中」这一位
             ("niha", "你好"),    // 尾巴 ha 是 hao 的半个
             ("beijin", "北京"),  // 尾巴 jin 是 jing 的半个
             ("meiyo", "没有"),   // 尾巴 yo 是 you 的半个
@@ -2014,6 +2030,12 @@ mod tests {
             // 不测 `sh`→是:那个词由**精确层/副索引**提供(用户可见行为正常),
             // 而混合层要在探索上界内扫完整个 `sh*` 区间才轮得到 `shi`,
             // 属于「音节区间太大」的已知代价(见 `MAX_MIXED_COLLECT`)。
+            //
+            // `zho` 的期望从「中国」改成「中」:**一字一字母**(2026-10-02
+            // 用户报 `yij` 出现「已经是」)之后,末尾残缺音节之后不许再接音节
+            // ——`zho` 只覆盖「中」的一半,「国」一个字母都没打。四个形态里
+            // 只有 `zho` 是这条(另外三个的尾巴就是整词的最后一个音节),
+            // 所以它成了「半音节补全」与「不许补出没打过的音节」的分界线。
             let res = dict.lookup_mixed(input).expect("混合简拼查询失败");
             assert!(
                 res.iter().any(|c| c.word == want),
@@ -2021,6 +2043,13 @@ mod tests {
                 res.iter().take(8).map(|c| &c.word).collect::<Vec<_>>()
             );
         }
+        // 反面:同一规则不得把「没打过的音节」带出来。
+        let res = dict.lookup_mixed("zho").expect("混合简拼查询失败");
+        assert!(
+            !res.iter().any(|c| c.word == "中国"),
+            "`zho` 不得召回「中国」(guo 一个字母都没打): {:?}",
+            res.iter().take(8).map(|c| &c.word).collect::<Vec<_>>()
+        );
     }
 
     #[test]
