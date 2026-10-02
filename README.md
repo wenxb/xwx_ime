@@ -206,9 +206,11 @@ cargo test -p xwx_ibus                    # 协议序列化与按键翻译测试
 > - **D-Bus 集成测试**（根 `tests/`）——跑真实 `xwx_ime --ibus` 进程 + 私有
 >   `dbus-daemon`，覆盖单测**结构上摸不到**的路径：英文模式透传、
 >   `CommitText`/`UpdatePreeditText`/`UpdateLookupTable` 信号内容、
->   `FocusOut`、候选点击、翻页、按键透传返回值。5 个文件：
->   `passthrough_contract`(7)、`focus_paging_delete`(14)、`signal_payloads`(7)、
->   `interactive_sequences`(16)、`hermeticity`(5)；
+>   `FocusOut`、候选点击、翻页、按键透传返回值。11 个文件（每个文件一组场景，
+>   原来是 5 个）：`verbatim_url`(7)、`wire_abbrev`(5)、`mods_keys`(4)、
+>   `prefix_commit`(1)、`paging`(7)、`blocklist_delete`(2)、
+>   `focus_lifecycle`(4)、`punctuation_paging`(1)、`passthrough_contract`(7)、
+>   `signal_payloads`(7)、`hermeticity`(5)；
 > - **实机验证**（`docs/VERIFY.md`）——IBus daemon + 真实应用，仍未自动化。
 
 > **集成层的正确性要求比单测更严**：它跨进程、跨 D-Bus，

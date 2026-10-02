@@ -766,7 +766,7 @@ impl ImeEngine {
 
         // 回声兜底必须在**屏蔽过滤之前**追加,与改动前的格边分支逐字节一致:
         // 「候选被用户 Ctrl+Delete 全删光」时窗口要能真的收起
-        // (tests/focus_paging_delete.rs 的 `deleting_every_candidate_…` 钉着
+        // (tests/blocklist_delete.rs 的 `deleting_every_candidate_…` 钉着
         // 这条);反过来把回声放到过滤之后,会让删除全部候选后仍留一个
         // 「原样上屏」条目,窗口永远收不起来。
         if ranked.is_empty() {

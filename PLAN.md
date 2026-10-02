@@ -283,9 +283,10 @@ fcitx5 抢总线名的交互——集成层用的是**私有总线**，这些验
 | 末尾半音节召回（T2）后（2026-10-02） | 285（223 / 5 / 8 + 集成 49） |
 | 开发期用户模型隔离后（2026-10-02） | **286（223 / 5 / 9 + 集成 49）** |
 
-**集成层 49 条 = 5 个文件**：`passthrough_contract` 7、
-`focus_paging_delete` 14、`signal_payloads` 7、`interactive_sequences` 16、
-`hermeticity` 5。它们跑**真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`**，
+**集成层 49 条 = 5 个文件**（2026-10-02 拆分后为 11 个文件、同样 49 条）：
+`verbatim_url` 7、`wire_abbrev` 5、`mods_keys` 4、`prefix_commit` 1、
+`paging` 7、`blocklist_delete` 2、`focus_lifecycle` 4、`punctuation_paging` 1、
+`passthrough_contract` 7、`signal_payloads` 7、`hermeticity` 5。它们跑**真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`**，
 覆盖 `cargo test` 结构上摸不到的 D-Bus 边界（见 `README.md` 的「测试」一节）。
 集成层曾经**整体不可信**（信号 100% 被丢弃、多数用例红、部分永久挂起），
 修法见 `docs/HANDOFF.md` 第 ⑫ 条——那里记的六个缺陷全部是**测试设施**的

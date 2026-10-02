@@ -7,9 +7,10 @@
 > 跑真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`，已自动化下面清单里的
 > **一部分**（英文模式透传、`CommitText`/`UpdatePreeditText`/
 > `UpdateLookupTable` 信号内容与字段顺序、`FocusOut`、候选点击、翻页、
-> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性）。5 个文件：`passthrough_contract`(7)、
-> `focus_paging_delete`(14)、`signal_payloads`(7)、`interactive_sequences`(16)、
-> `hermeticity`(5)。
+> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性）。11 个文件（每个文件一组场景，原来是 5 个）：
+> `verbatim_url`(7)、`wire_abbrev`(5)、`mods_keys`(4)、`prefix_commit`(1)、
+> `paging`(7)、`blocklist_delete`(2)、`focus_lifecycle`(4)、`punctuation_paging`(1)、
+> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)。
 >
 > **但它用的是私有总线，不是真实 ibus-daemon + 真实应用**——下面这份清单
 > 仍然要敲，因为它验的是 daemon / GNOME Shell / 应用三者与引擎的
