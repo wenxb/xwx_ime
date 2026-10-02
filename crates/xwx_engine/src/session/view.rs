@@ -12,7 +12,6 @@ impl InputSession {
             caret: 0,
             candidates: Vec::new(),
             cursor: 0,
-            page: 0,
             page_size: DEFAULT_PAGE_SIZE,
             committed_tail: String::new(),
             last_word: None,
@@ -32,6 +31,26 @@ impl InputSession {
     /// 拼音串内的编辑光标(字节偏移 = 字符位置,串内只有 ASCII)。
     pub fn caret(&self) -> usize {
         self.caret
+    }
+
+    /// 当前候选页码(0 起)——**由唯一权威的全局高亮下标推导**,不是独立状态。
+    ///
+    /// codex 审查 D5:旧实现把 `page` 当独立字段(翻页只动 `page`、不动
+    /// `cursor`,数字选词又直接取 `candidates[n-1]`),于是「面板显示第 2 页
+    /// 首项 / 空格上屏第 1 页首项」这类不一致无法靠单点修补消除。现在
+    /// 翻页 = 把 `cursor` 移到目标页首项,页码只剩这一个来源。
+    pub fn page(&self) -> usize {
+        self.page_of(self.cursor)
+    }
+
+    /// `cursor` 落在第几页(0 起)。`page_size` 恒 ≥ 1(见 [`DEFAULT_PAGE_SIZE`])。
+    pub(super) fn page_of(&self, cursor: usize) -> usize {
+        cursor / self.page_size
+    }
+
+    /// 当前页第一个候选的全局下标。
+    pub(super) fn page_start(&self) -> usize {
+        self.page() * self.page_size
     }
 
     /// 是否处于输入状态（拼音串非空）。
@@ -75,7 +94,7 @@ impl InputSession {
             candidates: self.candidates.clone(),
             cursor: self.cursor,
             caret,
-            page: self.page,
+            page: self.page(),
             page_size: self.page_size,
         }
     }

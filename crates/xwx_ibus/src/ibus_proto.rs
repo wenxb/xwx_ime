@@ -208,27 +208,37 @@ pub fn ibus_text(text: &str) -> Result<OwnedValue, ProtoError> {
 
 /// 构造 IBusLookupTable 序列化（`update_lookup_table` 信号用）。
 ///
-/// - `page_candidates`：当前页候选文本（按序）；
-/// - `cursor_in_page`：高亮候选在当前页内的下标；
+/// - `candidates`：**当前页**的候选文本（按序，≤ `page_size` 条）；
+/// - `cursor`：高亮候选在**当前页内**的下标（0..`page_size`）；
 /// - `page_size`：每页候选数。
+///
+/// **坐标系（codex 审查 D5）**：发「当前页 + 页内下标」时，两种面板口径
+/// 会得到同一个点击下标——面板若按 `page = cursor / page_size` 推页码，
+/// 页内 cursor < page_size ⇒ page = 0 ⇒ 点击回传 `0*page_size + 按钮序号`
+/// = 按钮序号；面板若把 cursor 当页内下标，结论一样。于是面板回传的
+/// `CandidateClicked(index)` 是**页内下标**，会话用 `page_start + index`
+/// 映射回全局（与数字选词共用同一条映射）。
+///
+/// 为什么不发整表：实测构造+序列化 9 条 = 146µs、500 条 = 7.5ms（每键一次），
+/// 单这一项就超过 12ms 热路径预算的一半——见 `engine.rs::refresh_ui` 的注释。
 ///
 /// 类型串：`("IBusLookupTable", a{sv}, u, u, b, b, i, av, av)`
 /// = `(sa{sv}uubbiavav)`。候选数组是 `av`（每个候选是完整的
 /// IBusText 序列化，包在 variant 里），labels 留空让面板自动编号。
 pub fn ibus_lookup_table(
-    page_candidates: &[String],
-    cursor_in_page: usize,
+    candidates: &[String],
+    cursor: usize,
     page_size: usize,
 ) -> Result<OwnedValue, ProtoError> {
-    let candidates: Vec<Value<'_>> = page_candidates.iter().map(|w| text_value(w)).collect();
+    let candidates: Vec<Value<'_>> = candidates.iter().map(|w| text_value(w)).collect();
     Ok(Structure::from((
         "IBusLookupTable",
         empty_props(),
         page_size as u32,
-        cursor_in_page as u32,
-        true, // cursor_visible
-        true, // round：候选循环翻页
-        0i32, // orientation：IBUS_ORIENTATION_HORIZONTAL
+        cursor as u32,
+        true,  // cursor_visible
+        false, // round：不循环翻页，与会话的钳位导航一致（codex 审查 D5）
+        0i32,  // orientation：IBUS_ORIENTATION_HORIZONTAL
         candidates,
         Vec::<Value<'static>>::new(), // labels
     ))

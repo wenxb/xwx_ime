@@ -18,12 +18,15 @@ pub struct Signal {
 pub struct LookupTable {
     /// `page_size` (field 2).
     pub page_size: u32,
-    /// `cursor` **within the page** (field 3) — NOT a global candidate index.
-    pub cursor_in_page: u32,
+    /// `cursor` (field 3) — index **within the emitted page**, not a global
+    /// candidate index. The engine sends only the current page and the session
+    /// maps the panel's in-page `CandidateClicked(index)` back to the global one
+    /// (`page_start + index`, codex review D5).
+    pub cursor: u32,
     pub cursor_visible: bool,
     pub round: bool,
     pub orientation: i32,
-    /// Candidate words of this page, in display order (field 7, `av`).
+    /// Candidate words of the current page, in display order (field 7, `av`).
     pub candidates: Vec<String>,
     /// Number of label entries (field 8); the engine leaves it empty so the
     /// panel auto-numbers 1..9.
@@ -144,7 +147,7 @@ impl Signal {
             return None;
         }
         let page_size = f[2].downcast_ref::<u32>().ok()?;
-        let cursor_in_page = f[3].downcast_ref::<u32>().ok()?;
+        let cursor = f[3].downcast_ref::<u32>().ok()?;
         let cursor_visible = f[4].downcast_ref::<bool>().ok()?;
         let round = f[5].downcast_ref::<bool>().ok()?;
         let orientation = f[6].downcast_ref::<i32>().ok()?;
@@ -171,7 +174,7 @@ impl Signal {
             .len();
         Some(LookupTable {
             page_size,
-            cursor_in_page,
+            cursor,
             cursor_visible,
             round,
             orientation,

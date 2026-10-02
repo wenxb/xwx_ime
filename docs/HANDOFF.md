@@ -1079,3 +1079,82 @@ D6/D7/D8/D10/D11/D12**(D5、D9、D13 与 A4/Q1 待做)。每个修法都有「�
 **D2 是用户可见的交互变更**(审查也要求单列批准):组合未覆盖的字母以前会被
 静默丢掉,现在原样跟在上屏文本后面(`我们jintian，`),**不**替用户自动选余串
 候选;把丢失固化成正解的旧断言已改写并注明理由。
+
+## ㉖ D5:翻页/数字/空格/点击统一到「一个权威下标」(2026-10-03)
+
+### 问题形状
+
+四个出口各用各的坐标,任一处改动都会让「面板显示的那条」与「上屏的那条」分叉:
+
+| 出口 | 旧实现取的是 |
+|---|---|
+| 面板渲染 | `page` 字段切出的**当前页切片** + 页内下标 |
+| 数字选词 | `self.candidates[n-1]`——**全局**下标,与页码无关 |
+| 空格上屏 | `self.candidates[self.cursor]`——全局下标 |
+| 点击选词 | `InputEvent::CandidateClicked(index)` 当**全局**下标用,而面板回传的是页内序号 |
+
+翻页只动 `page`、不动 `cursor`,于是「第 2 页首项显示、第 1 页首项上屏」;
+`CursorDown` 越过第一页后线上表仍是第 1 页(页内下标被钳在 8),而会话高亮
+已经走到第 10 条。
+
+### 修法(单点权威 + 一条映射)
+
+- `InputSession` 删掉 `page` 字段:**唯一权威坐标是全局 `cursor`**,
+  `page()` = `cursor / page_size`(只读推导,见 `session/view.rs`)。
+- 翻页 = 把 `cursor` 移到目标页首项(`goto_next_page`/`goto_prev_page`,
+  末页/首页钳位、不 wrap,与既有按键行为一致)。
+- 数字与点击**共用同一条映射**:全局 = `page_start + 页内偏移`;
+  `InputEvent::CandidateClicked(index)` 的契约明确写成**页内下标**
+  (面板只看得见当前页,它也只能回传页内序号)。
+- 线上坐标系保持「当前页切片 + 页内 cursor」。
+
+### 为什么**不**按审查推荐发整表 + 绝对 cursor
+
+实测(`ibus_lookup_table` 构造 + 转 `OwnedValue`,每键一次):
+
+| 候选数 | 构造+序列化 |
+|---|---|
+| 9 条(一页) | 146 µs |
+| 500 条(`MAX_LOOKUP_RESULTS` 上限) | **7.5 ms** |
+
+500 条那一档单这一项就吃掉 12ms 热路径预算的一半以上,所以走页内方案:
+页内 cursor 恒 < `page_size` ⇒ 面板无论按「绝对下标」还是「页内下标」理解
+`cursor`,算出的页码都是 0,点击回传的都是页内序号——两种面板口径在本方案下
+**得到同一个下标**。旧实现的缺口不是坐标系,而是**会话少做了那条映射**。
+
+### 证据(旧实现必红)
+
+- 单测(`session/tests/paging_delete.rs`,5 条):`digit_selects_within_the_current_page`、
+  `digit_without_a_candidate_on_this_page_is_a_noop`、
+  `space_commits_the_highlighted_candidate_after_paging`、
+  `cursor_moves_across_the_page_boundary`、
+  `every_visible_candidate_is_committed_by_digit_space_and_click`
+  (逐页逐条:数字/空格/点击三条出口都必须上屏面板显示的那条)。
+- 集成(`tests/paging.rs`,4 条):`lookup_table_stays_in_step_with_the_page`、
+  `cursor_up_down_crosses_the_page_boundary_consistently`、
+  `candidate_clicked_on_page_two_uses_the_in_page_index`、
+  `highlight_and_page_stay_consistent_across_paging`。
+- 回到 HEAD 实现跑这些用例:**单测 5 红 / 集成 4 红**;
+  同期不改变行为的用例(`page_down_advances…`、`page_up_returns…`、
+  第 1 页点击)仍是绿的——说明这批用例测的是坐标一致性,不是简单反转断言。
+
+### 有意变更(旧 golden 作废,原文保留在此)
+
+- `tests/paging.rs`:`c5 == 8`(「下移越过第一页后页内下标钳在 8」)是错协议的
+  记录,改为「表切到第 2 页、页内下标 = 末条的页内偏移」;
+  `t.cursor_in_page == 0`(第 2 页)改为页内下标 + 表切片同时断言。
+- `tests/signal_payloads.rs`:`table.candidates.len() <= table.page_size` 不再成立
+  (整表方案才有这条),改回页切片断言,并补「页内 cursor < page_size」。
+- `candidate_clicked_on_page_two_uses_the_global_index` 改名为
+  `…uses_the_in_page_index`(旧名字写的是错的契约)。
+- 交互变更:`PageUp` 现在把高亮带回目标页**首项**(旧的翻页保留光标位置)。
+  这是 librime selector 的翻页口径,也是「面板显示 = 空格上屏」的必要条件。
+- 线上 `round` 由 `true` 改 `false`:与会话「末页/首页钳位、不 wrap」的导航一致。
+
+### 未测/遗留
+
+- **真实 GNOME Shell 候选窗的点击索引没有直接实测**(集成层是私有总线,
+  没有面板进程)。协议层结论如上;实机验证请在真机上「翻到第 2 页点第一条,
+  确认上屏的是显示的那条」。
+- `page_size` 仍固定 9(`DEFAULT_PAGE_SIZE`),面板若配成别的值,页码推导会
+  与面板不一致——本轮不改(`page_size` 属冻结常量口径,需 owner 裁决)。

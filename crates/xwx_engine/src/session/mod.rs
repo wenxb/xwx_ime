@@ -132,7 +132,13 @@ pub enum InputEvent {
     Verbatim(char),
     /// 数字选词：`Select(1)` 选第 1 个候选；`Select(0)` 选第 10 个。
     Select(u8),
-    /// 候选面板点击(`CandidateClicked`):`index` 是**全局**下标(跨页)。
+    /// 候选面板点击(`CandidateClicked`):`index` 是**页内**下标
+    /// (与 `UpdateLookupTable` 里那个页内 `cursor` 同一坐标系)。
+    ///
+    /// codex 审查 D5:面板只知道「表里的第几条」——我们发的是当前页,
+    /// 所以它回传的也是页内序号。会话把它映射回全局
+    /// (`page_start + index`,与 `Select` 同一条映射);旧实现直接当全局
+    /// 下标用,于是第 2 页点第 1 条会点上屏第 1 页第 1 条。
     ///
     /// 走 `handle` 而不是直接调 [`InputSession::commit_at`],是为了让
     /// 「点击选词」与「空格/数字选词」共用同一条分段上屏路径(同一个
@@ -257,10 +263,11 @@ pub struct InputSession {
     caret: usize,
     /// 当前候选（刷新时重新计算）。
     candidates: Vec<Candidate>,
-    /// 高亮候选下标。
+    /// 高亮候选下标——**唯一权威的选中坐标**（全局下标，相对 `candidates`）。
+    ///
+    /// 页码、面板高亮、数字选词、点击选词全部由它推导（codex 审查 D5）：
+    /// 这里一旦成为唯一来源，「显示的是谁」与「上屏的是谁」就不可能分叉。
     cursor: usize,
-    /// 页码。
-    page: usize,
     /// 每页候选数。
     page_size: usize,
     /// 已上屏文本的末尾（有界，≤ `COMMITTED_TAIL_LIMIT` 个字符）。

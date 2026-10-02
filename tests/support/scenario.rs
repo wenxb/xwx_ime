@@ -8,7 +8,10 @@ pub const NI_ORDER: &[&str] = &[
     "你", "泥", "尼", "逆", "匿", "腻", "拟", "妮", "倪", "霓", "溺", "昵",
 ];
 
-/// Type `ni` and return the first page's candidates.
+/// Type `ni` and return the candidate table the panel receives.
+///
+/// 返回的是**当前页**的候选(线上坐标系见 `tests/paging.rs` 顶部:
+/// 表 = 当前页切片,cursor = 页内下标)。
 pub fn compose_ni(h: &mut Harness) -> Vec<String> {
     h.focus_out().expect("FocusOut 复位");
     h.clear_backlog();

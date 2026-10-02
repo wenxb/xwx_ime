@@ -94,8 +94,7 @@ impl InputSession {
         }
         self.pinyin.drain(..covered);
         self.caret = self.caret.saturating_sub(covered);
-        self.cursor = 0;
-        self.page = 0;
+        self.cursor = 0; // 页码由下标推导(见 `page`)
     }
 
     /// 上屏候选并决定「界面接下来怎么办」——空格/数字/点击/标点的统一出口。
@@ -120,8 +119,7 @@ impl InputSession {
             // 回滚:字母一个都不能少(候选查询失败不该吞掉用户输入)。
             self.pinyin.insert_str(0, &prefix);
             self.caret += prefix.len();
-            self.cursor = 0;
-            self.page = 0;
+            self.cursor = 0; // 页码由下标推导(见 `page`)
             return Err(e);
         }
         // **方案 b**:这一段留在组合里(预编辑区显示为已确认文本),不交给
@@ -287,8 +285,7 @@ impl InputSession {
         self.pinyin.clear();
         self.caret = 0;
         self.candidates.clear();
-        self.cursor = 0;
-        self.page = 0;
+        self.cursor = 0; // 页码由下标推导(见 `page`)
         self.confirmed.clear();
         self.recognized = None;
         // 「被翻页吃掉的那个点」是**当前串**的属性,串都没了就作废

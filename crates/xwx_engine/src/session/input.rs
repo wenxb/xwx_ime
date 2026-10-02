@@ -177,14 +177,9 @@ impl InputSession {
                     return Ok(SessionOutput::Updated(self.update()));
                 }
                 if !self.candidates.is_empty() {
-                    let max_page = self
-                        .candidates
-                        .len()
-                        .div_ceil(self.page_size)
-                        .saturating_sub(1);
                     match c {
                         '.' | '=' => {
-                            self.page = (self.page + 1).min(max_page);
+                            self.goto_next_page();
                             // 记下「真的敲过这个点」(位置 = 当前串长)。
                             // `www.` 的点被翻页吃掉,下一个字母到来时
                             // refresh 只有凭这条记录才允许把它补回串里
@@ -194,8 +189,8 @@ impl InputSession {
                             }
                             return Ok(SessionOutput::Updated(self.update()));
                         }
-                        ',' | '-' if self.page > 0 => {
-                            self.page = self.page.saturating_sub(1);
+                        ',' | '-' if self.page() > 0 => {
+                            self.goto_prev_page();
                             return Ok(SessionOutput::Updated(self.update()));
                         }
                         _ => {}
@@ -286,15 +281,10 @@ impl InputSession {
             // `-` 上一页(同 `,` 的 paging 边界:仅 page>0 回翻,首页钳 0)。
             // 空闲(无候选窗)时落回 catch-all 透传,键不被吃掉。
             InputEvent::Char(c @ ('-' | '=')) if !self.candidates.is_empty() => {
-                let max_page = self
-                    .candidates
-                    .len()
-                    .div_ceil(self.page_size)
-                    .saturating_sub(1);
                 if c == '=' {
-                    self.page = (self.page + 1).min(max_page);
-                } else if self.page > 0 {
-                    self.page = self.page.saturating_sub(1);
+                    self.goto_next_page();
+                } else {
+                    self.goto_prev_page();
                 }
                 Ok(SessionOutput::Updated(self.update()))
             }
@@ -302,22 +292,30 @@ impl InputSession {
             InputEvent::Char(_) => Ok(SessionOutput::Noop),
 
             // —— 数字选词 ——
+            // 数字是**当前页内**的序号:全局下标 = 页首 + 页内偏移
+            // (`0` 仍是第 10 项,librime selector 的口径)。旧实现直接
+            // 用 `candidates[n-1]`,翻到第 2 页后按 `1` 上屏的是**第 1 页**
+            // 的首项——面板显示与上屏文本分叉(codex 审查 D5)。
             InputEvent::Select(n) if !self.pinyin.is_empty() => {
-                let idx = if n == 0 { 9 } else { (n - 1) as usize };
+                let offset = if n == 0 { 9 } else { (n - 1) as usize };
+                let idx = self.page_start() + offset;
                 match self.candidates.get(idx).cloned() {
                     Some(c) => self.commit_candidate(&c),
-                    None => Ok(SessionOutput::Noop), // 该数字无对应候选
+                    None => Ok(SessionOutput::Noop), // 该数字在本页无对应候选
                 }
             }
             InputEvent::Select(_) => Ok(SessionOutput::Noop),
 
-            // —— 候选面板点击(全局下标) ——
-            // 与空格/数字同一条出口:分段上屏语义、失败回滚都在
+            // —— 候选面板点击(页内下标) ——
+            // 面板看到的表是**当前页**,所以它回传的是页内序号;映射回全局
+            // 与数字选词同一条规则(`page_start + index`,codex 审查 D5)。
+            // 与空格/数字同一出口:分段上屏语义、失败回滚都在
             // `commit_candidate` 里,IBus 层不需要另写一遍。
             InputEvent::CandidateClicked(index) if !self.pinyin.is_empty() => {
-                match self.candidates.get(index).cloned() {
+                let idx = self.page_start() + index;
+                match self.candidates.get(idx).cloned() {
                     Some(c) => self.commit_candidate(&c),
-                    None => Ok(SessionOutput::Noop),
+                    None => Ok(SessionOutput::Noop), // 本页没有这一条
                 }
             }
             InputEvent::CandidateClicked(_) => Ok(SessionOutput::Noop),
@@ -377,8 +375,7 @@ impl InputSession {
                     self.pinyin.insert_str(0, &seg.letters);
                     // 回到「选之前那一步」的光标位置:串尾(继续打字就在后面接)。
                     self.caret = self.pinyin.len();
-                    self.cursor = 0;
-                    self.page = 0;
+                    self.cursor = 0; // 页码是下标的函数,自动回首页
                     self.refresh()?;
                     return Ok(SessionOutput::Updated(self.update()));
                 }
@@ -390,8 +387,7 @@ impl InputSession {
                     // caret-1 必为 char 边界(串内只有单字节 ASCII)。
                     let removed = self.pinyin.remove(self.caret - 1);
                     self.caret -= removed.len_utf8();
-                    self.cursor = 0;
-                    self.page = 0;
+                    self.cursor = 0; // 页码是下标的函数,自动回首页
                     self.refresh()?;
                 }
                 Ok(SessionOutput::Updated(self.update()))
@@ -428,16 +424,15 @@ impl InputSession {
             InputEvent::Left | InputEvent::Right => Ok(SessionOutput::Noop),
 
             // —— 翻页 ——
+            // 翻页 = 移动**权威全局高亮下标**到目标页首项;页码是它的函数
+            // (见 `InputSession::page`),这样面板高亮、空格、数字、点击
+            // 四个出口永远指同一条候选(codex 审查 D5)。末页/首页不 wrap,
+            // 与既有「多按一下无效果」一致。
             InputEvent::PageUp | InputEvent::PageDown if !self.pinyin.is_empty() => {
-                let max_page = self
-                    .candidates
-                    .len()
-                    .div_ceil(self.page_size)
-                    .saturating_sub(1);
                 if matches!(event, InputEvent::PageUp) {
-                    self.page = self.page.saturating_sub(1);
+                    self.goto_prev_page();
                 } else {
-                    self.page = (self.page + 1).min(max_page);
+                    self.goto_next_page();
                 }
                 Ok(SessionOutput::Updated(self.update()))
             }
@@ -457,6 +452,25 @@ impl InputSession {
                 Ok(SessionOutput::Updated(self.update()))
             }
             InputEvent::DeleteCandidate => Ok(SessionOutput::Noop),
+        }
+    }
+
+    /// 翻到下一页:把**权威下标**移到下一页首项;已是末页则不动(不 wrap)。
+    ///
+    /// 「下一页首项 ≥ 候选总数」即没有下一页——末页(可能不足一页)与
+    /// 「最后一页再按下一页」都落在这里,下标不会被推出范围。
+    fn goto_next_page(&mut self) {
+        let next = (self.page() + 1) * self.page_size;
+        if next < self.candidates.len() {
+            self.cursor = next;
+        }
+    }
+
+    /// 回上一页:首页不动(不 wrap)。
+    fn goto_prev_page(&mut self) {
+        let page = self.page();
+        if page > 0 {
+            self.cursor = (page - 1) * self.page_size;
         }
     }
 
@@ -553,14 +567,9 @@ impl InputSession {
                 .engine
                 .lookup_candidates(&self.pinyin, &self.lm_context())?;
         }
-        let max_cursor = self.candidates.len().saturating_sub(1);
-        self.cursor = self.cursor.min(max_cursor);
-        let max_page = self
-            .candidates
-            .len()
-            .div_ceil(self.page_size)
-            .saturating_sub(1);
-        self.page = self.page.min(max_page);
+        // 只收敛**那一个**权威下标:页码是它的函数,不再有第二份状态
+        // 需要各自钳位(codex 审查 D5)。
+        self.cursor = self.cursor.min(self.candidates.len().saturating_sub(1));
         Ok(())
     }
 }

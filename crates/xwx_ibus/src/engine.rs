@@ -106,16 +106,29 @@ impl XwxEngineServer {
             Err(e) => tracing::warn!(error = %e, "预编辑文本构造失败"),
         }
 
-        // 候选窗：只发标准 UpdateLookupTable，渲染由 GNOME Shell 负责
+        // 候选窗：只发标准 UpdateLookupTable，渲染由 GNOME Shell 负责。
+        //
+        // **只发当前页 + 页内 cursor**（codex 审查 D5）。这里刻意不走
+        // 「发整表 + 绝对 cursor」那条路：实测整表构造+序列化
+        // 9 条 = 146µs / 500 条 = 7.5ms（`ibus_lookup_table` 后转
+        // `OwnedValue`，每键一次），单这一项就吃掉 12ms 热路径预算的一半以上。
+        // 页内方案下两种面板口径给出**同一个点击下标**：
+        //   面板按 `page = cursor/page_size` 算 → 页内 cursor < page_size ⇒ page=0
+        //   ⇒ 点击回传 `0*page_size + 按钮序号` = 按钮序号（页内下标）；
+        // 若面板把 cursor 当页内下标（也是 0..page_size-1），结论相同。
+        // 于是「面板显示的那条」与「会话收到的那条」永远同源——
+        // 会话把页内下标映射回全局（`page_start + index`，与数字选词同一
+        // 条映射），而页码由唯一权威的全局 cursor 推导（见 `InputSession::page`）。
+        // 旧实现的缺陷不在页内方案本身，而在**映射缺失**：会话把页内下标
+        // 当成全局下标，第 2 页点第 1 条会上屏第 1 页第 1 条。
         let page = u.page_candidates();
         if page.is_empty() {
             let _ = self.hide_lookup_table(ctxt).await;
         } else {
             let words: Vec<String> = page.iter().map(|c| c.word.clone()).collect();
-            let cursor_in_page = u
-                .cursor
-                .saturating_sub(u.page_start())
-                .min(u.page_size.saturating_sub(1));
+            // `cursor` 与 `page` 同源（`page = cursor / page_size`），所以
+            // 这里就是取模，不会越界、也不会与页切片错位。
+            let cursor_in_page = u.cursor - u.page_start();
             match ibus_proto::ibus_lookup_table(&words, cursor_in_page, u.page_size) {
                 Ok(table) => {
                     if let Err(e) = self.update_lookup_table(ctxt, table, true).await {
@@ -302,7 +315,11 @@ impl XwxEngineServer {
         self.handle_key(&ctxt, InputEvent::Down).await;
     }
 
-    /// 候选窗点击（由 daemon 转发 `CandidateClicked`）：`index` 是全局下标（跨页）。
+    /// 候选窗点击（由 daemon 转发 `CandidateClicked`）：`index` 是**页内**下标。
+    ///
+    /// 我们发出去的 `UpdateLookupTable` 只含当前页、`cursor` 也是页内下标
+    /// （见 `refresh_ui`），面板因此按页内坐标系回传；会话负责映射回全局
+    /// （codex 审查 D5）。旧注释写的「全局下标（跨页）」正是当初那个缺口。
     ///
     /// TODO: `button`/`state` 目前忽略，后续支持右键翻页、Shift+点击等。
     #[zbus(name = "CandidateClicked")]

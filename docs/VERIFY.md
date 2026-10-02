@@ -1,16 +1,16 @@
 # 实机验证清单
 
-> `cargo test` 有 **313** 个测试全绿（249 单元 + 9 bin + 5 ibus + **50 D-Bus 集成**），
-> 但**它仍不是实机可用的证据**。
+> `cargo test` 有 **339** 个测试全绿（271 engine 单测 + 6 ibus 单测 + 9 bin +
+> **53 D-Bus 集成**），但**它仍不是实机可用的证据**。
 >
 > **2026-10-01 更新**：根 `tests/` 现在有一组 **D-Bus 集成测试**，
 > 跑真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`，已自动化下面清单里的
 > **一部分**（英文模式透传、`CommitText`/`UpdatePreeditText`/
 > `UpdateLookupTable` 信号内容与字段顺序、`FocusOut`、候选点击、翻页、
-> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性）。11 个文件（每个文件一组场景，原来是 5 个）：
+> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性）。12 个文件（每个文件一组场景，原来是 5 个）：
 > `verbatim_url`(7)、`wire_abbrev`(5)、`mods_keys`(4)、`prefix_commit`(1)、
 > `paging`(7)、`blocklist_delete`(2)、`focus_lifecycle`(4)、`punctuation_paging`(1)、
-> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)。
+> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)。
 >
 > **但它用的是私有总线，不是真实 ibus-daemon + 真实应用**——下面这份清单
 > 仍然要敲，因为它验的是 daemon / GNOME Shell / 应用三者与引擎的

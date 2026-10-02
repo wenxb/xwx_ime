@@ -86,20 +86,23 @@ fn update_preedit_text_carries_pinyin_and_caret() {
     assert_eq!(support::Signal::as_u32_field(&s2, 3), Some(0), "mode 为 0");
 }
 
-/// `UpdateLookupTable` must contain the expected candidates, in order, on the
-/// expected page.
+/// `UpdateLookupTable` must contain the expected candidates, in order, for the
+/// current page, with the page-local `cursor` and the page geometry.
 ///
-/// `candidate_clicked` semantics (`engine.rs:294-310`) set `cursor_in_page`
-/// from `u.cursor - u.page_start()`, which is only meaningful if the candidate
-/// order on the wire matches the ranking. This test pins that.
+/// 线上坐标系(codex 审查 D5 定稿):表 = **当前页**切片(≤ page_size),
+/// `cursor` = **页内**下标;面板点击回传的也是页内下标,会话用
+/// `page_start + index` 映射回全局。旧缺陷不是这个坐标系本身,而是会话
+/// 少做了那条映射(见 `tests/paging.rs::candidate_clicked_on_page_two_...`)。
+/// 不采用「整表 + 绝对 cursor」的原因:实测整表序列化 500 条 = 7.5ms/键。
 ///
 /// Wrong-behaviour witnesses:
 /// - `page_size` hard-coded to something other than `DEFAULT_PAGE_SIZE` (9) →
 ///   the page_size assertion goes red;
-/// - candidates emitted unsorted / from the wrong page (`page_candidates()`
-///   sliced at the wrong offset) → the ordered-equality assertion goes red;
+/// - candidates emitted unsorted → the ordered-equality assertion goes red;
+/// - `cursor` emitted as the global index (> page_size) → the cursor assertion
+///   goes red (and the panel would highlight the wrong row);
 /// - labels filled in → the `labels == 0` assertion goes red (the panel is
-///   supposed to auto-number 1..9; `engine.rs:113` passes an empty label list).
+///   supposed to auto-number 1..9).
 #[test]
 fn update_lookup_table_carries_ordered_candidates_and_page_geometry() {
     let h = &mut Harness::new("lookup-table");
@@ -115,9 +118,12 @@ fn update_lookup_table_carries_ordered_candidates_and_page_geometry() {
         table.page_size, 9,
         "每页候选数应为 DEFAULT_PAGE_SIZE=9(session.rs:20)"
     );
-    assert_eq!(table.cursor_in_page, 0, "初始高亮在第 0 位");
+    assert_eq!(table.cursor, 0, "初始高亮在第 0 条(页内下标)");
     assert!(table.cursor_visible, "cursor_visible 应为 true");
-    assert!(table.round, "round(循环翻页)应为 true");
+    assert!(
+        !table.round,
+        "round(循环翻页)应为 false:与会话「末页/首页钳位、不 wrap」的导航一致"
+    );
     assert_eq!(table.orientation, 0, "orientation 应为 IBUS_ORIENTATION_HORIZONTAL");
     assert_eq!(table.labels, 0, "labels 应为空,交给面板自动编号");
     assert_eq!(
@@ -128,12 +134,29 @@ fn update_lookup_table_carries_ordered_candidates_and_page_geometry() {
     );
 
     // Page 2 of the same composition is driven by PageDown, so it is asserted in
-    // paging_and_selection.rs. Here we only pin the page geometry that makes the
-    // cursor field meaningful: the table's own `page_size` equals the number of
-    // candidates it emits on a full page.
+    // paging.rs. Here we only pin the page geometry that makes the cursor field
+    // meaningful: the cursor is an in-page index, so it must stay below
+    // `page_size` and inside the emitted slice.
     assert!(
-        table.candidates.len() <= table.page_size as usize,
-        "一页的候选数不得超过 page_size"
+        (table.cursor as usize) < table.page_size as usize,
+        "页内 cursor({})必须 < page_size({})",
+        table.cursor,
+        table.page_size
+    );
+    assert!(
+        (table.cursor as usize) < table.candidates.len(),
+        "页内 cursor 必须指向表内一条"
+    );
+
+    // Page 2 of the same composition is driven by PageDown, so it is asserted in
+    // paging.rs. Here we only pin the geometry that makes `cursor` meaningful:
+    // the table carries the entire list, and `page_size` is the panel's window
+    // width over it (the panel computes `page = cursor / page_size`).
+    assert!(
+        table.candidates.len() >= table.page_size as usize,
+        "整表不该比一页还窄(page_size={} 只描述面板一页);实测 {} 条",
+        table.page_size,
+        table.candidates.len()
     );
 }
 

@@ -355,3 +355,181 @@ fn ctrl_delete_passthrough_when_idle() {
     let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
     assert!(matches!(out, SessionOutput::Noop), "空闲时 Ctrl+Delete 应透传");
 }
+
+// ——— codex 审查 D5:翻页之后「显示的是谁」必须等于「上屏的是谁」 ———
+//
+// 旧实现里 `page` 与 `cursor` 是两份独立状态:翻页只动 `page`(光标仍指
+// 第 1 页首项),数字选词又直接取 `candidates[n-1]`(全局下标,与页面无关),
+// 而面板收到的表是「当前页 + 页内下标」——四个出口各说各话。修法是把
+// `cursor` 变成唯一权威坐标、`page` 由它推导,于是「面板显示的那一条」
+// 与「空格/数字/点击上屏的那一条」在构造上就是同一条。下面这几条用例
+// 全部以「第 2 页」为主场:第 1 页上旧实现与新实现恰好重合,证明不了什么。
+
+/// 面板当前页看到的候选文本(按编号 1..=n 的顺序)。
+fn visible_page(s: &InputSession) -> Vec<String> {
+    let start = s.page() * s.page_size;
+    s.candidates
+        .iter()
+        .skip(start)
+        .take(s.page_size)
+        .map(|c| c.word.clone())
+        .collect()
+}
+
+/// 打 `ni` 并翻到第 2 页(末页只有 3 条),返回会话与「第 2 页可见候选」。
+fn session_on_second_page() -> (InputSession, Vec<String>) {
+    let mut s = session_with_many_candidates();
+    type_str(&mut s, "ni");
+    s.handle(InputEvent::PageDown).expect("翻页不应失败");
+    assert_eq!(s.page(), 1, "PageDown 后应在第 2 页");
+    let page = visible_page(&s);
+    assert_eq!(page.len(), 3, "12 条候选、每页 9 条 → 第 2 页 3 条: {page:?}");
+    (s, page)
+}
+
+#[test]
+fn digit_selects_within_the_current_page() {
+    // 第 2 页按 `1` 必须是**第 2 页第 1 条**。
+    // 旧实现:`candidates[1 - 1]` = 第 1 页第 1 条 → 上屏别的词,红。
+    let (mut s, page) = session_on_second_page();
+    let out = s.handle(InputEvent::Select(1)).expect("不应失败");
+    assert!(
+        matches!(&out, SessionOutput::Commit(t) if *t == page[0]),
+        "第 2 页按 `1` 应上屏第 2 页首项 {:?},实际 {out:?}",
+        page[0]
+    );
+
+    // 页内第 3 项同理(`3` → 页首 + 2)
+    let (mut s, page) = session_on_second_page();
+    let out = s.handle(InputEvent::Select(3)).expect("不应失败");
+    assert!(
+        matches!(&out, SessionOutput::Commit(t) if *t == page[2]),
+        "第 2 页按 `3` 应上屏 {:?},实际 {out:?}",
+        page[2]
+    );
+}
+
+#[test]
+fn digit_without_a_candidate_on_this_page_is_a_noop() {
+    // 第 2 页只有 3 条:按 `4` 没有对应项——吃掉按键,不上屏、不越界。
+    let (mut s, _) = session_on_second_page();
+    let out = s.handle(InputEvent::Select(4)).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Noop),
+        "末页按不存在的编号应 Noop,实际 {out:?}"
+    );
+}
+
+#[test]
+fn space_commits_the_highlighted_candidate_after_paging() {
+    // 翻页后空格上屏的是**高亮那条**(第 2 页首项)。
+    // 旧实现:翻页不动 cursor,空格仍上屏第 1 页首项,红。
+    let (mut s, page) = session_on_second_page();
+    let out = s.handle(InputEvent::Space).expect("不应失败");
+    assert!(
+        matches!(&out, SessionOutput::Commit(t) if *t == page[0]),
+        "翻页后空格应上屏高亮项 {:?},实际 {out:?}",
+        page[0]
+    );
+}
+
+#[test]
+fn cursor_moves_across_the_page_boundary() {
+    // 上下移动是**全局**移动:第 9 条(0 起)再往下就是第 10 条 = 第 2 页首项。
+    // 旧实现只动 cursor 不动 page → 面板仍停在第 1 页(且页内下标被钳到 8),
+    // 「移动到了哪一条」与「页码」立刻分叉。
+    let mut s = session_with_many_candidates();
+    type_str(&mut s, "ni");
+    for _ in 0..s.page_size {
+        s.handle(InputEvent::Down).expect("不应失败");
+    }
+    assert_eq!(s.cursor, s.page_size, "下移 9 次应停在第 10 条(0 起 9)");
+    assert_eq!(s.page(), 1, "第 10 条属于第 2 页");
+    assert_eq!(visible_page(&s).len(), 3, "第 2 页可见 3 条");
+
+    // 再上移一次回到第 1 页末条
+    s.handle(InputEvent::Up).expect("不应失败");
+    assert_eq!(s.cursor, s.page_size - 1);
+    assert_eq!(s.page(), 0, "回到第 1 页");
+}
+
+#[test]
+fn every_visible_candidate_is_committed_by_digit_space_and_click() {
+    // D5 的验收形状:**每页每个可见候选**,分别用数字、空格、点击上屏,
+    // 断言「面板显示的那条 = 上屏的那条」。三条出口共用同一个权威下标,
+    // 任一出口的坐标系错了这里就红。
+    let page_size = session_with_many_candidates().page_size;
+    let (total, page_count) = {
+        let mut s = session_with_many_candidates();
+        type_str(&mut s, "ni");
+        (s.candidates.len(), s.candidates.len().div_ceil(page_size))
+    };
+    assert_eq!((total, page_count), (12, 2), "12 条 / 每页 9 条 = 2 页");
+
+    for page in 0..page_count {
+        // 这一页面板看到什么(与工具函数同口径)
+        let shown = {
+            let mut s = session_with_many_candidates();
+            type_str(&mut s, "ni");
+            for _ in 0..page {
+                s.handle(InputEvent::PageDown).expect("不应失败");
+            }
+            assert_eq!(s.page(), page, "翻到第 {page} 页");
+            visible_page(&s)
+        };
+        assert!(!shown.is_empty(), "第 {page} 页不该是空的");
+
+        for (offset, expected) in shown.iter().enumerate() {
+            let expected = expected.clone();
+            let global = page * page_size + offset;
+
+            // ① 数字(页内编号 = offset + 1)
+            let mut s = session_with_many_candidates();
+            type_str(&mut s, "ni");
+            for _ in 0..page {
+                s.handle(InputEvent::PageDown).expect("不应失败");
+            }
+            let out = s
+                .handle(InputEvent::Select((offset + 1) as u8))
+                .expect("数字选词不应失败");
+            assert!(
+                matches!(&out, SessionOutput::Commit(t) if *t == expected),
+                "第 {page} 页显示 {expected:?}(编号 {}),按数字应上屏它,实际 {out:?}",
+                offset + 1
+            );
+
+            // ② 空格(先把高亮移到这一条)
+            let mut s = session_with_many_candidates();
+            type_str(&mut s, "ni");
+            for _ in 0..page {
+                s.handle(InputEvent::PageDown).expect("不应失败");
+            }
+            for _ in 0..offset {
+                s.handle(InputEvent::Down).expect("不应失败");
+            }
+            assert_eq!(
+                s.cursor, global,
+                "第 {page} 页第 {offset} 项的高亮下标应为 {global}"
+            );
+            let out = s.handle(InputEvent::Space).expect("空格不应失败");
+            assert!(
+                matches!(&out, SessionOutput::Commit(t) if *t == expected),
+                "第 {page} 页第 {offset} 项高亮时空格应上屏 {expected:?},实际 {out:?}"
+            );
+
+            // ③ 点击(面板回传**页内**下标:它只看得见当前页)
+            let mut s = session_with_many_candidates();
+            type_str(&mut s, "ni");
+            for _ in 0..page {
+                s.handle(InputEvent::PageDown).expect("不应失败");
+            }
+            let out = s
+                .handle(InputEvent::CandidateClicked(offset))
+                .expect("点击不应失败");
+            assert!(
+                matches!(&out, SessionOutput::Commit(t) if *t == expected),
+                "第 {page} 页点页内第 {offset} 条(全局 {global})应上屏 {expected:?},实际 {out:?}"
+            );
+        }
+    }
+}
