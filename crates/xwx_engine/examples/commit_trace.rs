@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(&dir.join("dict.bin")),
         Some(&dir.join("wanxiang-lts-zh-hans.gram")),
     )?;
-    engine.dict = engine.dict.with_abbrev(&dir.join("abbrev.bin"));
+    engine.dict = engine.dict.with_abbrev(dir.join("abbrev.bin"));
     let engine = Arc::new(engine);
 
     for input in &inputs {
