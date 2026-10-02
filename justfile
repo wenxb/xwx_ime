@@ -65,32 +65,30 @@ xml *args:
     @{{target_dir}}/debug/xwx_ime --xml {{args}}
 
 # 安装：二进制、XML（sudo 到系统目录）、词库，并刷新 ibus-daemon
+# 每行都以 `@` 开头：不回显命令文本，只留警告与结尾的四行摘要。
 install:
-    cargo build --release -p xwx_ime
-    mkdir -p {{bin_dir}} {{xwx_data}}
-    install -m 755 {{target_dir}}/release/xwx_ime {{bin_dir}}/xwx_ime
-    sed 's#__XWX_EXEC__#{{bin_dir}}/xwx_ime#g' data/xwx.xml > /tmp/xwx-component.xml
-    sudo install -d {{sys_comp_dir}}
-    sudo install -m 644 /tmp/xwx-component.xml {{sys_comp_dir}}/xwx.xml
-    rm -f /tmp/xwx-component.xml
-    # 词库（dict.bin，源缺失时跳过；dict_to_bin.py 从 SQLite 生成）
-    if test -f data/dict.bin; then install -m 644 data/dict.bin {{xwx_data}}/dict.bin; fi
-    # 简拼副索引（abbrev.bin，scripts/abbrev_to_bin.py 从 dict.bin 生成）。
-    # 缺了不会崩，但简拼（zgr → 中国人）整个失效，只剩全拼。
-    if test -f data/abbrev.bin; then install -m 644 data/abbrev.bin {{xwx_data}}/abbrev.bin; \
-    else echo "提示：data/abbrev.bin 不存在，简拼将不可用。生成：python3 scripts/abbrev_to_bin.py" >&2; fi
-    # fcitx5 占用 org.freedesktop.IBus 时给出提示
-    if pgrep -x fcitx5 >/dev/null; then echo "警告：fcitx5 正在运行，会占用 IBus 总线名。需要时先 fcitx5 -k 停掉。" >&2; fi
-    # 刷新 daemon
-    if command -v ibus >/dev/null 2>&1; then ibus restart >/dev/null 2>&1 || true; else for pid in $(pgrep -x ibus-daemon); do kill "$pid" 2>/dev/null || true; done; fi
-    # 语言模型不进 install / .deb(400 MB、CC-BY-4.0、需另行下载),
-    # 但装完提醒一句,免得排序默默退化成纯词频。
-    if ! ls {{xwx_data}}/*.gram >/dev/null 2>&1 && ! test -f {{xwx_data}}/bigram.txt; then \
-        echo "提示:未检测到语言模型,候选排序将退化为纯词频。"; \
-        echo "     把万象 .gram(如 wanxiang-lts-zh-hans.gram)放到 {{xwx_data}}/ 下即可自动启用,"; \
-        echo "     或按 data/README.md 第五节训练 bigram.txt 放到该目录。"; \
+    @cargo build --release --quiet -p xwx_ime
+    @mkdir -p {{bin_dir}} {{xwx_data}}
+    @install -m 755 {{target_dir}}/release/xwx_ime {{bin_dir}}/xwx_ime
+    @sed 's#__XWX_EXEC__#{{bin_dir}}/xwx_ime#g' data/xwx.xml > /tmp/xwx-component.xml
+    @sudo install -d {{sys_comp_dir}}
+    @sudo install -m 644 /tmp/xwx-component.xml {{sys_comp_dir}}/xwx.xml
+    @rm -f /tmp/xwx-component.xml
+    # 词库与副索引：缺任何一个只是功能降级，提醒但不算失败。
+    @if test -f data/dict.bin; then install -m 644 data/dict.bin {{xwx_data}}/dict.bin; \
+    else echo "警告：data/dict.bin 不存在，引擎只剩极小的内置词库。"; fi
+    @if test -f data/abbrev.bin; then install -m 644 data/abbrev.bin {{xwx_data}}/abbrev.bin; \
+    else echo "警告：data/abbrev.bin 不存在，简拼不可用（生成：python3 scripts/abbrev_to_bin.py）。"; fi
+    @if pgrep -x fcitx5 >/dev/null; then echo "警告：fcitx5 正在运行，它会占用 IBus 总线名（需要时 fcitx5 -k）。"; fi
+    @if ! ls {{xwx_data}}/*.gram >/dev/null 2>&1 && ! test -f {{xwx_data}}/bigram.txt; then \
+        echo "提示：未检测到语言模型，候选排序退化为纯词频（把万象 .gram 放进 {{xwx_data}}/ 即可）。"; \
     fi
-    echo "完成。输入源：gsettings set org.gnome.desktop.input-sources sources \"[('xkb','us'),('ibus','xwx')]\""
+    # 刷新 daemon：重启会话里的 ibus-daemon，让它重扫 component 目录。
+    @if command -v ibus >/dev/null 2>&1; then ibus restart >/dev/null 2>&1 || true; else for pid in $(pgrep -x ibus-daemon); do kill "$pid" 2>/dev/null || true; done; fi
+    @echo "已安装  {{bin_dir}}/xwx_ime  $(stat -c%s {{bin_dir}}/xwx_ime) 字节  sha256 $(sha256sum {{bin_dir}}/xwx_ime | cut -c1-12)"
+    @echo "组件    {{sys_comp_dir}}/xwx.xml  engine xwx / zh_CN"
+    @echo "词库    {{xwx_data}}/dict.bin + abbrev.bin"
+    @echo "输入源  gsettings set org.gnome.desktop.input-sources sources \"[('xkb','us'),('ibus','xwx')]\""
 
 # 打 deb 包
 deb:
