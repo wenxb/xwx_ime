@@ -393,14 +393,27 @@ fn deleting_every_candidate_hides_the_window_without_panicking() {
         );
         h.settle(Duration::from_millis(60), Duration::from_secs(2));
     }
-    let _ = h.settle_default();
+    // 精确等到窗口被收起,而不是「等一小段静默后去翻日志」:异步信号可能比
+    // 静默期晚到(负载下会偶发变红)。全部候选删完后引擎必然发
+    // `HideLookupTable`(`engine.rs:105-106`),所以这里等得到。
+    // 循环里的 `settle` 可能已经把它收进 backlog,而 `wait_signal` 只看新信号
+    // ——先查 backlog,没有再等。
+    let mut all = h.backlog();
+    if !all.iter().any(|s| s.member == "HideLookupTable") {
+        let hide = h.wait_signal("HideLookupTable", Duration::from_secs(5)).unwrap_or_else(|e| {
+            panic!(
+                "12 条全部删完后必须收起候选窗: {e}\nbacklog 实际: {:?}",
+                support::member_names(&all)
+            )
+        });
+        all.push(hide);
+    }
     // Convergence to a hidden window means the last *table-related* signal is a
     // `HideLookupTable`. Reading the most recent `UpdateLookupTable` is not the
     // same thing and was wrong: once every candidate is deleted the engine stops
     // sending tables (`engine.rs:105-106` sends `HideLookupTable` because the
     // page is empty while the preedit string is still up), so the newest table
     // in the log is a stale one from an earlier iteration.
-    let all = h.backlog();
     let last_show = all.iter().rposition(|s| s.member == "UpdateLookupTable");
     let last_hide = all.iter().rposition(|s| s.member == "HideLookupTable");
     let hidden = match (last_show, last_hide) {
@@ -714,20 +727,18 @@ fn highlight_and_page_stay_consistent_across_paging() {
     h.cursor_down().expect("CursorDown");
     h.page_down().expect("PageDown");
     h.page_up().expect("PageUp");
-    h.settle_default();
+    // 面板此刻已回到第 1 页:这批信号里必须有那张表。旧写法先 `clear_backlog()`
+    // 再去等一个**永远不会再来**的信号,于是 `if let Some(t)` 让「应回到第 1 页」
+    // 这条断言一直被静默跳过——测试假装在测。
+    let paged = h.settle_response(Duration::from_millis(300), Duration::from_secs(5));
     h.clear_backlog();
+    let t = support::last_table(&paged)
+        .expect("PageUp 之后必须有候选窗信号(否则本测试等于没测)");
+    assert_eq!(t.candidates, NI_ORDER[..9], "应回到第 1 页");
+    let panel_cursor = Some(t.cursor_in_page);
 
-    // The panel now shows page 1 and must report the highlight it will commit.
-    let _ = h.settle(Duration::from_millis(120), Duration::from_secs(2));
-    let t = support::last_table(&h.backlog());
-    let panel_cursor = t.as_ref().map(|t| t.cursor_in_page);
-    if let Some(t) = t {
-        assert_eq!(t.candidates, NI_ORDER[..9], "应回到第 1 页");
-    }
-
-    h.clear_backlog();
     assert!(h.key(keyval::SPACE, 0));
-    let sigs = h.settle_default();
+    let sigs = h.settle_response(Duration::from_millis(300), Duration::from_secs(5));
     let committed = last_commit(&sigs);
     assert_eq!(
         committed.as_deref(),

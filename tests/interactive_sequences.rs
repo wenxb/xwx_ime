@@ -60,7 +60,7 @@ fn type_then_enter(h: &mut Harness, seq: &str) -> (String, Vec<support::Signal>)
 
     h.clear_backlog();
     h.key(keyval::RETURN, 0);
-    let after = h.settle(Duration::from_millis(200), Duration::from_secs(4));
+    let after = h.settle_response(Duration::from_millis(200), Duration::from_secs(4));
 
     let mut all: Vec<support::Signal> = during;
     all.extend(after);
@@ -209,7 +209,7 @@ fn email_commits_verbatim_after_at_retroactively_takes_over() {
 
     h.clear_backlog();
     assert!(h.key(keyval::ascii('@'), 0), "'@' 在有拼音串时必须被消费");
-    let after_at = h.settle(Duration::from_millis(200), Duration::from_secs(3));
+    let after_at = h.settle_response(Duration::from_millis(200), Duration::from_secs(3));
     let t = support::last_table(&after_at).expect("'@' 后应有候选窗");
     assert_eq!(
         t.candidates,
@@ -226,7 +226,7 @@ fn email_commits_verbatim_after_at_retroactively_takes_over() {
     h.settle(Duration::from_millis(150), Duration::from_secs(3));
     h.clear_backlog();
     h.key(keyval::RETURN, 0);
-    let sigs = h.settle(Duration::from_millis(200), Duration::from_secs(4));
+    let sigs = h.settle_response(Duration::from_millis(200), Duration::from_secs(4));
     assert_eq!(
         last_commit(&sigs).as_deref(),
         Some("zhangsan@gmail.com"),
@@ -755,7 +755,7 @@ fn observed_preedit_sequence_equals_the_typed_sequence() {
     for c in seq.chars() {
         expected.push(c);
         h.key(keyval::ascii(c), 0);
-        let sigs = h.settle(Duration::from_millis(150), Duration::from_secs(3));
+        let sigs = h.settle_response(Duration::from_millis(150), Duration::from_secs(3));
         if let Some(p) = last_preedit(&sigs) {
             observed.push(p);
         }

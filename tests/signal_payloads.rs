@@ -392,7 +392,7 @@ fn per_keystroke_preedit_grows_and_lookup_table_follows_every_step() {
     for c in "nihao".chars() {
         expected.push(c);
         assert!(h.key(keyval::ascii(c), 0), "'{c}' 应被消费(进拼音串)");
-        let sigs = h.settle(std::time::Duration::from_millis(200), std::time::Duration::from_secs(4));
+        let sigs = h.settle_response(std::time::Duration::from_millis(200), std::time::Duration::from_secs(4));
         assert_eq!(
             last_preedit(&sigs).as_deref(),
             Some(expected.as_str()),

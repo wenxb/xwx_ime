@@ -1077,6 +1077,41 @@ impl Harness {
         self.settle(Duration::from_millis(300), Duration::from_secs(5))
     }
 
+    /// 收「**某个动作引发的这一批**信号」:先等**第一条**信号(上限 `max`),
+    /// 之后再按 `gap` 静默收尾;`max` 内一条都没来才返回空。
+    ///
+    /// 为什么不直接用 [`Harness::settle`]:那个在「一开始就没信号」时也立刻
+    /// 返回**空批次**(`recv_timeout(gap)` 一次超时就 break)。而引擎的
+    /// `UpdatePreeditText`/`UpdateLookupTable` 是**异步**信号——同步的
+    /// `ProcessKeyEvent` 已经返回,信号仍在路上。只要调度被挤压(整套跑、
+    /// 机器有负载),`settle` 就会拿到空批次,于是「断言这批里有 X」的测试
+    /// 偶发变红(实测过一次:同一套件连跑,某 target 整片失败,重跑全绿)。
+    ///
+    /// 断言「**不该**有信号」时仍用 [`Harness::settle`]:那种情形必须靠固定
+    /// 窗口结束——「永远等不到」本身就可能是正确结果,不能去等第一条。
+    pub fn settle_response(&mut self, gap: Duration, max: Duration) -> Vec<Signal> {
+        self.ensure_monitor();
+        let deadline = Instant::now() + max;
+        let mut out = Vec::new();
+        // 先等第一条:整批信号的「开头」可能比 gap 晚得多。
+        match self.recv_timeout(max) {
+            Some(s) => out.push(s),
+            None => return out,
+        }
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match self.recv_timeout(gap.min(remaining)) {
+                Some(s) => out.push(s),
+                None => break,
+            }
+        }
+        self.backlog.extend(out.iter().map(clone_signal));
+        out
+    }
+
     /// Wait until a signal with `member` arrives (bounded).
     pub fn wait_signal(&mut self, member: &str, timeout: Duration) -> Result<Signal, String> {
         self.ensure_monitor();
@@ -1175,6 +1210,21 @@ impl Drop for Harness {
     /// Kill the engine and the private bus. Runs on assertion panics too, so a
     /// failing test never leaves orphan processes behind.
     fn drop(&mut self) {
+        // 断言失败时 tempdir(以及里面的 engine.log)马上就要被删,而那正是
+        // 最需要日志的时刻:`wait_for_name`/`call` 的超时路径已经会附日志,
+        // 但**普通断言失败**(最常见的一类)原先只剩一句断言文本。
+        if std::thread::panicking() {
+            if let Ok(log) = std::fs::read_to_string(&self.engine_log) {
+                let tail: Vec<&str> = log.lines().rev().take(40).collect();
+                if !tail.is_empty() {
+                    let tail: Vec<&str> = tail.into_iter().rev().collect();
+                    eprintln!(
+                        "--- engine.log 末尾(引擎马上被收掉,tempdir 即将删除)---\n{}",
+                        tail.join("\n")
+                    );
+                }
+            }
+        }
         // Drop the monitor first so its match rule is deregistered while the
         // bus is still alive.
         self.monitor = None;
