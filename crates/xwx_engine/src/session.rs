@@ -1775,6 +1775,50 @@ mod tests {
         );
     }
 
+    /// 第 ③ 期「剩余串的出路」:解不完整(这里 `zz` 解释不了)时,候选表里
+    /// 有一条**覆盖整串**的「原样上屏」逃生口;选中它就把敲过的字母原样交给
+    /// 应用,不必退格删光重打。
+    ///
+    /// 定向破坏:把逃生口那条 `if !ranked.iter().any(covered >= len)` 去掉 →
+    /// `position` 找不到 → 红;把它改成 `spelling = Abbrev`(进简拼层)→ 会排在
+    /// 真实候选之前、把「你好」挤下去 → 上面那条 `candidates[0] == 你好` 的
+    /// 断言会红。
+    #[test]
+    fn escape_hatch_commits_the_unexplained_remainder_verbatim() {
+        let (engine, mut s) = session_for_coin(&[("你好", "ni hao", 900)]);
+        let user = engine.user_lm().expect("应有用户层");
+        for c in "nihaozzzzz".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        assert_eq!(
+            s.candidates.first().map(|c| c.word.clone()).as_deref(),
+            Some("你好"),
+            "真实候选仍在最前: {:?}",
+            s.candidates.iter().map(|c| &c.word).collect::<Vec<_>>()
+        );
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.echo && c.word == "nihaozzzzz")
+            .unwrap_or_else(|| {
+                panic!(
+                    "应有原样上屏的逃生口: {:?}",
+                    s.candidates
+                        .iter()
+                        .map(|c| (&c.word, c.echo, c.covered))
+                        .collect::<Vec<_>>()
+                )
+            });
+        s.cursor = idx;
+        let out = s.handle(InputEvent::Space).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "nihaozzzzz"),
+            "逃生口应把剩余字母原样上屏: {out:?}"
+        );
+        s.break_coin_run();
+        assert_eq!(user.entry_len(), 0, "原样上屏不是词,不该造词");
+    }
+
     /// 点击越界/无候选时不做任何事(不 panic、不动状态)。
     #[test]
     fn clicking_an_out_of_range_candidate_is_a_noop() {

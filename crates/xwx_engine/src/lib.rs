@@ -234,6 +234,16 @@ const MAX_TOLERANT_CHAINS_PER_START: usize = 64;
 
 
 
+/// 启用容错解码所需的最短输入长度(见 `lookup_candidates` 的门槛⓪)。
+const MIN_TOLERANT_INPUT_LEN: usize = 4;
+
+/// 「原样上屏剩余串」逃生口候选的分数。
+///
+/// 语义上它不是词(与回声候选同源),分数必须远低于任何真实候选:实测真实
+/// 候选的分数量级在 -5 ~ -70(整句读法是 10 个以上词的 log 概率之和),
+/// -1000 足够低且仍是有限值(不引入 -inf/NaN 打印与排序歧义)。
+const ESCAPE_HATCH_SCORE: f32 = -1000.0;
+
 /// 容错弧只对**不超过**这么长的窗口开放。
 ///
 /// 替换/漏打/多打/调换的窗口都很短(`em`、`hoa`、`haai`、`mem`);再长的
@@ -271,7 +281,10 @@ const MAX_TYPO_WINDOW: usize = 4;
 const SYLLABLE_ENUM_QUOTA: usize = 24;
 
 /// 切分格上的一条词边：覆盖 `pinyin[start..end]`，对应该区间查到的一个词。
-#[derive(Debug)]
+///
+///  是给容错格用的:容错格以精确格为底(克隆),只在错处附近补新边
+/// (见 [`ImeEngine::build_tolerant_lattice`])。
+#[derive(Debug, Clone)]
 struct LatticeEdge {
     /// 边终点（字节位置，`start` 由所在桶隐式给出）。
     end: usize,
@@ -624,7 +637,14 @@ impl ImeEngine {
         // **容错解码的门槛(结构性)**:精确路径解不出整串,或整串根本
         // 切不开。打对的输入两条都不成立 ⇒ 一次都不进容错分支,零开销、
         // 零新边——这是「精确路径逐字节不退化」的结构性保证,不靠测量。
-        let tolerant_due = paths.is_empty() || !self.segmenter.is_fully_segmentable(pinyin);
+        // 门槛①:精确路解不出整串,或整串根本切不开。
+        // 门槛⓪(**输入长度**):纯声母的「还在打字中」状态(`sh`/`zh`)不启用
+        // 容错——它没有「打错」可言,而容错弧会在位置 0 展开并改变已有的
+        // 前缀联想结果(实测 `sh` 的第 28 名候选拼音从 `shei` 变成 `shui`,
+        // 同名同分,属于对拍噪音)。单音节最多 6 个字母,4 个字母起才谈得上
+        // 「组合里打错一处」。
+        let tolerant_due = pinyin.len() >= MIN_TOLERANT_INPUT_LEN
+            && (paths.is_empty() || !self.segmenter.is_fully_segmentable(pinyin));
 
         // 精确路能解 → 格边候选(含整串读法);解不了 → **原有**的兜底联想。
         // 兜底不能因为有了容错就省掉:它给的「最长可切分前缀 + 首音节」
@@ -667,13 +687,23 @@ impl ImeEngine {
             .filter(|c| c.covered >= pinyin.len())
             .map(|c| c.score)
             .fold(f32::NEG_INFINITY, f32::max);
-        if tolerant_due {
+        // 容错弧的定位:精确格上「走不动」的位置(见 `first_stalls`)。
+        // 一个都没有 ⇒ 精确解码本来就能走到底 ⇒ 不需要容错。
+        let stalls = Self::first_stalls(&lattice, pinyin.len());
+        // 容错能不能把整串读完(只有它真的读完过,才谈得上「不需要逃生口」)。
+        let mut tolerant_explains = false;
+        if tolerant_due && !stalls.is_empty() {
             // 容错格与精确格**分开建**:精确格逐字节不变,容错只在需要时
             // 重来一次。合并后重排截断,层序(精确 → 模糊 → 简拼)照旧。
-            let tolerant_lattice = self.build_lattice_with(pinyin, bounds, true)?;
-            let tolerant_paths =
-                self.decode_beam_with_lattice(pinyin, ctx, BEAM_WIDTH, &tolerant_lattice)?;
-            if !tolerant_paths.is_empty() {
+            let tolerant_lattice =
+                self.build_tolerant_lattice(pinyin, bounds, &lattice, &stalls)?;
+            // 「容错格上有没有走到底的读法」用**后向 DP** 判,不跑 beam:
+            // beam 是 O(位置 × 桶宽 × 桶内边数),长串上要几万次 LM 打分
+            // (实测这一步就吃掉 10ms,是延迟超标的主因);而后向 DP 每条边
+            // 只碰一次,`result[0]` 有限 ⟺ 存在覆盖整串的读法,语义等价。
+            let tolerant_suffix = self.backward_completion(pinyin, ctx, &tolerant_lattice)?;
+            tolerant_explains = tolerant_suffix[0].is_finite();
+            if tolerant_explains {
                 let tolerant = self.lattice_candidates(pinyin, ctx, &tolerant_lattice)?;
                 let tolerant_best = tolerant
                     .iter()
@@ -695,6 +725,40 @@ impl ImeEngine {
                     }
                 }
             }
+        }
+
+        // **剩余串的出路(第 ③ 期)**:候选里没有任何条目覆盖整串 ⇒ 这一串
+        // 解不完整(打错的尾巴、乱码段)。此时补一条「把你敲的这些字母原样
+        // 上屏」的逃生口,用户不必退格删光重打。
+        //
+        // 三个口径:
+        // - 与回声候选同一语义(`echo = true`:原样上屏、不学词、不动
+        //   `last_word`),所以 **Enter 也能上屏剩余串**(那条路早就有了,
+        //   这里只是让它从候选面板直接可达);
+        // - 分数压到远低于任何真实候选:它进精确层、桶也落在 0(覆盖整串),
+        //   但排在所有真实候选之后——**只在覆盖整串的读法缺失时**才出现,
+        //   所以打对的输入候选列表逐字节不变;
+        // - 只在**没有任何读法覆盖整串**时才补(精确路与容错路都读不下去);
+        //   打对的输入永远有一条完整读法,因此候选列表逐字节不变。
+        // 判据是「**有没有覆盖整串的读法**」,不是「候选里有没有覆盖整串的
+        // 条目」:长串正常输入(如 `womenjintianqugongyuan` 23 个字母)本来
+        // 就没有单条候选能覆盖整串,但它有一条完整读法——按条目判会让正确
+        // 输入凭空多一条逃生口(实测把 5 个「打对的输入逐字节不变」的断言
+        // 打破)。所以门槛 = 精确没读到底 **且** 容错也没读到底。
+        // 三种「已经解释清楚」都算:① 精确路读到底;② 容错路读到底;
+        // ③ 候选里已有覆盖整串的条目(简拼/混合简拼层构造上覆盖整串——
+        // `zgr` 这种纯缩写就是这样被解释掉的)。
+        let explained = !paths.is_empty()
+            || tolerant_explains
+            || ranked.iter().any(|c| c.covered >= pinyin.len());
+        // `ranked` 为空时不补:下面那条回声兜底给出的就是同一条「原样上屏」
+        // (词、覆盖范围、层都一样,分数是回声的 0),补了反而改掉它的分数,
+        // 让 `zhzhzhzh` 这类输入的对拍出现无意义差异。
+        if !explained && !ranked.is_empty() {
+            let mut escape = Self::echo_candidate(pinyin);
+            escape.score = ESCAPE_HATCH_SCORE;
+            escape.covered = pinyin.len();
+            ranked.push(escape);
         }
 
         // 回声兜底必须在**屏蔽过滤之前**追加,与改动前的格边分支逐字节一致:
@@ -1015,17 +1079,95 @@ fn window_has_vowel(window: &str) -> bool {
     /// 位置 `pos` 是否允许开容错弧(现在恒为「允许」,`center` 只表示
     /// 「这次构建启用了容错」)。保留函数形态是为了把「为什么不做位置限制」
     /// 的结论留在代码里,而不是只留在提交信息里。
-    fn in_typo_region(center: Option<usize>, _pos: usize) -> bool {
-        center.is_some()
+    fn window_covers_stall(stalls: Option<&[usize]>, pos: usize, len: usize) -> bool {
+        match stalls {
+            None => false,
+            Some(s) => s.iter().any(|&x| pos <= x && x < pos + len),
+        }
     }
 
-    /// 构造格子(精确模式)。容错模式见 [`Self::build_lattice_with`]。
+    /// 精确格上「最先走不动的位置」集合:从位置 0 出发沿格边**可达**、
+    /// 却没有出边的位置(串尾不算「走不动」)。
+    ///
+    /// 这就是容错弧的定位判据,也是唯一可靠的判据——试过两种都失败了:
+    /// - 「任何长度都不构成音节的位置」:音节内部的位置(`men` 的 `n`)命中,
+    ///   错处被定位到第 4 字节,正确读法消失;
+    /// - 「第一个不可精确切分的位置」(可达性 DP):别的切法会造出伪边界,
+    ///   同样定位错。
+    ///
+    /// 用**格上的可达性 + 有没有出边**就不会错:它问的是「精确解码走到这里
+    /// 之后还能不能往下走」,与真实打字行为完全同构。容错弧只对**覆盖这些
+    /// 位置**的窗口开放,于是每个输入最多只有几个窗口能开弧(而不是每个窗口
+    /// 都开),长串延迟从 13~20ms 回到门槛内。
+    fn first_stalls(lattice: &[Vec<LatticeEdge>], n: usize) -> Vec<usize> {
+        let mut reachable = vec![false; n + 1];
+        reachable[0] = true;
+        let mut queue = std::collections::VecDeque::from([0usize]);
+        let mut stalls: Vec<usize> = Vec::new();
+        while let Some(pos) = queue.pop_front() {
+            if lattice[pos].is_empty() {
+                if pos < n {
+                    stalls.push(pos);
+                }
+                continue;
+            }
+            for e in &lattice[pos] {
+                if !reachable[e.end] {
+                    reachable[e.end] = true;
+                    queue.push_back(e.end);
+                }
+            }
+        }
+        stalls.sort_unstable();
+        stalls.dedup();
+        stalls
+    }
+
+    /// 构造**容错格**:以精确格为底,只在「走不动位置」附近补容错弧。
+    ///
+    /// 为什么不重建整张格:实测重建(即使弧已限定在错处附近)会把长串单次
+    /// 查询从 8ms 推到 15ms——成本主要在**重复建整张格**上,不在弧上。这里
+    /// 克隆精确格(几百条边,微秒级),只对 `[stall − MAX_TYPO_WINDOW, stall + 1]`
+    /// 这些起点重跑链枚举,而且只推「用过弧」的新边(精确边原样复用)。
+    ///
+    /// 覆盖性:任何覆盖 `stall` 的容错窗口,其起点必落在
+    /// `[stall − MAX_TYPO_WINDOW + 1, stall]` 内;这里两端各放宽一格。
+    fn build_tolerant_lattice(
+        &self,
+        pinyin: &str,
+        bounds: Option<&[usize]>,
+        exact: &[Vec<LatticeEdge>],
+        stalls: &[usize],
+    ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
+        let n = pinyin.len();
+        let mut lattice: Vec<Vec<LatticeEdge>> = exact.to_vec();
+        if !pinyin.is_ascii() || stalls.is_empty() {
+            return Ok(lattice);
+        }
+        let user_entries = crate::user_lm::user_entries_snapshot(&self.lm);
+        let mut cache: HashMap<String, Vec<Candidate>> = HashMap::new();
+        for &stall in stalls {
+            let from = stall.saturating_sub(MAX_TYPO_WINDOW);
+            let to = (stall + 1).min(n.saturating_sub(1));
+            for start in from..=to {
+                let mut budget = MAX_TOLERANT_CHAINS_PER_START;
+                let mut chain: Vec<&str> = Vec::new();
+                self.collect_chain_edges(
+                    pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
+                    user_entries.as_ref(), bounds, true, Some(stalls), 0, 0.0, true,
+                )?;
+            }
+        }
+        Ok(lattice)
+    }
+
+    /// 构造格子(精确模式)。容错模式见 [`Self::build_tolerant_lattice`]。
     fn build_lattice(
         &self,
         pinyin: &str,
         bounds: Option<&[usize]>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
-        self.build_lattice_with(pinyin, bounds, false)
+        self.build_lattice_with(pinyin, bounds, false, None)
     }
 
     /// 构造格子;`tolerant` 打开**容错解码**:
@@ -1044,6 +1186,7 @@ fn window_has_vowel(window: &str) -> bool {
         pinyin: &str,
         bounds: Option<&[usize]>,
         tolerant: bool,
+        stalls: Option<&[usize]>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let n = pinyin.len();
         let mut lattice: Vec<Vec<LatticeEdge>> = (0..=n).map(|_| Vec::new()).collect();
@@ -1065,19 +1208,12 @@ fn window_has_vowel(window: &str) -> bool {
         } else {
             MAX_CHAINS_PER_START
         };
-        // 容错弧的位置限制:**不限制**(`typo_center` 只表达「这次是否启用
-        // 容错」)。曾经试过「只在第一个切不动的位置附近开放」,但那个判据
-        // 不可靠——音节内部的位置、别的切法造成的伪边界都会误判(实测把
-        // `womenjintianqugongyuann` 的中心判成第 4 字节),反而让正确读法
-        // 消失。压住成本靠三条与位置无关的限制:窗口 ≤4 字母、每窗口只留
-        // 1 条读法、整条路径 ≤1 次编辑。
-        let typo_center = if tolerant { Some(0usize) } else { None };
         for start in 0..n {
             let mut budget = per_start_budget;
             let mut chain: Vec<&str> = Vec::new();
             self.collect_chain_edges(
                 pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
-                user_entries.as_ref(), bounds, tolerant, typo_center, 0, 0.0,
+                user_entries.as_ref(), bounds, tolerant, stalls, 0, 0.0, false,
             )?;
         }
         Ok(lattice)
@@ -1097,9 +1233,10 @@ fn window_has_vowel(window: &str) -> bool {
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
         bounds: Option<&[usize]>,
         tolerant: bool,
-        typo_center: Option<usize>,
+        stalls: Option<&[usize]>,
         typo_edits: u8,
         typo_penalty: f32,
+        only_typo_edges: bool,
     ) -> Result<(), EngineError> {
         let n = pinyin.len();
         if chain.len() >= MAX_EDGE_SYLLABLES || *budget == 0 {
@@ -1132,7 +1269,7 @@ fn window_has_vowel(window: &str) -> bool {
                 readings.push((syl, 0.0, 0));
             } else if tolerant
                 && typo_edits < MAX_TYPO_EDITS
-                && Self::in_typo_region(typo_center, pos)
+                && Self::window_covers_stall(stalls, pos, len)
                 && (MIN_TYPO_WINDOW..=MAX_TYPO_WINDOW).contains(&syl.len())
                 && Self::window_has_vowel(syl)
             {
@@ -1161,7 +1298,12 @@ fn window_has_vowel(window: &str) -> bool {
             } else {
                 vec![(joined.clone(), 0.0)]
             };
+            // 「只补新边」模式(容错格以精确格为底时的复用):这条链一次弧都
+            // 没用过 ⇒ 它的边在精确格里已经在,不必重复推。
             for (key, fuzzy_penalty) in &keys {
+                if only_typo_edges && arc_penalty == 0.0 {
+                    continue;
+                }
                 let cands = if let Some(c) = cache.get(key.as_str()) {
                     c.clone()
                 } else {
@@ -1204,7 +1346,7 @@ fn window_has_vowel(window: &str) -> bool {
                 // 深度优先：延长链（下一音节从 `end` 继续）
                 self.collect_chain_edges(
                     pinyin, start, end, chain, lattice, cache, budget, user_entries, bounds,
-                    tolerant, typo_center, typo_edits + arc_edits, arc_penalty,
+                    tolerant, stalls, typo_edits + arc_edits, arc_penalty, only_typo_edges,
                 )?;
                 chain.pop();
             }
@@ -1212,16 +1354,18 @@ fn window_has_vowel(window: &str) -> bool {
 
         // 「吃掉一段无法解释的字母」的空词弧(多打/打乱)。链不变、没有词,
         // 因此不会自己产出候选;它的作用只是让 beam 跨过去继续前进。
-        if tolerant
-            && typo_edits < MAX_TYPO_EDITS
-            && Self::in_typo_region(typo_center, pos)
-        {
+        if tolerant && typo_edits < MAX_TYPO_EDITS {
             let max_gap = MAX_TYPO_GAP.min(n - pos);
             for gap in 1..=max_gap {
                 if *budget == 0 {
                     // 预算可能已被上面的音节弧/递归用光(它们返回时不保证
                     // 还有余额),这里必须自己再判一次——否则 `-= 1` 下溢 panic。
                     return Ok(());
+                }
+                // 空词弧同样只对**覆盖走不动位置**的窗口开放(否则长串上
+                // 每个位置都能吃掉 1~2 个字母,格爆炸、正确链被饿死)。
+                if !Self::window_covers_stall(stalls, pos, gap) {
+                    continue;
                 }
                 // `'` 强制切分点:被吃掉的字母里不得含分隔符。
                 if bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x <= pos + gap)) {
@@ -1246,7 +1390,7 @@ fn window_has_vowel(window: &str) -> bool {
                 } else {
                     self.collect_chain_edges(
                         pinyin, start, pos + gap, chain, lattice, cache, budget, user_entries,
-                        bounds, tolerant, typo_center, typo_edits + 1, cost,
+                        bounds, tolerant, stalls, typo_edits + 1, cost, only_typo_edges,
                     )?;
                 }
             }
@@ -2179,9 +2323,20 @@ mod tests {
         let ni = cands.iter().find(|c| c.word == "你").expect("应含「你」");
         assert_eq!(ni.covered, 2, "「你」只覆盖首音节 ni");
         assert!(
-            cands.iter().all(|c| c.covered < "nihaozzzzz".len()),
-            "前缀候选都不该声称吃掉了整串(zzzzz 还没被解释)"
+            cands
+                .iter()
+                .filter(|c| !c.echo)
+                .all(|c| c.covered < "nihaozzzzz".len()),
+            "真实候选都不该声称吃掉了整串(zzzzz 还没被解释)"
         );
+        // 第 ③ 期「剩余串的出路」:解不完整时补一条原样上屏的逃生口,
+        // 它**就是**覆盖整串的那一个(与回声候选同源:不学词、不动上文)。
+        let escape = cands
+            .iter()
+            .find(|c| c.echo)
+            .unwrap_or_else(|| panic!("应有原样上屏的逃生口: {cands:?}"));
+        assert_eq!(escape.word, "nihaozzzzz");
+        assert_eq!(escape.covered, "nihaozzzzz".len());
     }
 
     /// `'` 占原文一个字节:覆盖停在分隔符前的候选必须把那个 `'` 一起吃掉,
@@ -2975,6 +3130,10 @@ mod tests {
         engine.dict.upsert("你好", "ni hao", 900).expect("插入失败");
         engine.dict.upsert("你", "ni", 500).expect("插入失败");
         engine.dict.upsert("什么", "shen me", 800).expect("插入失败");
+        // 中间音节的词条:`shenem` 的错处定位是**词级**的(精确格走到
+        // 「shen」之后再无出边),所以词库里必须有「深」这类 shen 词条——
+        // 真实词库永远有,玩具词库要显式建出来。
+        engine.dict.upsert("深", "shen", 400).expect("插入失败");
         // 四类编辑各一条代表 + 一条「少打一个字母」的反面样本(它不属于本
         // 阶段能力,见 HANDOFF 的已知缺口)。
         for (input, want) in [
