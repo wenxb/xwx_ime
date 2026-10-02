@@ -38,3 +38,6 @@ tools/rime_oracle/rime_oracle
 # 简拼路线 spike 的原型产物(69MB),用完即弃、可由 spike.py 重新生成。
 # spike 的 .py 脚本保留入库:它们是「为什么选路线 (c)」的实测证据。
 tools/spike_abbrev/*.bin
+
+# 用户本地文件（会话/agent 约定:保持未跟踪,别提交）
+AGENTS.md
