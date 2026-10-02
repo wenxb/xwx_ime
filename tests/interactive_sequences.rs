@@ -795,17 +795,20 @@ fn selecting_a_prefix_candidate_keeps_the_remaining_pinyin_composing() {
     h.type_ascii("nihaobeijing");
     h.clear_backlog();
 
+    // 方案 b:确认段**留在组合里**(预编辑区显示为已确认文本),这一步
+    // 一个字节都不交给应用——于是退格能回退、也不会出现「已上屏的段再也
+    // 收不回来」。这是与「上屏一段 + CommitText」最关键的差别。
     assert!(h.key(keyval::SPACE, 0), "空格应选中候选");
     let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
     assert_eq!(
         support::commits(&sigs),
-        vec!["你好".to_owned()],
-        "先上屏覆盖前缀的那一段「你好」"
+        Vec::<String>::new(),
+        "确认段不立刻交给应用(方案 b)"
     );
     assert_eq!(
         last_preedit(&sigs).as_deref(),
-        Some("beijing"),
-        "剩余串必须留在预编辑区(改动前这里整串消失)"
+        Some("你好beijing"),
+        "预编辑区 = 已确认段 + 剩余串"
     );
     let table = support::last_table(&sigs).expect("剩余串必须有候选窗——不能什么都没有");
     assert_eq!(
@@ -815,18 +818,35 @@ fn selecting_a_prefix_candidate_keeps_the_remaining_pinyin_composing() {
         table.candidates
     );
 
-    // 接着打完:第二次空格把剩余串也上屏,界面才收起。
+    // **退格回退上一次确认**:剩余串原样回到输入串,重新出候选。
+    h.clear_backlog();
+    assert!(h.key(keyval::BACKSPACE, 0), "退格应回退上一次确认");
+    let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
+    assert_eq!(
+        support::commits(&sigs),
+        Vec::<String>::new(),
+        "回退不上屏任何东西"
+    );
+    assert_eq!(
+        last_preedit(&sigs).as_deref(),
+        Some("nihaobeijing"),
+        "字母一个都不能少地还回输入串"
+    );
+
+    // 重新选一遍,然后打完:整串结束时**一次**提交。
+    assert!(h.key(keyval::SPACE, 0), "重新选中「你好」");
+    let _ = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
     h.clear_backlog();
     assert!(h.key(keyval::SPACE, 0), "剩余串仍有候选,空格应继续选词");
     let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
     assert_eq!(
         support::commits(&sigs),
-        vec!["北京".to_owned()],
-        "第二次空格上屏剩余串的首选"
+        vec!["你好北京".to_owned()],
+        "组合结束时把已确认段与最后一段一次交给应用"
     );
     assert_eq!(
-        support::last_table(&sigs),
+        last_preedit(&sigs),
         None,
-        "剩余串打完,候选窗应收起(而不是留下一个空面板)"
+        "组合结束,预编辑区收起(HidePreeditText,不是留一个空串)"
     );
 }

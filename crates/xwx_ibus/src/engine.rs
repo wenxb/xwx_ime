@@ -59,15 +59,6 @@ impl XwxEngineServer {
                 self.commit(ctxt, &text).await;
                 true
             }
-            // 分段上屏:上屏这一段,然后把**剩余输入串**的预编辑区与候选窗
-            // 接着画出来——不能走 `commit()` 那套「上屏 + 收起」,否则用户
-            // 看到的正是「选完就没下文了」。顺序固定:先 CommitText 再
-            // UpdatePreeditText/UpdateLookupTable,让应用先落字再显示剩余串。
-            SessionOutput::CommitSegment { text, update } => {
-                self.commit_text_only(ctxt, &text).await;
-                self.refresh_ui(ctxt, &update).await;
-                true
-            }
             SessionOutput::Updated(u) => {
                 self.refresh_ui(ctxt, &u).await;
                 true
@@ -148,13 +139,18 @@ impl XwxEngineServer {
 
     /// 复位会话并收起全部 UI（FocusOut / Reset / Disable 共用）。
     async fn reset_state(&self, ctxt: &zbus::SignalContext<'_>) {
-        let was_active = {
+        let (was_active, pending) = {
             let mut session = self.session.lock().await;
             let active = session.is_active();
             // 焦点切换是造词的真边界：跨应用的上屏片段不该粘成一个词。
-            session.reset_for_focus_change();
-            active
+            // 返回值是「已确认但还没交给应用」的段(方案 b)——用户明确选过
+            // 的内容不能因为切窗口就丢掉,这里补一次 CommitText。
+            let pending = session.reset_for_focus_change();
+            (active, pending)
         };
+        if !pending.is_empty() {
+            self.commit_text_only(ctxt, &pending).await;
+        }
         if was_active {
             self.hide_ui(ctxt).await;
         }

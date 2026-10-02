@@ -165,6 +165,21 @@ pub enum InputEvent {
     ToggleAscii,
 }
 
+/// 已确认、但**尚未交给应用**的一段(方案 b:确认段留在组合里)。
+///
+/// 用户选了一段之后,这一段进预编辑区显示、并留在会话里,直到整个组合
+/// 结束才随 `CommitText` 一次交给应用。两个好处:
+/// - 退格可以**回退上一次确认**(把 `letters` 原样还回输入串,重新出候选);
+/// - 学习/记账推迟到组合结束(`commit_selection` / `finish_with_raw`),
+///   中途回退不需要撤销任何已写入的 UserLM 计数。
+#[derive(Debug, Clone)]
+struct ConfirmedSegment {
+    /// 用户选中的候选本身(上屏文本、是否回声、以及记账要用的信息)。
+    candidate: Candidate,
+    /// 这一段消耗掉的原始字母——退格回退时原样还回输入串。
+    letters: String,
+}
+
 /// 一次按键处理后的界面刷新数据。
 #[derive(Debug, Clone, Default)]
 pub struct SessionUpdate {
@@ -205,39 +220,20 @@ impl SessionUpdate {
 pub enum SessionOutput {
     /// 需要上屏的文本。上屏后会话已自动复位。
     Commit(String),
-    /// 上屏**一段**文本,同时组合继续:剩下的输入串还留在预编辑区,
-    /// 候选窗要按 `update` 刷新,**不能**收起。
-    ///
-    /// 产生条件:被选中的候选只覆盖输入串的前缀(见
-    /// [`Candidate::covered`]),即用户在「一长串拼音里选了一段」。
-    /// 与 [`SessionOutput::Commit`] 的差别只在「上屏之后界面怎么办」:
-    /// `Commit` = 上屏 + 收起;本变体 = 上屏 + 继续显示剩余串与候选。
-    CommitSegment {
-        /// 要交给应用的文本(这一段)。
-        text: String,
-        /// 剩余输入串的界面快照(预编辑区 + 候选窗)。
-        update: SessionUpdate,
-    },
     /// 界面需要刷新（拼音串或候选变化）。
     Updated(SessionUpdate),
     /// 本输入法不处理该按键。
     Noop,
 }
 
-/// 把后缀字符(标点 / Verbatim 字母)拼到一次上屏的文本末尾,并**保持
-/// 分段语义**:原本要收起界面的(`Commit`)照旧收起,原本要继续组合的
-/// (`CommitSegment`)照旧带着剩余串的界面快照。
+/// 把后缀字符(标点 / Verbatim 字母)拼到一次上屏的文本末尾。
 ///
-/// 标点与 Shift+字母落在「输入串非空」的分支里,都是「先上屏当前候选,
-/// 再追加这个字符」;分段上屏之后这两支也可能走到 `CommitSegment`,
-/// 因此拼字符串这件事必须认变体,不能一律拼成 `Commit`。
+/// 标点与 Shift+字母落在「输入串非空」的分支里,都是「先结束当前组合
+/// (已确认段 + 当前候选/原样拼音),再追加这个字符」;两者都以 `Commit`
+/// 收尾(方案 b 之后不再有「上屏一段还留着组合」的变体),这里只负责拼串。
 fn append_to_commit(out: SessionOutput, suffix: &str) -> SessionOutput {
     match out {
         SessionOutput::Commit(text) => SessionOutput::Commit(format!("{text}{suffix}")),
-        SessionOutput::CommitSegment { text, update } => SessionOutput::CommitSegment {
-            text: format!("{text}{suffix}"),
-            update,
-        },
         // 本函数只被上屏分支调用,`Updated`/`Noop` 不可达;原样返回,
         // 不制造新的语义。
         other => other,
@@ -291,6 +287,11 @@ pub struct InputSession {
     /// 标点、Verbatim 大写都没有合法拼音,不进缓冲(与它们不进
     /// UserLM 学习是同一判断)。
     coin_buffer: Vec<(String, String)>,
+    /// 已确认、但还没交给应用的段(方案 b)。见 [`ConfirmedSegment`]。
+    ///
+    /// 组合期间预编辑区显示 = 这些段的文本 + 剩余拼音串;整串选完 / 回车 /
+    /// 标点 / 切英文 / 焦点切换时才一次性上屏。
+    confirmed: Vec<ConfirmedSegment>,
     /// recognizer 识别态(gear 审计最后一项:邮箱/网址识别)。
     ///
     /// `Some(_)` 表示当前拼音串整体被 [`crate::recognize`] 判定为
@@ -319,6 +320,7 @@ impl InputSession {
             last_word: None,
             english_mode: false,
             coin_buffer: Vec::new(),
+            confirmed: Vec::new(),
             recognized: None,
         }
     }
@@ -432,8 +434,8 @@ impl InputSession {
                 // 非协议前缀:落到标点臂(全角 `:`),行为不变
                 let punct = fullwidth_punct(':').expect("`:` 在标点表内");
                 let head = match self.candidates.get(self.cursor).cloned() {
-                    Some(c) => self.commit_word(&c),
-                    None => self.commit_raw(self.pinyin.clone()),
+                    Some(c) => self.commit_selection(&c),
+                    None => self.finish_with_raw(self.pinyin.clone()),
                 };
                 self.push_tail(punct);
                 Ok(SessionOutput::Commit(format!("{head}{punct}")))
@@ -526,12 +528,16 @@ impl InputSession {
                     }
                 }
                 let punct = fullwidth_punct(c).expect("守卫已检查");
-                if self.pinyin.is_empty() {
+                if self.pinyin.is_empty() && self.confirmed.is_empty() {
                     Ok(SessionOutput::Commit(self.commit_raw(punct.to_string())))
                 } else {
+                    // 标点/英文字符结束这次组合:已确认段 + 当前候选(或原样
+                    // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
+                    // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
+                    // (段留在组合里),标点就没地方落地了。
                     let out = match self.candidates.get(self.cursor).cloned() {
-                        Some(c) => self.commit_candidate(&c)?,
-                        None => SessionOutput::Commit(self.commit_raw(self.pinyin.clone())),
+                        Some(c) => SessionOutput::Commit(self.commit_selection(&c)),
+                        None => SessionOutput::Commit(self.finish_with_raw(self.pinyin.clone())),
                     };
                     // 与 Space 分支的唯一差别:commit_* 已把该段消耗掉,
                     // 这里只把标点追加进上屏尾部并拼到上屏文本后面。
@@ -552,12 +558,16 @@ impl InputSession {
             // 全角映射),且语义上是「敲了一个英文字母」不是标点——
             // 但两者都只用 push_tail 进上屏尾部、不学、不动 last_word。
             InputEvent::Verbatim(c) => {
-                if self.pinyin.is_empty() {
+                if self.pinyin.is_empty() && self.confirmed.is_empty() {
                     Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
                 } else {
+                    // 标点/英文字符结束这次组合:已确认段 + 当前候选(或原样
+                    // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
+                    // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
+                    // (段留在组合里),标点就没地方落地了。
                     let out = match self.candidates.get(self.cursor).cloned() {
-                        Some(c) => self.commit_candidate(&c)?,
-                        None => SessionOutput::Commit(self.commit_raw(self.pinyin.clone())),
+                        Some(c) => SessionOutput::Commit(self.commit_selection(&c)),
+                        None => SessionOutput::Commit(self.finish_with_raw(self.pinyin.clone())),
                     };
                     // 单字母不是词:不进 UserLM 学习(与标点同一取舍),
                     // 也不动 last_word(刚上屏的候选仍是有效 bigram 上文)。
@@ -608,7 +618,11 @@ impl InputSession {
             InputEvent::CandidateClicked(_) => Ok(SessionOutput::Noop),
 
             // —— 空格：选高亮候选；无候选则原样上屏拼音串 ——
-            InputEvent::Space if !self.pinyin.is_empty() => {
+            InputEvent::Space if self.composing() => {
+                if self.pinyin.is_empty() {
+                    // 只剩已确认段:空格就是「到此为止」。
+                    return Ok(SessionOutput::Commit(self.finish_with_raw(String::new())));
+                }
                 match self.candidates.get(self.cursor) {
                     // 选中真实候选词：走 commit_word，词要进 last_word
                     Some(c) => {
@@ -616,21 +630,23 @@ impl InputSession {
                         self.commit_candidate(&c)
                     }
                     // 没有候选（如只打了一半前缀）：拼音串原样上屏，是
-                    // 原始字母，不算词
-                    None => Ok(SessionOutput::Commit(self.commit_raw(self.pinyin.clone()))),
+                    // 原始字母，不算词（已确认段一并带上）
+                    None => Ok(SessionOutput::Commit(self.finish_with_raw(self.pinyin.clone()))),
                 }
             }
             InputEvent::Space => Ok(SessionOutput::Noop),
 
             // —— 回车：拼音串原样上屏（同主流输入法） ——
-            InputEvent::Enter if !self.pinyin.is_empty() => {
+            InputEvent::Enter if self.composing() => {
+                // 原样上屏:已确认段 + 剩余字母一次交给应用(回车就是
+                // 「这次输入到此为止」;剩余串可能已被删空,只剩确认段)。
                 let raw = self.pinyin.clone();
-                Ok(SessionOutput::Commit(self.commit_raw(raw)))
+                Ok(SessionOutput::Commit(self.finish_with_raw(raw)))
             }
             InputEvent::Enter => Ok(SessionOutput::Noop),
 
             // —— Esc：清空 ——
-            InputEvent::Escape if !self.pinyin.is_empty() => {
+            InputEvent::Escape if self.composing() => {
                 // 取消当前输入:打断造词缓冲(结算已累积的段),
                 // 保证缓冲不跨「用户明确取消」的边界泄漏。
                 self.break_coin_run();
@@ -640,7 +656,26 @@ impl InputSession {
             InputEvent::Escape => Ok(SessionOutput::Noop),
 
             // —— 退格 ——
-            InputEvent::Backspace if !self.pinyin.is_empty() => {
+            InputEvent::Backspace if self.composing() => {
+                // **回退上一次确认**(方案 b 的心智模型):只要还有已确认的段,
+                // 退格就先退回**上一步的选择**——把那段消耗掉的字母原样还回
+                // 输入串、重新出候选;而不是「按已经选好的去删输入末尾」。
+                // 全部退回之后(没有已确认段了)才回到文本编辑惯例:删 caret
+                // 前一个字符。
+                //
+                // 为什么不看 caret:选完一段后 caret 落在剩余串的**末尾**
+                // (用户还在继续打字),若要求 caret 在分界处才回退,用户就得
+                // 先把剩余串一个字一个字删光——那正是要修掉的手感。
+                if !self.confirmed.is_empty() {
+                    let seg = self.confirmed.pop().expect("上面判过非空");
+                    self.pinyin.insert_str(0, &seg.letters);
+                    // 回到「选之前那一步」的光标位置:串尾(继续打字就在后面接)。
+                    self.caret = self.pinyin.len();
+                    self.cursor = 0;
+                    self.page = 0;
+                    self.refresh()?;
+                    return Ok(SessionOutput::Updated(self.update()));
+                }
                 // 删 caret 前一个字符(文本编辑惯例)。caret 在串首时
                 // 无前字符可删,吃掉按键、状态不变——越界删除或透传
                 // 都会破坏用户预期(透传会让应用删掉自己文本框里的字)。
@@ -806,23 +841,82 @@ impl InputSession {
     }
 
     /// 取当前界面快照。
+    /// 组合还活着吗——**剩余串与已确认段任一非空**都算。
+    ///
+    /// 不能只看 `pinyin`:选完一段后剩余串可能被退格删空(已确认段还在),
+    /// 此时回车/空格/Esc/退格都必须按「组合仍在」处理,否则用户选过的段
+    /// 既上不了屏、也退不回。
+    fn composing(&self) -> bool {
+        !self.pinyin.is_empty() || !self.confirmed.is_empty()
+    }
+
     fn update(&self) -> SessionUpdate {
+        // 预编辑区 = **已确认的段 + 剩余拼音串**(方案 b:确认段留在组合里,
+        // 不交给应用)。光标要在剩余串里的插入点上,所以偏移已确认段的
+        // **字符数**(IBus 的 preedit cursor 是字符下标;已确认段是中文,
+        // 不能按字节加)。
+        let mut preedit = self.confirmed_text();
+        preedit.push_str(&self.pinyin);
+        let caret = self.confirmed_chars() + self.caret;
         SessionUpdate {
-            preedit: self.pinyin.clone(),
+            preedit,
             candidates: self.candidates.clone(),
             cursor: self.cursor,
-            caret: self.caret,
+            caret,
             page: self.page,
             page_size: self.page_size,
         }
     }
 
+    /// 已确认段拼成的文本(预编辑区显示 + 最终上屏都要用)。
+    fn confirmed_text(&self) -> String {
+        self.confirmed.iter().map(|s| s.candidate.word.as_str()).collect()
+    }
+
+    /// 已确认段的**字符**数(预编辑光标偏移用)。
+    fn confirmed_chars(&self) -> usize {
+        self.confirmed
+            .iter()
+            .map(|s| s.candidate.word.chars().count())
+            .sum()
+    }
+
+    /// 把已确认段的账补上(造词缓冲 / 上屏尾部 / UserLM),按用户选中的顺序。
+    ///
+    /// 记账推迟到组合结束是方案 b 的关键:中途确认的段还没交给应用,用户
+    /// 随时可以退格回退——若在确认当时就写 UserLM,回退就得做「反学习」。
+    fn replay_confirmed(&mut self) {
+        let held = std::mem::take(&mut self.confirmed);
+        for seg in &held {
+            self.record_commit(&seg.candidate);
+        }
+    }
+
+    /// 组合结束:已确认段 + 这次选中的整串候选**一次**交给应用。
+    fn commit_selection(&mut self, c: &Candidate) -> String {
+        let mut text = self.confirmed_text();
+        self.replay_confirmed();
+        text.push_str(&self.record_commit(c));
+        self.reset();
+        text
+    }
+
+    /// 组合以「原样拼音」结束(回车 / 切英文 / 标点 / 无候选时的空格):
+    /// 已确认段照样上屏,尾部原始字母跟着一起。
+    fn finish_with_raw(&mut self, raw: String) -> String {
+        let mut text = self.confirmed_text();
+        self.replay_confirmed();
+        self.break_coin_run();
+        self.record_committed(&raw, None);
+        text.push_str(&raw);
+        self.reset();
+        text
+    }
+
     /// 上屏指定候选词并消耗它覆盖的那段输入。
     ///
-    /// **分段上屏**(2026-10-03):只消耗 [`Candidate::covered`] 个字节,
-    /// 剩余串留在 `pinyin` 里继续组合——修掉的是「一长串拼音里选了一段,
-    /// 后面全被静默丢掉」。覆盖范围未标注(`0`)或已达串尾时按**整串**
-    /// 处理并复位,与改动前逐字节一致。
+    /// 覆盖范围未标注(`0`)或已达串尾时按**整串**处理并复位;只覆盖前缀时
+    /// 把这一段**收进已确认段**(方案 b),不交给应用、也不记账。
     ///
     /// 本方法只做状态变更、**不刷新候选**(见 [`Self::commit_candidate`]
     /// 的三段式:先消耗 + 刷新,成功后才记账)。
@@ -885,8 +979,9 @@ impl InputSession {
 
     /// 上屏候选并决定「界面接下来怎么办」——空格/数字/点击/标点的统一出口。
     ///
-    /// - 剩余串为空 ⇒ [`SessionOutput::Commit`](上屏 + 收起,改动前语义);
-    /// - 剩余串非空 ⇒ [`SessionOutput::CommitSegment`](上屏一段 + 刷新)。
+    /// - 覆盖整串 ⇒ [`SessionOutput::Commit`](整个组合一次上屏 + 收起);
+    /// - 只覆盖前缀 ⇒ [`SessionOutput::Updated`](这一段收进已确认段,
+    ///   留在预编辑区,剩余串继续出候选——方案 b)。
     ///
     /// **失败回滚**:剩余串刷新候选失败时把刚搬走的前缀原样塞回去,并
     /// 保持会话不变量——「已上屏文本 + 剩余输入串」的并集恒等于用户敲过的
@@ -895,7 +990,8 @@ impl InputSession {
     fn commit_candidate(&mut self, c: &Candidate) -> Result<SessionOutput, EngineError> {
         let covered = self.covered_len(c);
         if covered >= self.pinyin.len() {
-            return Ok(SessionOutput::Commit(self.commit_word(c)));
+            // 整串选完 = 整个组合结束:已确认段与这一条**一次**上屏。
+            return Ok(SessionOutput::Commit(self.commit_selection(c)));
         }
         let prefix: String = self.pinyin[..covered].to_owned();
         self.consume_covered(c);
@@ -907,11 +1003,14 @@ impl InputSession {
             self.page = 0;
             return Err(e);
         }
-        let text = self.record_commit(c);
-        Ok(SessionOutput::CommitSegment {
-            text,
-            update: self.update(),
-        })
+        // **方案 b**:这一段留在组合里(预编辑区显示为已确认文本),不交给
+        // 应用;记账也推迟到组合结束(见 `replay_confirmed`)——于是退格
+        // 回退不需要撤销任何学习。界面照常刷新:剩余串的候选按剩余串重算。
+        self.confirmed.push(ConfirmedSegment {
+            candidate: c.clone(),
+            letters: prefix,
+        });
+        Ok(SessionOutput::Updated(self.update()))
     }
 
     /// 上屏任意文本并复位会话。原文计入上屏尾部；
@@ -1059,6 +1158,7 @@ impl InputSession {
         self.candidates.clear();
         self.cursor = 0;
         self.page = 0;
+        self.confirmed.clear();
         self.recognized = None;
     }
 
@@ -1069,9 +1169,15 @@ impl InputSession {
     /// 在微信里逐字选「张」「三」、切到浏览器逐字选「李」「四」，
     /// 不该造出「张三李四」。librime 的 memory 同样把焦点切换当作
     /// 真正的边界（见 `docs/gear-audit.md` 第 3 节）。
-    pub fn reset_for_focus_change(&mut self) {
+    pub fn reset_for_focus_change(&mut self) -> String {
+        // 已确认的段是用户明确选过的,焦点切换不能把它们丢掉——返回给
+        // 调用方(xwx_ibus)去 `CommitText`;未确认的剩余字母按原有语义丢弃
+        // (那是「还没选」的内容,不该凭空进文档)。
+        let text = self.confirmed_text();
+        self.replay_confirmed();
         self.break_coin_run();
         self.reset();
+        text
     }
 
     /// 切换中英文模式。
@@ -1083,8 +1189,8 @@ impl InputSession {
     /// `reset` 不清除模式：中/英状态跨焦点切换保持，直到再次按 Shift。
     fn toggle_ascii(&mut self) -> SessionOutput {
         if !self.pinyin.is_empty() && !self.english_mode {
-            let text = self.pinyin.clone();
-            self.reset();
+            // 切英文时已确认段一起上屏(`finish_with_raw` 拼上并记账)。
+            let text = self.finish_with_raw(self.pinyin.clone());
             self.english_mode = true;
             SessionOutput::Commit(text)
         } else {
@@ -1609,24 +1715,90 @@ mod tests {
         assert_eq!(s.candidates[idx].covered, 5, "「我们」覆盖 wo men");
 
         let out = s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+        // 方案 b:这一段**不交给应用**,只进预编辑区(于是退格能退回来)。
         match out {
-            SessionOutput::CommitSegment { text, update } => {
-                assert_eq!(text, "我们");
-                assert_eq!(update.preedit, "jintian", "剩余串留在预编辑区");
-                // 光标按**位置**平移:用户在串尾打字,消耗掉前缀后光标
-                // 落在剩余串末尾(与 librime `OnSelect` 的
-                // `set_caret_pos(input.length())` 同义);光标若在被消耗的
-                // 前缀里则钳到串首——见 `consume_covered` 的注释。
-                assert_eq!(update.caret, update.preedit.len(), "光标跟随到剩余串末尾");
+            SessionOutput::Updated(update) => {
+                assert_eq!(update.preedit, "我们jintian", "确认段 + 剩余串都在组合里");
+                // 光标按**字符**偏移:已确认段是中文,不能按字节加。
+                // 消耗前缀后光标平移到剩余串末尾(7 个字母),加确认段 2 字。
+                assert_eq!(update.caret, 2 + 7, "光标落在剩余串末尾");
                 assert!(
                     !update.candidates.is_empty(),
                     "剩余串必须有候选(面板不能变成空的)"
                 );
             }
-            other => panic!("期望 CommitSegment(上屏一段+继续组合),实际 {other:?}"),
+            other => panic!("期望 Updated(确认段留在组合里),实际 {other:?}"),
         }
         assert_eq!(s.pinyin(), "jintian", "剩余串仍在会话里");
         assert!(!s.candidates.is_empty(), "剩余串的候选已刷新");
+    }
+
+    /// **退格回退上一次确认**(方案 b 的退格心智模型)。
+    ///
+    /// 定向破坏:去掉 Backspace 分支里的 `confirmed.pop()`(退回到「只删
+    /// 剩余串末位字母」)→ 下面的 pinyin/确认段断言红;`letters` 存成空串 →
+    /// 恢复出来的输入串不完整 → 红。
+    #[test]
+    fn backspace_at_the_segment_boundary_undoes_the_last_confirmation() {
+        let mut s = session_with_segments();
+        for c in "womenjintian".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "我们")
+            .expect("候选里应有「我们」");
+        s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+        assert_eq!(s.pinyin(), "jintian");
+
+        // 光标正停在「已确认段 | 剩余串」的分界处(选完一段的默认状态)。
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        match out {
+            SessionOutput::Updated(update) => {
+                assert_eq!(update.preedit, "womenjintian", "确认段退回,输入串原样恢复");
+                // 光标回到「选之前那一步」:整串末尾(继续打字就在后面接)。
+                assert_eq!(update.caret, "womenjintian".len());
+            }
+            other => panic!("期望 Updated(退回上一步),实际 {other:?}"),
+        }
+        assert_eq!(s.pinyin(), "womenjintian", "字母一个都不能少");
+        assert!(!s.candidates.is_empty(), "重新出候选(按恢复后的整串算)");
+        // 再退一次:没有已确认段了,回到文本编辑惯例(删末位字母)。
+        let out = s.handle(InputEvent::Backspace).expect("不应失败");
+        match out {
+            SessionOutput::Updated(update) => {
+                assert_eq!(update.preedit, "womenjintia", "无确认段时退格删末位字母");
+            }
+            other => panic!("期望 Updated(删字符),实际 {other:?}"),
+        }
+    }
+
+    /// 每一步都确认,最后整串结束时**一次**交给应用(方案 b 的落点)。
+    #[test]
+    fn confirmed_segments_are_committed_once_at_the_end() {
+        let mut s = session_with_segments();
+        for c in "womenjintian".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "我们")
+            .expect("候选里应有「我们」");
+        s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+        // 剩余串是 jintian,选「今天」(覆盖整串)→ 组合结束。
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "今天")
+            .expect("剩余串应有「今天」");
+        let out = s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "我们今天"),
+            "确认段与最后一段一起上屏: {out:?}"
+        );
+        assert!(!s.is_active(), "组合结束");
     }
 
     /// 覆盖整串的候选仍走**旧路径**(上屏 + 复位 + 收起界面):这条保证
@@ -1740,12 +1912,13 @@ mod tests {
         s.cursor = idx;
         let out = s.handle(InputEvent::Char(',')).expect("不应失败");
         match out {
-            SessionOutput::CommitSegment { text, update } => {
-                assert_eq!(text, "我们，", "标点跟在这一段后面一起上屏");
-                assert_eq!(update.preedit, "jintian", "剩余串继续组合");
+            // 方案 b:标点结束这次组合——已确认段 + 当前候选 + 标点一次上屏。
+            SessionOutput::Commit(text) => {
+                assert_eq!(text, "我们，", "标点跟在已确认段后面一起上屏");
             }
-            other => panic!("期望 CommitSegment,实际 {other:?}"),
+            other => panic!("期望 Commit(标点结束组合),实际 {other:?}"),
         }
+        assert!(!s.is_active(), "标点之后组合结束");
     }
 
     /// `commit_at`(不经 `handle` 的低层出口)也要把剩余串的候选刷成新的,
