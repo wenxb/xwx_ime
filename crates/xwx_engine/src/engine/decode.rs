@@ -27,6 +27,12 @@ impl ImeEngine {
 
     /// 与 [`Self::decode_beam`] 相同，但格子由调用方传入（分层便于
     /// 把「格构建」与「beam 推进」分开看，性能排查/测试用）。
+    ///
+    /// **生产查询不再调它**（codex 审查第二批）：`lookup_candidates` 里
+    /// 「精确格上有没有覆盖整串的读法」改用 [`ImeEngine::lattice_reachable`]
+    /// 的布尔 DP；beam 作为独立算法接口保留，供 `decode_paths` 与解码测试
+    /// 使用（两边等价性由 `engine/tests/dag_reachability.rs` 对拍）。
+    #[cfg_attr(not(test), allow(dead_code))] // 生产查询已改用布尔 DAG 可达性
     pub(super) fn decode_beam_with_lattice(
         &self,
         pinyin: &str,

@@ -130,6 +130,14 @@ pub fn fuzzy_env_value_recognized(value: Option<&str>) -> bool {
 /// - 再大（64+）会保留大量同音/等分路径，对排序没有贡献，反而让病态
 ///   输入（`"aaaa…"`）退化到接近旧穷举的开销；再小（≤4）则会丢掉
 ///   同音字多的首音节候选（如 `xian` 的 20+ 同音字，用户翻页可见）。
+///
+/// **codex 审查第二批之后,生产查询不再走 beam**:精确路径的「有没有覆盖
+/// 整串的读法」改用 `ImeEngine::lattice_reachable` 的布尔 DP(0 次 LM 调用),
+/// 容错路径早在第 ③ 期就改用了后向 DP。因此这个值**不再是逐键延迟的上界
+/// 来源**,它现在只服务独立算法接口(`decode_paths`/`decode_beam_with_lattice`
+/// 与解码测试);上面那段实测数字是 beam 还在生产路径上时测的,保留作为
+/// 那个接口的规模依据。常量本身冻结(owner 裁决),不得擅自改。
+#[cfg_attr(not(test), allow(dead_code))]
 const BEAM_WIDTH: usize = 16;
 /// 切分格中单条词边最多覆盖的音节数。
 ///

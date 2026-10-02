@@ -110,7 +110,13 @@ impl ImeEngine {
         let user_snapshot = crate::user_lm::user_entries_snapshot(&self.lm);
 
         let lattice = self.build_lattice(pinyin, bounds, user_snapshot.as_ref())?;
-        let paths = self.decode_beam_with_lattice(pinyin, ctx, BEAM_WIDTH, &lattice)?;
+        // **布尔 DAG 可达性替代 beam(codex 审查第二批 P1)**:这里只需要
+        // 知道「精确格上存在覆盖整串的读法吗」,旧实现为此跑完整 beam
+        // (每位置最多 `BEAM_WIDTH` 个状态 × 逐边 LM 打分 + 剪枝 + 路径重建)。
+        // 布尔 DP 每条边只碰一次、0 次 LM 调用,语义等价(都问「有没有从 0
+        // 走到串尾的边链」)——容错那条路早在第 ③ 期就用后向 DP 这么做了,
+        // 这次把同一套理由用在精确路径的是非题上。
+        let reachable = Self::lattice_reachable(&lattice, pinyin.len());
         // **容错解码的门槛(结构性)**:精确路径解不出整串,或整串根本
         // 切不开。打对的输入两条都不成立 ⇒ 一次都不进容错分支,零开销、
         // 零新边——这是「精确路径逐字节不退化」的结构性保证,不靠测量。
@@ -121,12 +127,12 @@ impl ImeEngine {
         // 同名同分,属于对拍噪音)。单音节最多 6 个字母,4 个字母起才谈得上
         // 「组合里打错一处」。
         let tolerant_due = pinyin.len() >= MIN_TOLERANT_INPUT_LEN
-            && (paths.is_empty() || !self.segmenter.is_fully_segmentable(pinyin));
+            && (!reachable || !self.segmenter.is_fully_segmentable(pinyin));
 
         // 精确路能解 → 格边候选(含整串读法);解不了 → **原有**的兜底联想。
         // 兜底不能因为有了容错就省掉:它给的「最长可切分前缀 + 首音节」
         // 候选正是分段上屏要选的第一步(见 commit_candidate)。
-        let ranked: Vec<Candidate> = if paths.is_empty() {
+        let ranked: Vec<Candidate> = if !reachable {
             self.fallback_candidates(pinyin, ctx, bounds)?
         } else {
             self.lattice_candidates(pinyin, ctx, &lattice)?
@@ -228,7 +234,7 @@ impl ImeEngine {
         // 三种「已经解释清楚」都算:① 精确路读到底;② 容错路读到底;
         // ③ 候选里已有覆盖整串的条目(简拼/混合简拼层构造上覆盖整串——
         // `zgr` 这种纯缩写就是这样被解释掉的)。
-        let explained = !paths.is_empty()
+        let explained = reachable
             || tolerant_explains
             || ranked.iter().any(|c| c.covered >= pinyin.len());
         // `ranked` 为空时不补:下面那条回声兜底给出的就是同一条「原样上屏」

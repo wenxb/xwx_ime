@@ -1344,3 +1344,35 @@ codex 审查 A3(P1):格构建、后向 DP/首词评分、简拼合并、屏蔽�
   (`lm/mod.rs` 的 `MixedLM::state_from_context` 仍在查询开始时自取一份计数快照;
   它与本次的快照同源——同一个 `UserLM`——但严格说仍是两次取)。这一步属于
   A1/A2 的「坐标与来源显式化」范围。
+
+## ㉛ 布尔 DAG 可达性替代生产 beam(2026-10-03)
+
+codex 审查第二批性能 P1:「先移除生产查询中只为判可达而执行的 beam」。
+
+- **问题**:`lookup_candidates` 在精确格上跑一整次
+  `decode_beam_with_lattice`(每位置最多 `BEAM_WIDTH`=16 个状态 × 逐边 LM 打分、
+  节点 arena、剪枝、路径重建),**只为了回答一个是非题**——「有没有覆盖整串的
+  读法」。容错那一侧早在第 ③ 期就为同一理由改用了后向 DP
+  (`lattice.rs::backward_completion`,注释里记着它省掉的那 ~10ms),这次把
+  同一套理由用在精确路径上。
+- **改法**:新增 `ImeEngine::lattice_reachable(lattice, len)`——
+  `lattice.rs` 里的布尔 DP(边只向前,从串尾往前一遍,每边碰一次)。
+  签名里没有 `&self`、没有 LM,所以**「0 次 LM 调用」是结构性的、不靠测量**。
+  `lookup_candidates` 的三处 `paths.is_empty()` 全部换成它;
+  `decode_beam_with_lattice` 降级为独立算法接口(**生产不再调用**,
+  加 `#[cfg_attr(not(test), allow(dead_code))]`),`BEAM_WIDTH` 的文档同步改写
+  ——它不再是逐键延迟的上界来源(常量本身冻结,值未动)。
+- **等价性(审查要求的验证)**:新测试
+  `crates/xwx_engine/src/engine/tests/dag_reachability.rs` 在**随机小格**上
+  逐例对拍「布尔可达 ⇔ beam 非空」,300 例全一致。第一版生成器全是随机截断
+  尾巴,300 例里只有 5 例可达(等于没验),已改成「一半由词库词条拼接(构造上
+  必可达)、一半再随机截尾」,并断言两侧样本各 >20 例。
+- **行为对拍**:`regression_probe --format v1` 2322 行与
+  `/tmp/codex_batch1_nt.txt` **diff 0 行**(语义等价 ⇒ 候选与分数逐字节不变)。
+- **实测收益**(同一台机器,`perf_probe --repeat 3 --prewarm`,与改动前一次运行
+  同参数):总表 p50 **0.442 → 0.265ms**、p95 **3.134 → 1.612ms**、
+  max **5.847 → 2.602ms**;最长全拼串 `womenjintianquxian` p50
+  **2.045 → 0.622ms(−70%)**。审查提醒「不能把 LM 调用减少比例当耗时比例」,
+  所以这里给的是实测分位,不是推算。
+- **门槛**:`just verify` **350 用例全绿**(281 engine + 6 ibus + 9 bin + 54 集成),
+  clippy `-D warnings` 无输出。

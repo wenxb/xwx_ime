@@ -30,3 +30,4 @@ mod personalization;
 mod completion;
 mod prewarm;
 mod query_snapshot;
+mod dag_reachability;

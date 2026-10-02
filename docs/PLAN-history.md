@@ -1007,3 +1007,16 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
   `regression_probe --format v1` 对基线 diff **0 行**;`just verify` 349 用例全绿。
 - 下一步(审查顺序):DAG 可达性替代生产 beam(性能 P1);
   「把用户存储访问从 `LmStore::Mixed` 内部抽出」并入 A1/A2。
+
+## 八、codex 审查第二批:布尔 DAG 可达性替代生产 beam
+
+- 审查原文:「在已建格上用布尔 DAG 可达性替代 beam。保留 `decode_paths`
+  作为独立算法测试接口」——已按此实施:`lattice_reachable` 取代
+  `lookup_candidates` 里那三次 `paths.is_empty()`,`decode_beam_with_lattice`
+  变为独立算法接口(生产不再调用)。
+- 验证:随机小格 300 例对拍「可达 ⇔ beam 非空」全一致;`regression_probe
+  --format v1` 对基线 diff **0 行**;实测总表 p95 3.134 → 1.612ms、
+  max 5.847 → 2.602ms、长串 p50 2.045 → 0.622ms。
+- 规格:`docs/HANDOFF.md` ㉛;门槛 `just verify` 350 用例全绿。
+- 下一步(审查顺序):查询内去重复分配/静态音节预处理(P2),
+  随后 A1/A2 + D13。

@@ -82,6 +82,33 @@ fn window_has_vowel(window: &str) -> bool {
         ranked.retain(|c| !snap.is_blocked(&c.pinyin, &c.word));
     }
 
+    /// 格上「存在覆盖整串的读法」的**布尔**判定:O(边数)、**0 次 LM 调用**。
+    ///
+    /// codex 审查第二批 P1:生产查询在精确路径上只需要回答一个是非题
+    /// (「有没有从 0 走到 n 的边链」),旧实现为此跑一整次 beam——每个位置
+    /// 维护桶、逐个状态调 LM 打分、剪枝、再重建路径。边只向前
+    /// (`end > start`),所以从串尾往前一遍 DP 就够。
+    ///
+    /// 与 [`Self::decode_beam_with_lattice`] 的等价性(`!beam.is_empty()`
+    /// ⟺ 这里返回 true)由 `engine/tests/dag_reachability.rs` 在随机小格上
+    /// 对拍;beam 本身保留为独立算法接口(`decode_paths`/解码测试用),
+    /// 生产查询不再调它。
+    pub(super) fn lattice_reachable(lattice: &[Vec<LatticeEdge>], len: usize) -> bool {
+        let mut reach = vec![false; len + 1];
+        if let Some(slot) = reach.get_mut(len) {
+            *slot = true;
+        }
+        for pos in (0..len).rev() {
+            let Some(edges) = lattice.get(pos) else {
+                continue;
+            };
+            reach[pos] = edges
+                .iter()
+                .any(|e| reach.get(e.end).copied().unwrap_or(false));
+        }
+        reach.first().copied().unwrap_or(false)
+    }
+
     /// 后向 DP(A3):`result[pos]` = 从 `pos` 到串尾的最优补全分
     /// (log10 域,越大越好);不可达串尾的位置为 `f32::NEG_INFINITY`。
     ///
