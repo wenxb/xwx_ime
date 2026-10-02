@@ -751,8 +751,25 @@ impl MmapDict {
             return Ok(Vec::new());
         }
         // 按长度降序:字面音节分支贪心最长优先(与旧 segment_input 一致)。
+        // **按首字母分桶**(纯性能优化,输出逐字节不变):
+        // `syllable_matches` 要求 `rest[..syl.len()] == syl`(或 üe 归一后相等),
+        // 首字节不同的音节**永远不可能匹配**,而它现在每个节点都要把整张
+        // 音节表(~410 条)试一遍。分桶后每个节点只试同首字母的那十几条,
+        // 匹配成功的**顺序**(长度降序)与原来完全一致 ⇒ 收集顺序、
+        // `MAX_MIXED_COLLECT` 截断点、结果全都逐字节不变。
         let mut by_len: Vec<&'static str> = table.to_vec();
         by_len.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        let by_first: [Vec<&'static str>; 26] = {
+            let mut b: [Vec<&'static str>; 26] = std::array::from_fn(|_| Vec::new());
+            for s in &by_len {
+                if let Some(i) = s.as_bytes().first().and_then(|c| c.checked_sub(b'a')) {
+                    if (i as usize) < 26 {
+                        b[i as usize].push(s);
+                    }
+                }
+            }
+            b
+        };
 
         let mut best: std::collections::HashMap<(String, String), u64> =
             std::collections::HashMap::new();
@@ -774,7 +791,8 @@ impl MmapDict {
             let mut dfs = MixedDfs {
                 dict: self,
                 input: input.as_bytes(),
-                by_len,
+                by_first: &by_first,
+                by_all: &by_len,
                 out: &mut best,
                 budget: MAX_MIXED_DFS_STEPS,
                 threshold: 0,
@@ -802,7 +820,8 @@ impl MmapDict {
             let mut dfs = MixedDfs {
                 dict: self,
                 input: input.as_bytes(),
-                by_len: Vec::new(),
+                by_first: &EMPTY_FIRST,
+                by_all: &[],
                 out: &mut best,
                 budget: MAX_MIXED_DFS_STEPS,
                 threshold: partial_threshold,
@@ -838,7 +857,17 @@ impl MmapDict {
             .into_iter()
             .map(|((word, py), freq)| Candidate::new(word, py, freq))
             .collect();
-        out.sort_by_key(|c| std::cmp::Reverse(c.freq));
+        // **确定性排序**:同频词必须按 (词, 全拼) 定序,不能依赖 `HashMap`
+        // 的迭代顺序——那是每个进程随机化的,实测同一二进制两次运行,
+        // `sh` 第 28 名「谁」的拼音在 `shei`/`shui` 之间跳、`zh` 的简拼层
+        // 整段尾序都不同。对拍工具与「同一个词不该在两次重启间换位置」
+        // 都要求这里是全序。
+        out.sort_by(|a, b| {
+            b.freq
+                .cmp(&a.freq)
+                .then_with(|| a.word.cmp(&b.word))
+                .then_with(|| a.pinyin.cmp(&b.pinyin))
+        });
         // **按词频截断**(而不是收集期先到先得):上限仍是 MAX_LOOKUP_RESULTS,
         // 但留下的必须是分最高的那批。实测 `meiy`:旧口径 500 条里没有
         // 「没有」(词频 504685,应为第 1),因为它的枚举分支排在靠后位置,
@@ -867,23 +896,29 @@ impl MmapDict {
             }
             let prefix = syls.join(" ");
             let pb = prefix.as_bytes();
-            let start = self.lower_bound(pb)?;
-            for i in start..self.pinyin_count {
-                let rec = self.record(i)?;
-                let key = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
-                if !key.starts_with(pb) {
-                    break;
-                }
-                // key == prefix(完整命中,仅当无残余声母时收录)
-                if key.len() == pb.len() {
-                    if tail.is_empty() {
+            // **纯性能优化(输出逐字节不变)**:
+            //
+            // ① `tail` 为空(整串就是这条切分)时,下面那个前缀区间扫描里
+            //    唯一会被收下的 key 就是**恰好等于 prefix** 的那一条——更长的
+            //    key 全部被 `if tail.is_empty() { continue; }` 丢掉。直接二分
+            //    取那一条即可,不必把「jin t*」整段扫一遍。
+            // ② `tail` 非空时,收下的 key 必须形如 `prefix + ' ' + <后续音节>`,
+            //    且后续音节的**首字节等于 tail 首字节**(第 908-913 行的判据)。
+            //    于是扫描可以直接从 `prefix + ' ' + tail[0]` 处起,跳过前面
+            //    成千上万条首字母不对的 key(它们原本也只会 `continue`)。
+            if tail.is_empty() {
+                let i = self.lower_bound(pb)?;
+                if i < self.pinyin_count {
+                    let rec = self.record(i)?;
+                    let key = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+                    if key == pb {
+                        let py = std::str::from_utf8(key)
+                            .map_err(|_| DictError::Corrupt("拼音不是合法文本"))?
+                            .to_owned();
                         for (word, freq) in
                             self.parse_entries(self.entries_off + rec.ent_off, rec.ent_len)?
                         {
-                            let py = std::str::from_utf8(key)
-                                .map_err(|_| DictError::Corrupt("拼音不是合法文本"))?
-                                .to_owned();
-                            let e = best.entry((word, py)).or_insert(0);
+                            let e = best.entry((word, py.clone())).or_insert(0);
                             if freq > *e {
                                 *e = freq;
                             }
@@ -892,15 +927,30 @@ impl MmapDict {
                             }
                         }
                     }
-                    continue;
                 }
-                // key 必须以 prefix + ' ' 开头才是「该前缀的更长词」
-                if key[pb.len()] != b' ' {
-                    continue;
+                continue;
+            }
+            // 收下的 key 必须形如 `prefix + ' ' + <后续音节>` 且首字节等于
+            // tail 首字节,所以**扫描区间就是 `prefix + ' ' + tail[0]` 那一小段**
+            // (keys 有序 ⇒ 同前缀的 key 连续)。上限用它做 break 条件,而不是
+            // 用 `pb`:后者会让循环把「ji o*」「ji x*」这些整段扫完再退——
+            // 它们每一条都只会在下面的判据里被丢掉。被跳过的 key 原样都是
+            // 「不满足判据」的,故输出逐字节不变。
+            let mut narrow = prefix.clone();
+            narrow.push(' ');
+            narrow.push(tail.as_bytes()[0] as char);
+            let nb = narrow.as_bytes();
+            let start = self.lower_bound(nb)?;
+            for i in start..self.pinyin_count {
+                let rec = self.record(i)?;
+                let key = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+                if !key.starts_with(nb) {
+                    break;
                 }
-                if tail.is_empty() {
-                    continue;
-                }
+                // 注意:`rest` 仍从 `pb + ' '` 之后起算(与改动前一致),
+                // `nb` 只用于**缩小扫描区间**,不参与下面的判据——否则
+                // 判据里 `rest_syls[0][0] == tb[0]` 会拿被吃掉首字母的
+                // 音节的第二个字母去比(实测 `ren` 的 `re n*` 一读少 94 条)。
                 let rest = &key[pb.len() + 1..];
                 let rest_syls: Vec<&[u8]> = rest.split(|&b| b == b' ').collect();
                 let tb = tail.as_bytes();
@@ -932,7 +982,17 @@ impl MmapDict {
             .into_iter()
             .map(|((word, py), freq)| Candidate::new(word, py, freq))
             .collect();
-        out.sort_by_key(|c| std::cmp::Reverse(c.freq));
+        // **确定性排序**:同频词必须按 (词, 全拼) 定序,不能依赖 `HashMap`
+        // 的迭代顺序——那是每个进程随机化的,实测同一二进制两次运行,
+        // `sh` 第 28 名「谁」的拼音在 `shei`/`shui` 之间跳、`zh` 的简拼层
+        // 整段尾序都不同。对拍工具与「同一个词不该在两次重启间换位置」
+        // 都要求这里是全序。
+        out.sort_by(|a, b| {
+            b.freq
+                .cmp(&a.freq)
+                .then_with(|| a.word.cmp(&b.word))
+                .then_with(|| a.pinyin.cmp(&b.pinyin))
+        });
         Ok(out)
     }
 
@@ -989,6 +1049,9 @@ fn syllable_matches(syl: &str, rest: &[u8]) -> bool {
 /// `ha` → hao),也可能碰巧是完整音节(`jin` → jing),两种都要当半音节试。
 ///
 /// 不做去重:不同 `p` 给出的前缀不同,收集区间也不同。
+/// 不持有任何音节时的空分桶(`MixedDfs` 只用 `collect` 的场景,如 T2 循环)。
+static EMPTY_FIRST: [Vec<&'static str>; 26] = [const { Vec::new() }; 26];
+
 fn partial_tail_readings(input: &str, table: &[&str]) -> Vec<(String, usize)> {
     let n = input.len();
     if n == 0 {
@@ -1083,7 +1146,9 @@ struct MixedDfs<'a> {
     /// 输入字节(上游已拒绝非 ASCII)。
     input: &'a [u8],
     /// `SYLLABLES` 按长度降序(字面分支贪心最长优先)。
-    by_len: Vec<&'static str>,
+    by_first: &'a [Vec<&'static str>; 26],
+    /// 非小写字母起点时的回落表(见 `dfs` 的注释)。
+    by_all: &'a [&'static str],
     /// 收集池:按 (词, 全拼) 去重,保留最高 freq。
     out: &'a mut std::collections::HashMap<(String, String), u64>,
     /// 剩余索引探测步数(二分迭代或读记录各 1 步),归零即停。
@@ -1286,10 +1351,15 @@ impl MixedDfs<'_> {
         }
         let rest = &input[pos..];
 
-        // (a) 字面音节分支(全拼)。
-        let n = self.by_len.len();
-        for idx in 0..n {
-            let s: &'static str = self.by_len[idx];
+        // (a) 字面音节分支(全拼)。只试与 `rest` 首字节同桶的音节:
+        // 首字节不同的音节不可能通过 `syllable_matches`,跳过它们不影响
+        // 任何匹配结果,也不改变匹配顺序(桶内仍是长度降序)。
+        let bucket: &[&'static str] = match rest.first().and_then(|c| c.checked_sub(b'a')) {
+            Some(i) if (i as usize) < 26 => &self.by_first[i as usize],
+            // 非小写字母起点:回落到整表(与分桶前完全一致的行为)。
+            _ => self.by_all,
+        };
+        for s in bucket {
             let sb = s.as_bytes();
             if !syllable_matches(s, rest) {
                 continue;
