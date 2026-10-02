@@ -1,0 +1,249 @@
+//! 主索引(`dict.bin`)的内存映射与索引原语:头部解析、二分定位、
+//! 记录/词串读取,以及 [`Dictionary`] 的实现。
+
+use std::cmp::Ordering;
+use std::sync::OnceLock;
+use std::fs::File;
+use std::path::Path;
+
+use memmap2::Mmap;
+
+use crate::candidate::Candidate;
+
+use super::{read_u16, read_u32, read_u64, AbbrevIndex, DictError, Dictionary, MmapDict,
+            MmapRecord, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN, MMAP_MAGIC, MMAP_RECORD_LEN,
+            MMAP_VERSION};
+
+impl MmapDict {
+    /// 打开并 mmap 映射一个 dict.bin 词库文件。
+    ///
+    /// 校验魔数与版本，损坏文件返回 [`DictError::Corrupt`]。
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DictError> {
+        let file = File::open(path)?;
+        let map = unsafe { Mmap::map(&file)? };
+        Self::from_bytes(map)
+    }
+
+    /// 从已映射字节解析头部（独立成函数便于单测构造坏文件）。
+    fn from_bytes(map: Mmap) -> Result<Self, DictError> {
+        let bytes: &[u8] = &map;
+        if bytes.len() < MMAP_HEADER_LEN {
+            return Err(DictError::Corrupt("文件过短，不是完整 dict.bin"));
+        }
+        if bytes.get(0..8) != Some(MMAP_MAGIC.as_slice()) {
+            return Err(DictError::Corrupt("魔数不匹配，不是 dict.bin 词库"));
+        }
+        if read_u32(bytes, 8)? != MMAP_VERSION {
+            return Err(DictError::Corrupt("dict.bin 版本不兼容"));
+        }
+        // 头部字段先全部读出再构造结构体：`bytes` 借用 `map`，
+        // 与字段读取（借用）同一表达式中不能再移动 `map`。
+        let pinyin_count = read_u64(bytes, 12)? as usize;
+        let total_entries = read_u64(bytes, 20)?;
+        let records_off = read_u64(bytes, 28)? as usize;
+        let strings_off = read_u64(bytes, 36)? as usize;
+        let entries_off = read_u64(bytes, 44)? as usize;
+        Ok(Self {
+            map,
+            pinyin_count,
+            total_entries,
+            records_off,
+            strings_off,
+            entries_off,
+            total_freq: OnceLock::new(),
+            abbrev: None,
+        })
+    }
+
+    /// 装配简拼副索引(构建脚本 `scripts/abbrev_to_bin.py` 的产物)。
+    ///
+    /// 参照 `ImeEngine::new_with_lm` 对缺失 LM 的处理:副索引缺失/损坏时
+    /// 仅记录 warning 并置 `None`,**绝不 panic**——此时简拼查询返回空,
+    /// 引擎自然退回精确查询路径,不会静默变成空词库。
+    pub fn with_abbrev<P: AsRef<Path>>(mut self, path: P) -> Self {
+        match AbbrevIndex::open(path.as_ref()) {
+            Ok(idx) => self.abbrev = Some(idx),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.as_ref().display(),
+                    "简拼副索引打开失败,简拼查询退化为空(精确查询不受影响)");
+            }
+        }
+        self
+    }
+
+    /// 是否已装配简拼副索引(测试与诊断用)。
+    pub fn has_abbrev(&self) -> bool {
+        self.abbrev.is_some()
+    }
+
+    /// 词条总数（调试/统计用）。
+    pub fn count(&self) -> u64 {
+        self.total_entries
+    }
+
+    /// 边界检查的切片：越界一律返回损坏错误（不 panic）。
+    pub(super) fn slice(&self, off: usize, len: usize) -> Result<&[u8], DictError> {
+        let end = off.checked_add(len).ok_or(DictError::Corrupt("区段长度溢出"))?;
+        self.map.get(off..end).ok_or(DictError::Corrupt("区段越界"))
+    }
+
+    /// 第 `i` 条拼音索引记录（数组内按拼音字节序排序）。
+    pub(super) fn record(&self, i: usize) -> Result<MmapRecord, DictError> {
+        let b = self.slice(self.records_off + i * MMAP_RECORD_LEN, MMAP_RECORD_LEN)?;
+        Ok(MmapRecord {
+            str_off: read_u32(b, 0)? as usize,
+            str_len: read_u16(b, 4)? as usize,
+            ent_off: read_u32(b, 6)? as usize,
+            ent_len: read_u16(b, 10)? as usize,
+        })
+    }
+
+    /// 精确查找：返回拼音 key 对应的索引记录；不存在返回 `None`。
+    pub(super) fn find(&self, pinyin: &str) -> Result<Option<MmapRecord>, DictError> {
+        let key = pinyin.as_bytes();
+        let (mut lo, mut hi) = (0usize, self.pinyin_count);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let rec = self.record(mid)?;
+            // str_off 是相对拼音区的偏移，需加区基址
+            let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            match s.cmp(key) {
+                Ordering::Less => lo = mid + 1,
+                Ordering::Greater => hi = mid,
+                Ordering::Equal => return Ok(Some(rec)),
+            }
+        }
+        Ok(None)
+    }
+
+    /// 前缀查找的下界：第一条以 `prefix` 开头的记录下标。
+    pub(super) fn lower_bound(&self, prefix: &[u8]) -> Result<usize, DictError> {
+        let (mut lo, mut hi) = (0usize, self.pinyin_count);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let rec = self.record(mid)?;
+            let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            if s < prefix {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(lo)
+    }
+
+    /// 解析一个词块（word_len:u8 + word + freq:u32 LE，按 freq 降序）。
+    /// 某个 key 的**最高词频**(词块里第一个词条的 freq)。
+    ///
+    /// 词块内 freq 降序(与 `abbrev.bin` 同约定,8 个 key 抽样实测非升序,
+    /// 含「一」130 条的大 key),所以这就是该 key 的天花板。
+    /// 只读头部几字节、**不做任何分配**——DFS 拿它做「整 key 跳过」的
+    /// 分支界限(见 [`MixedDfs::collect`]),每次跳过一个 key 省下的是
+    /// 几十次词条解析 + 字符串分配。
+    pub(super) fn first_entry_freq(&self, ent_off: usize, ent_len: usize) -> Result<u64, DictError> {
+        let block = self.slice(ent_off, ent_len)?;
+        let wl = *block.first().ok_or(DictError::Corrupt("词块为空"))? as usize;
+        Ok(read_u32(block, 1 + wl)? as u64)
+    }
+
+    pub(super) fn parse_entries(&self, ent_off: usize, ent_len: usize) -> Result<Vec<(String, u64)>, DictError> {
+        let block = self.slice(ent_off, ent_len)?;
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        while pos < block.len() {
+            let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
+            let word_bytes = block
+                .get(pos + 1..pos + 1 + wl)
+                .ok_or(DictError::Corrupt("词块越界"))?;
+            let freq = read_u32(block, pos + 1 + wl)?;
+            let word = std::str::from_utf8(word_bytes)
+                .map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
+            out.push((word.to_owned(), freq as u64));
+            pos += 1 + wl + 4;
+        }
+        Ok(out)
+    }
+
+    /// 线性扫词条区求词频总和（约 80MB / 186 万条，仅首次调用时执行一次）。
+    pub(super) fn scan_total_freq(&self) -> u64 {
+        let bytes: &[u8] = &self.map;
+        let mut pos = self.entries_off;
+        let mut total = 0u64;
+        while pos < bytes.len() {
+            let Some(&wl) = bytes.get(pos) else { break };
+            let freq_off = pos + 1 + wl as usize;
+            let Some(freq) = bytes.get(freq_off..freq_off + 4) else { break };
+            total += u32::from_le_bytes(freq.try_into().expect("长度已校验")) as u64;
+            pos = freq_off + 4;
+        }
+        total
+    }
+
+    /// 合法单音节表(混合简拼切分用),直接返回编译进二进制的静态表。
+    ///
+    /// 音节表是**编译期静态数据**(`crate::segmenter::SYLLABLES`,410 项),
+    /// 这里只是零开销转发,**混合简拼不再依赖副索引存在**(此前音节表
+    /// 从 abbrev.bin v2 音节表段读,`MmapDict::open()` 不挂副索引时混合
+    /// 简拼会退化为空)。词库实际用到 412 个音节,静态表覆盖其中 410 个;
+    /// 缺失的 `fiao`(方言)/`tei`(拟声)是**刻意取舍**——把它们加进
+    /// `SYLLABLES` 会动主切分路径、影响全拼行为,故这两个音节的混合简拼
+    /// 切分不支持。
+    ///
+    /// 绝不能回退到「懒扫描主索引 173 万 key 建表」:那次扫描实测约
+    /// 840ms,且首次扫描发生在**按键处理路径上**(IBus 同步等待),不可接受。
+    pub(super) fn syllable_table(&self) -> &'static [&'static str] {
+        crate::segmenter::SYLLABLES
+    }
+
+}
+
+impl Dictionary for MmapDict {
+    fn lookup(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError> {
+        let Some(rec) = self.find(pinyin)? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        // ent_off 是相对词区的偏移，需加区基址
+        for (word, freq) in self.parse_entries(self.entries_off + rec.ent_off, rec.ent_len)? {
+            out.push(Candidate::new(word, pinyin, freq));
+        }
+        Ok(out)
+    }
+
+    /// 前缀联想：拼音数组按字节序排好，`[下界, 首个不匹配)` 就是答案区间。
+    fn lookup_prefix(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError> {
+        self.lookup_prefix_limited(pinyin, MAX_LOOKUP_RESULTS as usize)
+    }
+
+    fn lookup_prefix_limited(
+        &self,
+        pinyin: &str,
+        limit: usize,
+    ) -> Result<Vec<Candidate>, DictError> {
+        let pb = pinyin.as_bytes();
+        let limit = limit.min(MAX_LOOKUP_RESULTS as usize);
+        let start = self.lower_bound(pb)?;
+        let mut out: Vec<Candidate> = Vec::new();
+        for i in start..self.pinyin_count {
+            let rec = self.record(i)?;
+            let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            if !s.starts_with(pb) {
+                break;
+            }
+            let py = std::str::from_utf8(s)
+                .map_err(|_| DictError::Corrupt("拼音不是合法文本"))?
+                .to_owned();
+            for (word, freq) in self.parse_entries(self.entries_off + rec.ent_off, rec.ent_len)? {
+                out.push(Candidate::new(word, py.clone(), freq));
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn total_freq(&self) -> Result<u64, DictError> {
+        Ok(*self.total_freq.get_or_init(|| self.scan_total_freq()))
+    }
+}
