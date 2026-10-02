@@ -25,10 +25,27 @@ impl InputSession {
             // 字母继续延长原文。进串后用完整串重判(见 refresh);
             // 识别态下候选窗只有一条「原样上屏」回声候选,拼音候选
             // 消失——这是 recognizer 生效的可观测标志。
+            //
+            // **数字与大写字母也要在这里接住**(codex 审查 D7):ibus 层
+            // 先把它们折成 `Select`/`Verbatim`(见 `translate_keyval`),
+            // 若只挡 `Char`,逐键打 `http://x1.com` 时 `1` 会变成「选第 1 个
+            // 候选」(就是那条回声)从而**提前提交地址**;`http://x/A` 的 `A`
+            // 会当成「大写结束组合」。识别态下它们只是原文里的字符。
             InputEvent::Char(c) if self.recognized.is_some() && c.is_ascii() && !c.is_ascii_control() => {
-                self.pinyin.insert(self.caret, c);
-                self.caret += c.len_utf8();
-                self.refresh()?;
+                self.insert_recognized_char(c)?;
+                Ok(SessionOutput::Updated(self.update()))
+            }
+            InputEvent::Select(n) if self.recognized.is_some() => {
+                // `Select(0)` 是键盘 `0`(第十个候选只在正常拼音态有意义),
+                // `Select(k)` 是键盘 `k`。
+                let c = if n == 0 { '0' } else { (b'0' + n) as char };
+                self.insert_recognized_char(c)?;
+                Ok(SessionOutput::Updated(self.update()))
+            }
+            InputEvent::Verbatim(c)
+                if self.recognized.is_some() && c.is_ascii() && !c.is_ascii_control() =>
+            {
+                self.insert_recognized_char(c)?;
                 Ok(SessionOutput::Updated(self.update()))
             }
 
@@ -432,6 +449,16 @@ impl InputSession {
             }
             InputEvent::DeleteCandidate => Ok(SessionOutput::Noop),
         }
+    }
+
+    /// 识别态(邮箱/网址)的**原文直通**:把字符插到 caret 处并重判。
+    ///
+    /// `Char`/`Select`(数字)/`Verbatim`(大写)三条入口共用,保证
+    /// 「识别态下任何可打印字符都只是原文的一部分」(codex 审查 D7)。
+    fn insert_recognized_char(&mut self, c: char) -> Result<(), EngineError> {
+        self.pinyin.insert(self.caret, c);
+        self.caret += c.len_utf8();
+        self.refresh()
     }
 
     /// 重新计算候选列表，并把高亮/页码收敛到合法范围。

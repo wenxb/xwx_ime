@@ -438,3 +438,72 @@ fn recognized_state_char_fallthrough_when_not_recognized() {
     assert!(matches!(out, SessionOutput::Noop), "空闲时 @ 应透传");
     assert!(!s.is_active());
 }
+
+/// 识别态下**数字**必须按原文进串,不能被当成「选第 N 个候选」(codex 审查 D7)。
+///
+/// `http://x1.com` 的 `1` 在 ibus 层被折成 `Select(1)`;旧实现接不住,
+/// 于是它选中那条回声候选 → **地址被提前提交**。
+#[test]
+fn digit_inside_a_recognized_url_extends_the_text_instead_of_selecting() {
+    let mut s = session_with_dict();
+    for c in "http://x".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    assert!(s.recognized.is_some(), "`http://x` 应已进识别态");
+    let out = s.handle(InputEvent::Select(1)).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Updated(_)),
+        "识别态下数字只该延长原文,实际 {out:?}"
+    );
+    assert_eq!(s.pinyin(), "http://x1", "数字要进串");
+    let out = s.handle(InputEvent::Select(0)).expect("不应失败");
+    assert!(matches!(out, SessionOutput::Updated(_)), "`0` 同样是原文字符");
+    assert_eq!(s.pinyin(), "http://x10");
+    // 继续打字仍然在识别态(没被提前提交)
+    for c in ".com".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    assert_eq!(s.pinyin(), "http://x10.com");
+    assert!(s.recognized.is_some());
+}
+
+/// 识别态下**大写字母**必须按原文进串,不能结束组合(codex 审查 D7)。
+#[test]
+fn capital_letter_inside_a_recognized_url_extends_the_text() {
+    let mut s = session_with_dict();
+    for c in "http://x/".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    assert!(s.recognized.is_some(), "`http://x/` 应已进识别态");
+    let out = s.handle(InputEvent::Verbatim('A')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Updated(_)),
+        "识别态下大写只该延长原文,实际 {out:?}"
+    );
+    assert_eq!(s.pinyin(), "http://x/A", "大写及其大小写都要保留");
+}
+
+/// 非识别态行为不变:数字仍是数字选词,大写仍结束组合(codex 审查 D7 的回归线)。
+#[test]
+fn digit_select_and_capital_keep_their_normal_meaning_while_composing() {
+    let mut s = session_with_dict();
+    for c in "nihao".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    assert!(s.recognized.is_none());
+    let out = s.handle(InputEvent::Select(1)).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "你好"),
+        "普通拼音态 `1` 仍是选第 1 个候选: {out:?}"
+    );
+
+    let mut s = session_with_dict();
+    for c in "nihao".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "你好G"),
+        "普通拼音态大写仍是「上屏候选 + 大写字母」: {out:?}"
+    );
+}
