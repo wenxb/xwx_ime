@@ -1283,3 +1283,31 @@ final pinyin="ianqubeij" active=true
 那里),剩余 `ianqubeij` 连一个真实候选都没有(只有回声候选),要再按一次空格
 才上屏。这是「混合简拼串没法一次出」的现场记录,也是后续「简拼读法进格 +
 整句候选」提案要动的地方。
+
+## ㉙ 性能验收入口 + 启动预热(2026-10-03)
+
+codex 审查第二批第一项:在**生产装配**上量逐键延迟,并报分位与超线输入。
+
+- **入口**:`crates/xwx_engine/examples/perf_probe.rs`(16 个按键脚本:全拼/混合简拼/
+  纯简拼/容错/分隔符/翻页/数字/点击/高亮/退格/清空);装配顺序与 `src/main.rs` 一致
+  (mmap 词库 + 简拼副索引 + 万象 `.gram` + 用户层),**数据缺失/损坏直接报错不降级**;
+  按键走 `InputSession::handle`(与 `regression_probe` 的 C 段同一条路径),
+  一个样本 = 一次按键里引擎做的全部工作,**不含 D-Bus IPC**。口径:冷启动首键单列、
+  不参与判定;稳态按场景给 p50/p95/max(最近秩);任一场景稳态 p95 超过
+  `--limit-ms`(默认 12)非零退出;`just perf` 跑 5 轮。
+- **它当场抓到的真问题**:新进程里第一次走到**混合/简拼形状**的查询要付 ~26ms
+  (`full:weishenme` 第 4 键 = `weis`),此后同形状 <2ms。把脚本顺序一换尖峰就消失,
+  但换 3 个新进程每次都能复现——是「进程内首次触碰」而不是调度抖动。
+  预热前:总表 max **25.929ms**、超线样本 1 个;预热后:max **5.847ms**、超线 0 个
+  (`weishenme` max 26.129ms → 1.387ms)。
+- **修法**:`ImeEngine::prewarm(self: &Arc<Self>)`
+  (`crates/xwx_engine/src/engine/api.rs`)——**只读**:7 条代表性
+  `lookup_candidates` + 一段「只打字母、不按空格」的会话(会话路径另有一层候选表
+  装配的懒开销)。`src/main.rs` 在 `Arc::new` 之后
+  `std::thread::spawn(move || warm.prewarm())`,不挡启动。不变式由
+  `crates/xwx_engine/src/engine/tests/prewarm.rs::prewarm_is_read_only` 钉住:
+  查询结果逐条相同 + `dirty_count/unigram_len/entry_len/blocklist_len` 全为 0
+  (预热偷学一次,用户模型里就会多出没人打过的词)。
+- **门槛**:`just verify` **346 用例全绿**(278 engine + 6 ibus + 9 bin + 53 集成),
+  clippy `-D warnings` 无输出;`regression_probe` 不受影响(预热只读、且不由探针调用),
+  `tests/baselines/regression_v2.txt` 未变。

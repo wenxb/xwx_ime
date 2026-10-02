@@ -42,6 +42,11 @@ check:
 # test + check 一把过（提交前跑这个）
 verify: check test
 
+# 逐键性能验收(生产装配:真词库 + 简拼副索引 + 万象 .gram + 用户层内存态)
+# 任一场景稳态 p95 超过 12ms 时非零退出;max 与超线样本照实打印。
+perf:
+    cargo run --release --offline -p xwx_engine --example perf_probe -- --repeat 5
+
 # dev：前台跑引擎（debug，日志直接打在终端）。一个总线名只能一个 owner：
 # daemon 按 component XML 拉起过 release 引擎时要先让它让位，否则 NameTaken；
 # 让出来后 daemon 会直接改用这个实例（实测有效）。

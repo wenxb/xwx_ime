@@ -219,6 +219,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(path = %user_lm_path.display(), "用户学习模型已接入");
     let engine = Arc::new(engine);
 
+    // 首键预热:进程内第一次走到混合/简拼形状要付 ~26ms(见
+    // `ImeEngine::prewarm` 的实测数字),放后台线程先付掉,不挡启动。
+    // 只读预热,不学习、不碰用户模型文件。
+    {
+        let warm = Arc::clone(&engine);
+        std::thread::spawn(move || warm.prewarm());
+    }
+
     // —— 连接总线 ——
     //
     // 注意：session bus（`$DBUS_SESSION_BUS_ADDRESS`）总是可连的，连接成功

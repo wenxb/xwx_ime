@@ -28,3 +28,4 @@ mod abbrev;
 mod abbrev_quota;
 mod personalization;
 mod completion;
+mod prewarm;

@@ -985,3 +985,13 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
   clippy `-D warnings` 无输出。
 - **顺手记下的一条现场数据**:`womenjintianqubeij` 按一次空格只确认到「我们今天」
   (covered=9),剩下 `ianqubeij` 只有回声候选——「混合简拼一次出整句」的缺口在此。
+
+## 六、codex 审查第二批:性能验收入口 + 启动预热
+
+- 审查原文要求「真正的查询/会话/D-Bus 性能入口(逐键 p50/p95/max,≤12ms 且报超线输入)」。
+  本轮先做**引擎/会话层**:`examples/perf_probe.rs` + `just perf`——装配与生产一致、
+  数据缺失不降级、p95 超线非零退出(D-Bus 层入口另做)。
+- 探针立刻抓到 `weis` 形状的首触 ~26ms(超过 12ms 预算 2 倍多),
+  `ImeEngine::prewarm` 把它压掉(25.929ms → 5.847ms max,超线样本 1 → 0),
+  并配只读不变式单测(预热不得学习/造词/改屏蔽表)。
+- 门槛:`just verify` 346 用例全绿、clippy 干净;详见 `docs/HANDOFF.md` ㉙。

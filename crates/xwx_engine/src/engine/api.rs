@@ -80,6 +80,34 @@ impl ImeEngine {
     /// 模型对任何输入都有兜底分),`user` 是用户层(加载/持久化由
     /// [`UserLM`] 自己负责)。打分混合见 [`MixedLM`];调用方
     /// (beam/兜底/会话)不需要任何改动——这正是枚举分发的意义。
+    /// 启动预热:把「进程内第一次走到某个查询形状」的一次性成本挪到空闲时。
+    ///
+    /// `examples/perf_probe.rs` 实测:新进程里第一次走到**混合/简拼形状**
+    /// 的查询要付 ~26ms(超过项目 12ms 逐键预算),此后同形状 <2ms;
+    /// 先空跑一遍即可完全消除(26.13ms → 1.41ms)。生产在装配完成后用
+    /// 后台线程调用这里,别让用户的前几个按键替我们付这笔钱。
+    ///
+    /// **只读**:只调 `lookup_candidates`,加一段「只打字母、不按空格」
+    /// 的会话(会话路径另有一层候选表装配的懒开销)。不提交、不学习、
+    /// 不造词、不改屏蔽表,因此可以随时重复调用。
+    pub fn prewarm(self: &Arc<Self>) {
+        let ctx = LmContext::empty();
+        for probe in [
+            "nihao",     // 全拼(短)
+            "weishenme", // 全拼(长)
+            "weis",      // 半音节/混合形状
+            "zhongg",    // 混合简拼
+            "ns", "nh",  // 纯简拼
+            "nihoa",     // 容错
+        ] {
+            let _ = self.lookup_candidates(probe, &ctx);
+        }
+        let mut session = self.create_session();
+        for ch in "womenjintianqubeixian".chars() {
+            let _ = session.handle(InputEvent::Char(ch));
+        }
+    }
+
     pub fn with_user_lm(mut self, user: UserLM) -> Self {
         let base = std::mem::replace(&mut self.lm, LmStore::Bigram(BigramLM::new()));
         self.lm = LmStore::Mixed(MixedLM::new(base, user));
