@@ -120,6 +120,153 @@ pub(crate) fn canonical_syllable(syl: &str) -> &str {
     }
 }
 
+/// 容错解码用的「音节级 ≤1 次编辑」索引:输入窗口 → 可达的规范音节 + 代价。
+///
+/// # 依据(业界标准做法,不是自创)
+///
+/// - 输入错误只有四类:**插入 / 删除 / 替换 / 调换相邻字母**(Cooper 1983);
+/// - 80% 的输入错误只有**一次**编辑操作,阈值取 2 就能高覆盖地找到正确
+///   拼音(Damerau 1964)——映射到本项目就是「单个音节内 ≤1 次编辑」;
+/// - 代价口径照**噪声信道** `-log10 P(编辑操作)`(CHIME, IJCAI 2011;
+///   Joint Graph Model, ACL 2014):混淆对的概率直接复用
+///   [`crate::corrector::COMMON_CONFUSION_PAIRS`] 那一张表(全项目只有一份
+///   「哪些字母容易混」的口径),见 [`substitution_penalty`]。
+///
+/// # 为什么是查表而不是 trie
+///
+/// CHIME 用 trie + 增量编辑距离搜索,因为它的词表是百万级拼音串。本项目的
+/// **音节表只有 410 项且编译进二进制**,把每个音节的 1-编辑变体预先展开成
+/// 一张 map(约 10 万条、首次使用时懒构建)更简单、更确定,查询退化成一次
+/// 哈希查找。真正贵的是随后的词库查询,由 `MAX_CHAINS_PER_START` 与容错
+/// 编辑预算一起封顶。
+pub(crate) struct TypoSyllables {
+    map: HashMap<String, Vec<(&'static str, f32)>>,
+}
+
+/// 默认替换概率(即「两个毫不相干的字母」):代价 2.0。
+const TYPO_P_SUBST_DEFAULT: f64 = 0.01;
+/// 方言型插入/删除概率(`z/c/s` 后多打/漏打 `h`、`n` 后多打/漏打 `g`)。
+const TYPO_P_DIALECT: f64 = 0.05;
+/// 一般插入(用户漏打一个字母)概率。
+const TYPO_P_INSERT_DEFAULT: f64 = 0.005;
+/// 一般删除(用户多打一个字母)概率:比漏打略低(多打的字母通常看得见)。
+const TYPO_P_DELETE_DEFAULT: f64 = 0.004;
+/// 调换相邻两字母的概率——单次编辑里最常见的一类(`shenem`→`shen me`)。
+const TYPO_P_TRANSPOSE: f64 = 0.03;
+
+/// 把概率换算成对数域的**加性惩罚**(越小越像用户本意)。
+fn penalty(p: f64) -> f32 {
+    -((p.log10()) as f32)
+}
+
+/// 单字母替换的代价:命中只含单字符的混淆对就用它的权重,否则用默认概率。
+fn substitution_penalty(a: char, b: char) -> f32 {
+    for pair in crate::corrector::COMMON_CONFUSION_PAIRS {
+        let (mut x, mut y) = (pair.a.chars(), pair.b.chars());
+        if let (Some(x), Some(y), None, None) = (x.next(), y.next(), x.next(), y.next()) {
+            if (x, y) == (a, b) || (x, y) == (b, a) {
+                return penalty(pair.weight.max(0.001) as f64).max(0.1);
+            }
+        }
+    }
+    penalty(TYPO_P_SUBST_DEFAULT)
+}
+
+/// 插入一个字母的代价:`h` 插在 `z/c/s` 后、`g` 插在 `n` 后算方言型。
+fn insertion_penalty(inserted: char, prev: Option<char>) -> f32 {
+    let dialect = matches!((prev, inserted), (Some('z' | 'c' | 's'), 'h') | (Some('n'), 'g'));
+    if dialect {
+        penalty(TYPO_P_DIALECT)
+    } else {
+        penalty(TYPO_P_INSERT_DEFAULT)
+    }
+}
+
+/// 吃掉 `len` 个无法解释的字母(用户多打了这些字母)的代价。
+///
+/// 按「一般删除」概率**线性累加**,不给折扣:多打两个字母本来就比多打
+/// 一个罕见得多,折扣会让长乱码段也变得「便宜」。
+pub(crate) fn gap_cost(len: usize) -> f32 {
+    penalty(TYPO_P_DELETE_DEFAULT) * len as f32
+}
+
+/// 删除一个字母的代价:与插入同源(`zh`→`z`、`ang`→`an` 都是方言型)。
+fn deletion_penalty(deleted: char, prev: Option<char>) -> f32 {
+    let dialect = matches!((prev, deleted), (Some('z' | 'c' | 's'), 'h') | (Some('n'), 'g'));
+    if dialect {
+        penalty(TYPO_P_DIALECT)
+    } else {
+        penalty(TYPO_P_DELETE_DEFAULT)
+    }
+}
+
+impl TypoSyllables {
+    /// 懒构建的全局实例(首次容错查询时展开,正常打字一次都不付这个成本)。
+    fn get() -> &'static TypoSyllables {
+        static INSTANCE: std::sync::OnceLock<TypoSyllables> = std::sync::OnceLock::new();
+        INSTANCE.get_or_init(Self::build)
+    }
+
+    fn build() -> Self {
+        let mut map: HashMap<String, Vec<(&'static str, f32)>> = HashMap::new();
+        let mut push = |window: String, syl: &'static str, cost: f32| {
+            let slot = map.entry(window).or_default();
+            // 同一窗口可能有多条路径到达同一音节(如「少一个字母」既能解释成
+            // 删除、也能解释成调换),只保留**代价最小**的那条。
+            match slot.iter_mut().find(|(s, _)| *s == syl) {
+                Some((_, c)) => *c = c.min(cost),
+                None => slot.push((syl, cost)),
+            }
+        };
+        for &syl in SYLLABLES {
+            let chars: Vec<char> = syl.chars().collect();
+            // 替换
+            for (i, &orig) in chars.iter().enumerate() {
+                for c in 'a'..='z' {
+                    if c == orig {
+                        continue;
+                    }
+                    let mut v = chars.clone();
+                    v[i] = c;
+                    push(v.iter().collect(), syl, substitution_penalty(orig, c));
+                }
+            }
+            // 插入(用户漏打了一个字母)
+            for i in 0..=chars.len() {
+                for c in 'a'..='z' {
+                    let mut v = chars.clone();
+                    v.insert(i, c);
+                    push(v.iter().collect(), syl, insertion_penalty(c, i.checked_sub(1).map(|j| chars[j])));
+                }
+            }
+            // 删除(用户多打了一个字母)
+            for i in 0..chars.len() {
+                let mut v = chars.clone();
+                v.remove(i);
+                push(v.iter().collect(), syl, deletion_penalty(chars[i], i.checked_sub(1).map(|j| chars[j])));
+            }
+            // 调换相邻两字母
+            for i in 0..chars.len().saturating_sub(1) {
+                let mut v = chars.clone();
+                v.swap(i, i + 1);
+                push(v.iter().collect(), syl, penalty(TYPO_P_TRANSPOSE));
+            }
+        }
+        Self { map }
+    }
+
+    /// 查一个输入窗口(未被 `'` 打断的一段字母)的容错候选。
+    ///
+    /// 返回空 = 这个窗口不像任何音节的 1-编辑变体(调用方据此放弃这条弧)。
+    pub(crate) fn lookup(window: &str) -> &'static [(&'static str, f32)] {
+        Self::get()
+            .map
+            .get(window)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+}
+
 /// 拼音切分器：持有一张音节集合，提供查音节与 DP 切分。
 #[derive(Debug, Clone, Default)]
 pub struct Segmenter {
@@ -137,6 +284,35 @@ impl Segmenter {
     /// 判断一个字符串是否是合法音节（`lue`/`nue` 按 üe 算合法）。
     pub fn is_syllable(&self, s: &str) -> bool {
         self.syllables.contains(canonical_syllable(s))
+    }
+
+    /// 整串能否**完整**切成音节(布尔 DP,O(n·6),不枚举切法)。
+    ///
+    /// 与 [`Self::segment`] 的区别是成本:`segment` 会枚举**所有**切法
+    /// (预算 4096),长串上徒增开销;这里只回答「可切 / 不可切」,用来决定
+    /// 要不要启用容错解码(见 `ImeEngine::lookup_candidates` 的门槛)。
+    pub fn is_fully_segmentable(&self, input: &str) -> bool {
+        if input.is_empty() || !input.is_ascii() {
+            return false;
+        }
+        let bytes = input.as_bytes();
+        let n = bytes.len();
+        // reachable[i] = input[..i] 能完整切成音节。
+        let mut reachable = vec![false; n + 1];
+        reachable[0] = true;
+        for i in 0..n {
+            if !reachable[i] {
+                continue;
+            }
+            let max_len = (n - i).min(MAX_SYLLABLE_LEN);
+            for len in 1..=max_len {
+                let syl = canonical_syllable(&input[i..i + len]);
+                if self.syllables.contains(syl) {
+                    reachable[i + len] = true;
+                }
+            }
+        }
+        reachable[n]
     }
 
     /// 返回 `input` 的**所有**合法音节切分。
@@ -277,5 +453,53 @@ mod tests {
     #[test]
     fn empty_input() {
         assert!(segs("").is_empty());
+    }
+
+    /// 整串可切性(容错解码的门槛):只回答「能不能整串切成音节」。
+    #[test]
+    fn fully_segmentable_flags() {
+        let s = Segmenter::new();
+        assert!(s.is_fully_segmentable("nihao"));
+        assert!(s.is_fully_segmentable("zhongguo"));
+        assert!(!s.is_fully_segmentable("nihoa"));
+        assert!(!s.is_fully_segmentable("zgr"));
+        assert!(!s.is_fully_segmentable(""), "空串不算「可切」");
+        assert!(!s.is_fully_segmentable("你好"), "非 ASCII 不算");
+    }
+
+    /// 音节级容错索引:四类编辑各给一条代表,并钉住「代价序」。
+    #[test]
+    fn typo_index_covers_four_edit_kinds_and_orders_costs() {
+        let has = |w: &str, syl: &str| {
+            TypoSyllables::lookup(w).iter().any(|(s, _)| *s == syl)
+        };
+        let cost = |w: &str, syl: &str| {
+            TypoSyllables::lookup(w)
+                .iter()
+                .find(|(s, _)| *s == syl)
+                .map(|(_, c)| *c)
+                .unwrap_or_else(|| panic!("{w} 应能容错到 {syl}"))
+        };
+        // 替换:`shenem` 里的 `mem` → men
+        assert!(has("mem", "men"), "替换:mem → men");
+        // 调换相邻字母:`shenem` 里的 `em` → me(用户报的 nihoa 同理)
+        assert!(has("em", "me"), "调换:em → me");
+        assert!(has("hoa", "hao"), "调换:hoa → hao");
+        // 删除(多打一个字母):`shanghaai` 里的 `haai` → hai
+        assert!(has("haai", "hai"), "删除:haai → hai");
+        // 插入(漏打一个字母):`jitian` 里的 `ji` → jin
+        assert!(has("ji", "jin"), "插入:ji → jin");
+        // 无关窗口没有候选(纯辅音串不该被读成音节)
+        assert!(TypoSyllables::lookup("zgr").is_empty(), "zgr 不该有容错读法");
+        assert!(TypoSyllables::lookup("zzzz").is_empty(), "zzzz 不该有容错读法");
+        // 代价序:混淆对(n/l)< 任意替换;调换比一般删除便宜。
+        assert!(
+            cost("lan", "nan") < cost("lan", "ban"),
+            "混淆对(n/l)应比任意替换便宜"
+        );
+        assert!(
+            cost("em", "me") < cost("haai", "hai"),
+            "调换(单次编辑里最常见)应比一般删除便宜"
+        );
     }
 }

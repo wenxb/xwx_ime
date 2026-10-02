@@ -193,6 +193,54 @@ const MAX_EDGE_SYLLABLES: usize = 12;
 /// 退化成指数级。
 const MAX_CHAINS_PER_START: usize = 64;
 
+/// 容错解码的编辑预算:**整条路径**最多允许的编辑次数。
+///
+/// Damerau(1964):80% 的输入错误只有一次编辑操作。文献里「阈值取 2」说的是
+/// **单个音节内**的编辑数(那是音节索引的事,见
+/// [`segmenter::TypoSyllables`],它天生只做 ≤1 次编辑);这里管的是**整条
+/// 路径**上出现几次「打错的音节」。实测目标场景(`nihoa`/`shenem`/
+/// `shanghaai`/长串多打或乱码一段)全部只需要 1 次;放到 2 会把容错格的规模
+/// 翻一倍(长串实测 12ms → 20ms+),再把 12ms 端到端门槛破掉。
+const MAX_TYPO_EDITS: u8 = 1;
+
+/// 单次「吃掉一段字母」(多打/打乱)弧的长度上限。
+const MAX_TYPO_GAP: usize = 2;
+
+/// 走「音节级 ≤1 编辑」弧的窗口**至少**这么长。
+///
+/// 1 个字母的窗口对任何单字母音节都是「1 次编辑可达」(`n` → `na`/`ne`/`ni`/
+/// `nu`…二十来个),展开它等于用最不靠谱的读法吃掉整个链预算——实测会让
+/// 同一起点的精确音节弧根本轮不到(`nihoa` 的 `ni` 边缘被挤掉)。
+/// 「少打一个字母」的真实形态窗口是 2~3 个字母,不受此限。
+const MIN_TYPO_WINDOW: usize = 2;
+
+/// 单个窗口最多展开几条容错读法(按代价升序,只留**最便宜的一条**)。
+///
+/// 一个窗口可能同时像好几个音节(`em` 像 `me`/`en`…),全展开会让格的分支
+/// 数乘起来——实测长串上容错解码从 ~5ms 涨到 23ms(破 12ms 端到端门槛),
+/// 而多出来的读法几乎都排不进候选前列。只留最便宜的一条:它是「用户最可能
+/// 打错的形状」,其余交给别的窗口/别的切法。
+const MAX_TYPO_READINGS_PER_WINDOW: usize = 1;
+
+/// 容错模式下的**每起点链预算**(精确模式用 `MAX_CHAINS_PER_START`)。
+///
+/// 容错弧在每个窗口都可能多开分支,沿用 64 会让长串的格构建成本翻几倍;
+/// 实测目标场景(`nihoa`/`shanghaai`/长串末尾多打一个字母)需要的读法都排在
+/// 前几条,12 足够而成本可控。
+/// 注意:这个值**不能**取太小——实测 12 会让长串(`womenjintianqugongyuann`)
+/// 的链在到达 `wo men jin tian` 之前就把预算花光,整句读法直接消失;真正
+/// 压住成本的是「窗口 ≤4 字母 + 只留 1 条读法 + 路径 ≤1 次编辑」三条限制。
+const MAX_TOLERANT_CHAINS_PER_START: usize = 64;
+
+
+
+/// 容错弧只对**不超过**这么长的窗口开放。
+///
+/// 替换/漏打/多打/调换的窗口都很短(`em`、`hoa`、`haai`、`mem`);再长的
+/// 窗口要么是乱码段(交给「吃掉一段字母」的空词弧),要么是和弦切分不同,
+/// 不属于单音节打错。
+const MAX_TYPO_WINDOW: usize = 4;
+
 /// 声母前缀枚举展开时,每个音节的前缀联想条数上限。
 ///
 /// 「只打了声母/半个音节」的输入(`zh`/`x`/`q`/`zhon`)不是合法音节,
@@ -239,6 +287,19 @@ struct LatticeEdge {
     /// [`expand_fuzzy_scored`] 累计的 `-log10(weight)` 惩罚,
     /// 在 beam / fallback 打分中从路径分里减去。
     fuzzy_penalty: f32,
+    /// **容错解码**的编辑惩罚(对数域加性扣分,非负)。
+    ///
+    /// 走「音节级 ≤1 次编辑」弧的边带上它(见 [`segmenter::TypoSyllables`]
+    /// 与 [`Self::build_lattice_with`]),口径是噪声信道的 `-log10 P(编辑操作)`。
+    /// 与 `fuzzy_penalty`(模糊音)分开记,是因为两者的**来源不同**:
+    /// 模糊音是「用户就是这么念的」,容错是「用户打错了」,代价表不一样。
+    typo_penalty: f32,
+    /// 空词边:容错解码里「吃掉一段无法解释的字母」的弧。
+    ///
+    /// 它没有词、没有拼音、没有 LM 转移,只有 `typo_penalty` 一项分数;
+    /// 唯一作用是让 beam 能**跨过**多打/打乱的字母继续前进。这种边绝不能
+    /// 成为候选(见 [`Self::lattice_candidates`] 的过滤)。
+    gap: bool,
 }
 
 /// beam 里一条部分路径。
@@ -560,37 +621,113 @@ impl ImeEngine {
 
         let lattice = self.build_lattice(pinyin, bounds)?;
         let paths = self.decode_beam_with_lattice(pinyin, ctx, BEAM_WIDTH, &lattice)?;
-        if paths.is_empty() {
-            // 整串还不能完整解码(首音节没打完 / 停在半音节):兜底联想,
-            // 否则 IBus 层会在打字中途发 HideLookupTable,候选窗闪一下就没。
-            let ranked = self.fallback_candidates(pinyin, ctx)?;
-            // 简拼来源合并(2):简拼候选覆盖整串,本身就是整串候选。
-            // 注意:必须在 fallback 截断**之后**合并——fallback 自己
-            // 已按 MAX_CANDIDATES 截断,若先合并再截断,简拼层(在排序
-            // 最末)会整体被截掉。合并后重排截断,简拼层得以保留
-            // (它只与同样排在末尾的兜底长尾竞争最后的候选位)。
-            // 简拼层只在「无 `'`」时合并:用户敲了 `'` 就是给了明确的
-            // 全拼切分,`lookup_abbrev`/`lookup_mixed` 会把干净串当简拼
-            // 前缀重新查出 `[xian]` 系的字(先/现/显),把刚消掉的歧义
-            // 又灌回来——含 `'` 的查询语义上不是简拼,跳过简拼层。
-            let abbrev = if bounds.is_none() {
-                self.abbrev_candidates(pinyin, ctx, &ranked)?
-            } else {
-                Vec::new()
-            };
-            let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
-            self.filter_blocked(&mut ranked);
-            if ranked.is_empty() {
-                ranked.push(Self::echo_candidate(pinyin));
+        // **容错解码的门槛(结构性)**:精确路径解不出整串,或整串根本
+        // 切不开。打对的输入两条都不成立 ⇒ 一次都不进容错分支,零开销、
+        // 零新边——这是「精确路径逐字节不退化」的结构性保证,不靠测量。
+        let tolerant_due = paths.is_empty() || !self.segmenter.is_fully_segmentable(pinyin);
+
+        // 精确路能解 → 格边候选(含整串读法);解不了 → **原有**的兜底联想。
+        // 兜底不能因为有了容错就省掉:它给的「最长可切分前缀 + 首音节」
+        // 候选正是分段上屏要选的第一步(见 commit_candidate)。
+        let ranked: Vec<Candidate> = if paths.is_empty() {
+            self.fallback_candidates(pinyin, ctx)?
+        } else {
+            self.lattice_candidates(pinyin, ctx, &lattice)?
+        };
+
+        // —— 统一尾部(精确/兜底/容错三条来源共用,顺序即改动前的顺序)——
+        // 简拼来源合并(2):简拼候选覆盖整串,本身就是整串候选。
+        // 注意:必须在 fallback 截断**之后**合并——fallback 自己
+        // 已按 MAX_CANDIDATES 截断,若先合并再截断,简拼层(在排序
+        // 最末)会整体被截掉。合并后重排截断,简拼层得以保留
+        // (它只与同样排在末尾的兜底长尾竞争最后的候选位)。
+        // 简拼层只在「无 `'`」时合并:用户敲了 `'` 就是给了明确的
+        // 全拼切分,`lookup_abbrev`/`lookup_mixed` 会把干净串当简拼
+        // 前缀重新查出 `[xian]` 系的字(先/现/显),把刚消掉的歧义
+        // 又灌回来——含 `'` 的查询语义上不是简拼,跳过简拼层。
+        let abbrev = if bounds.is_none() {
+            self.abbrev_candidates(pinyin, ctx, &ranked)?
+        } else {
+            Vec::new()
+        };
+        let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
+
+        // **第二个门槛(分数)**:已经有一个「覆盖整串」的读法、而且它比容错
+        // 读法更自信时,**不动它**。
+        //
+        // 为什么需要这道门槛:简拼/兜底层经常给出「垃圾但覆盖整串」的读法
+        // (`shenem` → 神而明之),而它恰好是简拼层——层序在容错层之下,一旦
+        // 放容错候选进来就会把它顶掉;反过来,`nih`/`zhongg` 这类**真·简拼**
+        // 输入的「你好」「中国」也是简拼层,分数很高,绝不该被容错候选挤下去。
+        // 两者结构上无法区分,用**分数**区分:容错读法要能打得过现有答案才
+        // 值得出现(`shenem`:什么 -13.7 打得过神而明之 -15.3 → 放进来;
+        // `nih`:容错垃圾普遍带编辑惩罚、打不过「你好」→ 整批丢弃)。
+        let covering_best = ranked
+            .iter()
+            .filter(|c| c.covered >= pinyin.len())
+            .map(|c| c.score)
+            .fold(f32::NEG_INFINITY, f32::max);
+        if tolerant_due {
+            // 容错格与精确格**分开建**:精确格逐字节不变,容错只在需要时
+            // 重来一次。合并后重排截断,层序(精确 → 模糊 → 简拼)照旧。
+            let tolerant_lattice = self.build_lattice_with(pinyin, bounds, true)?;
+            let tolerant_paths =
+                self.decode_beam_with_lattice(pinyin, ctx, BEAM_WIDTH, &tolerant_lattice)?;
+            if !tolerant_paths.is_empty() {
+                let tolerant = self.lattice_candidates(pinyin, ctx, &tolerant_lattice)?;
+                let tolerant_best = tolerant
+                    .iter()
+                    .map(|c| c.score)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                // 没有整串读法(-inf)⇒ 现有答案根本没解释完整串,容错值得补;
+                // 有整串读法 ⇒ 必须分数更高才动。
+                let worth_it = !covering_best.is_finite() || tolerant_best > covering_best;
+                if worth_it {
+                    let before = ranked.len();
+                    for c in tolerant {
+                        if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
+                            ranked.push(c);
+                        }
+                    }
+                    if ranked.len() != before {
+                        sort_candidates(pinyin, &mut ranked);
+                        ranked.truncate(MAX_CANDIDATES);
+                    }
+                }
             }
-            Self::fill_covered(&mut ranked, pinyin.len(), bounds);
-            return Ok(ranked);
         }
 
+        // 回声兜底必须在**屏蔽过滤之前**追加,与改动前的格边分支逐字节一致:
+        // 「候选被用户 Ctrl+Delete 全删光」时窗口要能真的收起
+        // (tests/focus_paging_delete.rs 的 `deleting_every_candidate_…` 钉着
+        // 这条);反过来把回声放到过滤之后,会让删除全部候选后仍留一个
+        // 「原样上屏」条目,窗口永远收不起来。
+        if ranked.is_empty() {
+            ranked.push(Self::echo_candidate(pinyin));
+        }
+        self.filter_blocked(&mut ranked);
+        Self::fill_covered(&mut ranked, pinyin.len(), bounds);
+        Ok(ranked)
+    }
+
+    /// 把格子**位置 0** 上的每条边打成一个候选:候选分 = 边自身的词频/LM
+    /// 分 + 该边终点的最优补全分(后向 DP)。
+    ///
+    /// 空词边(容错解码里「吃掉一段字母」的弧)不是候选,直接跳过——顺带
+    /// 保住「真实候选的 `covered` 一定 > 0」这条不变量:0 在会话层的语义是
+    /// 「未知/整串」,空词边要是漏进候选,分段上屏会一次吃掉整串。
+    ///
+    /// 精确路与容错路都调它,打分口径完全同式(差别只在格子里有哪些边)。
+    fn lattice_candidates(
+        &self,
+        pinyin: &str,
+        ctx: &LmContext<'_>,
+        lattice: &[Vec<LatticeEdge>],
+    ) -> Result<Vec<Candidate>, EngineError> {
         // A3 打分:候选分 = 以该候选开头的最优完整路径分。
         // 先跑后向 DP 拿「每个位置到串尾的最优补全分」,再给 lattice[0]
         // 上每条边打分。
-        let best_suffix = self.backward_completion(pinyin, ctx, &lattice)?;
+        let best_suffix = self.backward_completion(pinyin, ctx, lattice)?;
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
 
@@ -602,6 +739,14 @@ impl ImeEngine {
         // key,或模糊展开键与精确键撞车),保留得分最高的一条。
         let mut best: HashMap<(String, String), Candidate> = HashMap::new();
         for edge in &lattice[0] {
+            if edge.gap {
+                continue; // 空词边不是候选(它只是让 beam 跨过一段字母)
+            }
+            // 注意:这里**不**过滤补全分为 -inf 的边(它到不了串尾)。
+            // 这类边是「只解释输入前缀」的词(如 `women…` 的「我」),分段
+            // 上屏下恰恰有用(用户可以先上屏这一段,剩下的留给下一轮);
+            // 它们在排序里落在自己的 u_min 桶内、按分数靠后,不会挤掉
+            // 完整读法。容错格会带来更多这类前缀边,同样按低分排在桶内。
             let (logp, _) = self.lm.score(&initial, &edge.word);
             let dict_logp = if total_freq > 0 {
                 ((edge.freq.max(1) as f64).log10() - log10_total) as f32
@@ -612,7 +757,9 @@ impl ImeEngine {
             // 边终点必有完整补全:beam 已确认整串可解,且任何有出边的
             // 位置都能沿格走到串尾(边严格前进、终点不超串长),
             // 故 best_suffix[edge.end] 必为有限值。
-            let score = dict_logp + logp * self.lm_weight - edge.fuzzy_penalty
+            let score = dict_logp + logp * self.lm_weight
+                - edge.fuzzy_penalty
+                - edge.typo_penalty
                 + best_suffix[edge.end];
             let cand = Candidate {
                 word: edge.word.clone(),
@@ -620,7 +767,10 @@ impl ImeEngine {
                 score,
                 freq: edge.freq, // 词典原始频率,供展示/回退
                 // 该边自身是否模糊(B4 起为逐边判定的分层来源)。
-                spelling: if edge.fuzzy_penalty > 0.0 {
+                // **容错边(编辑距离)与模糊音边同层**:两者都不是「用户
+                // 精确打出来的那个键」,必须整体排在精确候选之后——这一层序
+                // 就是「打对了绝不会被容错候选顶掉」的结构性保证。
+                spelling: if edge.fuzzy_penalty > 0.0 || edge.typo_penalty > 0.0 {
                     SpellingKind::Fuzzy
                 } else {
                     SpellingKind::Exact
@@ -641,37 +791,23 @@ impl ImeEngine {
             }
         }
 
-        let ranked: Vec<Candidate> = best.into_values().collect();
-        // 简拼来源合并(2):已在精确/模糊层出现过的 (word, pinyin)
-        // 不再进简拼层(`abbrev_candidates` 内部去重)。截断走
-        // `merge_with_abbrev`:简拼层有 ABBREV_QUOTA 个保底名额,
-        // 精确层装满 100 时不再把简拼层整层截掉(PLAN.md 第三节缺口)。
-        // 含 `'` 时跳过简拼层(见上一条路径的注释):用户给了明确切分,
-        // 简拼会把 `[xian]` 系的字重新灌回来,破坏消歧。
-        let abbrev = if bounds.is_none() {
-            self.abbrev_candidates(pinyin, ctx, &ranked)?
-        } else {
-            Vec::new()
-        };
-        let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
-        // 回声候选兜底(公开 API 后置条件:非空输入 ⇒ 候选非空):
-        // 整串连兜底联想都解不出任何候选时(如不支持的简拼),追加一个
-        // word = 原始输入串的回声候选,让用户至少看见自己打的东西,
-        // 而不是 IBus 层 HideLookupTable 后"输入法像死了"。语义照搬
-        // librime echo_translator:仅当全场一个候选都没有时才冒头,
-        // 绝不污染正常候选列表。必须在 truncate 之后追加,才不会被截掉。
-        if ranked.is_empty() && !pinyin.is_empty() {
-            ranked.push(Self::echo_candidate(pinyin));
-        }
-        self.filter_blocked(&mut ranked);
-        // 覆盖范围回填(干净串坐标 → 原始输入串坐标)必须在**全部来源
-        // 合并、截断、兜底之后**做:候选的来源不同(格边/兜底/简拼/回声),
-        // 只有这里知道整串长度与 `'` 的位置。
-        Self::fill_covered(&mut ranked, pinyin.len(), bounds);
-        Ok(ranked)
+        Ok(best.into_values().collect())
     }
 
-    /// 把「干净串里的字节前缀长度」映射回**原始输入串**里的长度。
+    /// 窗口里是否含元音(`v` 记 ü,也算)。
+///
+/// **每个拼音音节都含元音**(音节表里没有 `m`/`n`/`ng` 这类成音节),
+/// 所以「不含元音的窗口」不可能是音节打错——它是缩写(`zgr`、`nih`)或
+/// 纯乱码。容错弧只对含元音的窗口开放:实测放开后 `zgr` 会被读出
+/// 「而/尬/则/砸…」49 条(靠 `zg`→`ze`、`gr`→`ga` 这类无元音窗口的
+/// 替换),把简拼与回声语义整片冲掉。
+fn window_has_vowel(window: &str) -> bool {
+    window
+        .bytes()
+        .any(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u' | b'v'))
+}
+
+/// 把「干净串里的字节前缀长度」映射回**原始输入串**里的长度。
     ///
     /// `'` 只是强制切分符(见 [`ImeEngine::lookup_candidates`] 的归一化),
     /// 但它在用户**看到的**串里占一个字节。分段上屏要消耗的是原文长度,
@@ -744,14 +880,20 @@ impl ImeEngine {
                 if !result[edge.end].is_finite() {
                     continue; // 该边到不了串尾,不构成完整补全
                 }
-                let (logp, _) = self.lm.score(&initial, &edge.word);
-                let dict_logp = if total_freq > 0 {
-                    ((edge.freq.max(1) as f64).log10() - log10_total) as f32
+                // 空词边(容错解码里「吃掉一段字母」的弧):没有词频项、没有
+                // LM 转移,只有它自己的编辑惩罚。
+                let score = if edge.gap {
+                    -edge.typo_penalty + result[edge.end]
                 } else {
-                    0.0
+                    let (logp, _) = self.lm.score(&initial, &edge.word);
+                    let dict_logp = if total_freq > 0 {
+                        ((edge.freq.max(1) as f64).log10() - log10_total) as f32
+                    } else {
+                        0.0
+                    };
+                    dict_logp + logp * self.lm_weight - edge.fuzzy_penalty - edge.typo_penalty
+                        + result[edge.end]
                 };
-                let score = dict_logp + logp * self.lm_weight - edge.fuzzy_penalty
-                    + result[edge.end];
                 if score > result[pos] {
                     result[pos] = score;
                 }
@@ -870,30 +1012,38 @@ impl ImeEngine {
         Ok(best.into_values().collect())
     }
 
-    /// 构建切分格：`result[start]` = 从 `start` 出发的所有词边。
-    ///
-    /// - 每条边覆盖一个「音节链」：从 `start` 起连续若干个合法音节，链的
-    ///   拼音串（空格连接）就是词典 key，直接精确查词；
-    /// - 链长 ≤ [`MAX_EDGE_SYLLABLES`]，每个起点枚举的链数 ≤
-    ///   [`MAX_CHAINS_PER_START`]：格是多项式规模的，病态输入
-    ///   （`"aaaaaaaa"`、`"nananana…"`、超长串）不会组合爆炸；
-    /// - 模糊拼音开启时，对每条链的拼音串做 `expand_fuzzy` 展开，
-    ///   变体键同样查词（比旧实现只展开整串更细：`"ni hao"` → `"li hao"`
-    ///   这类"词内模糊"也够得到）；
-    /// - 精确键 + 变体键用 key 级缓存，重复键只查一次词库。
-    ///
-    /// `bounds` 是 B2 的 `'` 强制切分点(干净串中的字节偏移表,升序;
-    /// `None` = 无 `'` 输入,走原有零开销路径)。每个边界把输入钉成前后
-    /// 两段:**任何边不得跨越它**——链的音节一旦恰好落在边界上就停下
-    /// (不再延长),于是 `xi'an`(干净串 `xian` + 边界 2)的格里没有
-    /// [xian] 这条单音节边,「先/现/显/线」从源头消失,「西安」
-    /// ([xi, an])成为唯一的整串双音节切法。`'` 本身已在
-    /// `lookup_candidates` 归一化时剥掉,干净串里没有 `'` 字符,
-    /// 词典 key 与 `Candidate.pinyin` 因此永远不含 `'`。
+    /// 位置 `pos` 是否允许开容错弧(现在恒为「允许」,`center` 只表示
+    /// 「这次构建启用了容错」)。保留函数形态是为了把「为什么不做位置限制」
+    /// 的结论留在代码里,而不是只留在提交信息里。
+    fn in_typo_region(center: Option<usize>, _pos: usize) -> bool {
+        center.is_some()
+    }
+
+    /// 构造格子(精确模式)。容错模式见 [`Self::build_lattice_with`]。
     fn build_lattice(
         &self,
         pinyin: &str,
         bounds: Option<&[usize]>,
+    ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
+        self.build_lattice_with(pinyin, bounds, false)
+    }
+
+    /// 构造格子;`tolerant` 打开**容错解码**:
+    ///
+    /// - 窗口不是合法音节时,问一次音节级的「≤1 次编辑」索引
+    ///   ([`segmenter::TypoSyllables`]):替换(混淆对)、漏打、多打、调换
+    ///   相邻字母四类错误都能落到一个规范音节上;
+    /// - 额外允许「吃掉 1~2 个无法解释的字母」的空词弧(多打/打乱):中途的
+    ///   空词弧由**后继音节**的边覆盖那一段(边的区间含它),尾部的空词弧
+    ///   直接把路径送到串尾。
+    ///
+    /// 只在 [`ImeEngine::lookup_candidates`] 判定「整串根本切不开」或
+    /// 「精确解码解不出完整路径」时才打开,因此**打对的输入零开销、零新边**。
+    fn build_lattice_with(
+        &self,
+        pinyin: &str,
+        bounds: Option<&[usize]>,
+        tolerant: bool,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let n = pinyin.len();
         let mut lattice: Vec<Vec<LatticeEdge>> = (0..=n).map(|_| Vec::new()).collect();
@@ -905,12 +1055,29 @@ impl ImeEngine {
         // 用户层时为 None,下面的合并一次都不发生。
         let user_entries = crate::user_lm::user_entries_snapshot(&self.lm);
         let mut cache: HashMap<String, Vec<Candidate>> = HashMap::new();
+        // 长串试过把容错预算从 64 降到 16:延迟只从 13~20ms 降到 12~16ms
+        // (仍超 12ms 门槛),却把「我们今天」这种深一点的整句读法饿掉了
+        // (`womenjinxtianqugongyuan` 从「我们今天 #1」退回「我们 #1」)。
+        // 两头不讨好,故保持与精确模式同量级——**代价只落在本来就解不出的
+        // 长串上**(改动前 7~9ms),打对的输入一次都不进这条分支。
+        let per_start_budget = if tolerant {
+            MAX_TOLERANT_CHAINS_PER_START
+        } else {
+            MAX_CHAINS_PER_START
+        };
+        // 容错弧的位置限制:**不限制**(`typo_center` 只表达「这次是否启用
+        // 容错」)。曾经试过「只在第一个切不动的位置附近开放」,但那个判据
+        // 不可靠——音节内部的位置、别的切法造成的伪边界都会误判(实测把
+        // `womenjintianqugongyuann` 的中心判成第 4 字节),反而让正确读法
+        // 消失。压住成本靠三条与位置无关的限制:窗口 ≤4 字母、每窗口只留
+        // 1 条读法、整条路径 ≤1 次编辑。
+        let typo_center = if tolerant { Some(0usize) } else { None };
         for start in 0..n {
-            let mut budget = MAX_CHAINS_PER_START;
+            let mut budget = per_start_budget;
             let mut chain: Vec<&str> = Vec::new();
             self.collect_chain_edges(
                 pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
-                user_entries.as_ref(), bounds,
+                user_entries.as_ref(), bounds, tolerant, typo_center, 0, 0.0,
             )?;
         }
         Ok(lattice)
@@ -929,6 +1096,10 @@ impl ImeEngine {
         budget: &mut usize,
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
         bounds: Option<&[usize]>,
+        tolerant: bool,
+        typo_center: Option<usize>,
+        typo_edits: u8,
+        typo_penalty: f32,
     ) -> Result<(), EngineError> {
         let n = pinyin.len();
         if chain.len() >= MAX_EDGE_SYLLABLES || *budget == 0 {
@@ -951,12 +1122,36 @@ impl ImeEngine {
             // 词库的 key(`hu lue` 查不到 忽略,`hu lve` 才能)。两种写法同为
             // 3 字节,`end = pos + len` 仍按输入原文推进。
             let syl = segmenter::canonical_syllable(&pinyin[pos..pos + len]);
-            if !self.segmenter.is_syllable(syl) {
-                continue;
+            // 本窗口的读法:(音节, 这条弧本身的编辑惩罚, 本弧引入的编辑数)。
+            // - 精确命中:唯一读法、0 惩罚、0 编辑;
+            // - 否则在容错模式且有预算时,问音节级 ≤1 编辑索引:一个窗口
+            //   可能同时像好几个音节(`em` 像 `me`、`en`…),全部展开,由
+            //   LM 与词频打分决定谁赢——**不在这里替用户选**。
+            let mut readings: Vec<(&str, f32, u8)> = Vec::new();
+            if self.segmenter.is_syllable(syl) {
+                readings.push((syl, 0.0, 0));
+            } else if tolerant
+                && typo_edits < MAX_TYPO_EDITS
+                && Self::in_typo_region(typo_center, pos)
+                && (MIN_TYPO_WINDOW..=MAX_TYPO_WINDOW).contains(&syl.len())
+                && Self::window_has_vowel(syl)
+            {
+                let mut typo: Vec<(&str, f32)> = segmenter::TypoSyllables::lookup(syl).to_vec();
+                // 最便宜的读法最像用户本意:只留前几条,避免分支数相乘。
+                typo.sort_by(|a, b| a.1.total_cmp(&b.1));
+                typo.truncate(MAX_TYPO_READINGS_PER_WINDOW);
+                for (typo_syl, cost) in typo {
+                    readings.push((typo_syl, cost, 1));
+                }
             }
-            *budget -= 1;
-            chain.push(syl);
-            let end = pos + len;
+            for (syl, arc_cost, arc_edits) in readings {
+                if *budget == 0 {
+                    return Ok(());
+                }
+                *budget -= 1;
+                let arc_penalty = typo_penalty + arc_cost;
+                chain.push(syl);
+                let end = pos + len;
             let joined = chain.join(" ");
 
             // (key, fuzzy_penalty):精确键惩罚为 0,模糊键带上
@@ -981,6 +1176,8 @@ impl ImeEngine {
                         pinyin: c.pinyin.clone(),
                         freq: c.freq,
                         fuzzy_penalty: *fuzzy_penalty,
+                        typo_penalty: arc_penalty,
+                        gap: false,
                     });
                 }
                 // 造词条目合并(仅精确键):与词典条目同区间同层,
@@ -996,17 +1193,63 @@ impl ImeEngine {
                                 pinyin: key.clone(),
                                 freq: 0,
                                 fuzzy_penalty: 0.0,
+                                typo_penalty: arc_penalty,
+                                gap: false,
                             });
                         }
                     }
                 }
-            }
+                }
 
-            // 深度优先：延长链（下一音节从 `end` 继续）
-            self.collect_chain_edges(
-                pinyin, start, end, chain, lattice, cache, budget, user_entries, bounds,
-            )?;
-            chain.pop();
+                // 深度优先：延长链（下一音节从 `end` 继续）
+                self.collect_chain_edges(
+                    pinyin, start, end, chain, lattice, cache, budget, user_entries, bounds,
+                    tolerant, typo_center, typo_edits + arc_edits, arc_penalty,
+                )?;
+                chain.pop();
+            }
+        }
+
+        // 「吃掉一段无法解释的字母」的空词弧(多打/打乱)。链不变、没有词,
+        // 因此不会自己产出候选;它的作用只是让 beam 跨过去继续前进。
+        if tolerant
+            && typo_edits < MAX_TYPO_EDITS
+            && Self::in_typo_region(typo_center, pos)
+        {
+            let max_gap = MAX_TYPO_GAP.min(n - pos);
+            for gap in 1..=max_gap {
+                if *budget == 0 {
+                    // 预算可能已被上面的音节弧/递归用光(它们返回时不保证
+                    // 还有余额),这里必须自己再判一次——否则 `-= 1` 下溢 panic。
+                    return Ok(());
+                }
+                // `'` 强制切分点:被吃掉的字母里不得含分隔符。
+                if bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x <= pos + gap)) {
+                    continue;
+                }
+                *budget -= 1;
+                let cost = typo_penalty + segmenter::gap_cost(gap);
+                if pos + gap == n {
+                    // 尾部残留:本位置直接送一条空词边到串尾,否则 beam
+                    // 到不了 `n`、整串白解(这就是 `…gongyuann` 的形状)。
+                    if !lattice[pos].iter().any(|e| e.end == n && e.gap) {
+                        lattice[pos].push(LatticeEdge {
+                            end: n,
+                            word: String::new(),
+                            pinyin: String::new(),
+                            freq: 0,
+                            fuzzy_penalty: 0.0,
+                            typo_penalty: cost,
+                            gap: true,
+                        });
+                    }
+                } else {
+                    self.collect_chain_edges(
+                        pinyin, start, pos + gap, chain, lattice, cache, budget, user_entries,
+                        bounds, tolerant, typo_center, typo_edits + 1, cost,
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -1064,6 +1307,19 @@ impl ImeEngine {
             let mut touched: Vec<usize> = Vec::new();
             for &node_idx in &cur {
                 for (slot, edge) in lattice[pos].iter().enumerate() {
+                    if edge.gap {
+                        // 空词边:状态不变、无词频/LM 项,只扣编辑惩罚。
+                        let idx = arena.len();
+                        arena.push(BeamNode {
+                            score: arena[node_idx].score - edge.typo_penalty,
+                            state: arena[node_idx].state.clone(),
+                            edge: Some((pos, slot)),
+                            parent: Some(node_idx),
+                        });
+                        beams[edge.end].push(idx);
+                        touched.push(edge.end);
+                        continue;
+                    }
                     let (logp, next_state) = self.lm.score(&arena[node_idx].state, &edge.word);
                     let dict_logp = if total_freq > 0 {
                         // freq 为 0 的词条按 1 兜底（log10(1/T) 仍为有限值）
@@ -1076,7 +1332,8 @@ impl ImeEngine {
                         // 模糊惩罚是同量纲(log10)的加性扣分:精确边 0,
                         // 模糊边减去累计 -log10(weight),多处混淆叠加累加。
                         score: arena[node_idx].score + dict_logp + logp * self.lm_weight
-                            - edge.fuzzy_penalty,
+                            - edge.fuzzy_penalty
+                            - edge.typo_penalty,
                         state: next_state,
                         edge: Some((pos, slot)),
                         parent: Some(node_idx),
@@ -2684,9 +2941,16 @@ mod tests {
                 .expect("查询失败");
             assert!(!cands.is_empty(), "{input} 不应没有候选");
             for c in &cands {
-                if c.echo || c.spelling == SpellingKind::Abbrev {
-                    // 回声候选 word=输入串,无音节结构;简拼候选覆盖整串、
-                    // 其 pinyin 是完整词拼音、天然从位置 0 起,均豁免。
+                if c.echo
+                    || c.spelling == SpellingKind::Abbrev
+                    || c.spelling == SpellingKind::Fuzzy
+                {
+                    // 三类豁免:
+                    // - 回声候选 word=输入串,无音节结构;
+                    // - 简拼候选覆盖整串、其 pinyin 是完整词拼音,天然从位置 0 起;
+                    // - 模糊/容错候选(2026-10-03)**故意**改掉一个字母
+                    //   (`qiax` → 前 qian),首音节不再等于输入前缀——这是它的
+                    //   职责,不是 A1 兜底路径回归。本测试钉的是精确层的性质。
                     continue;
                 }
                 let first_syl = c.pinyin.split(' ').next().expect("候选拼音非空");
@@ -2696,6 +2960,68 @@ mod tests {
                     c.word, c.pinyin
                 );
             }
+        }
+    }
+
+    /// 容错解码(2026-10-03):**单音节里打错一个字母,不再让整串作废**。
+    ///
+    /// 用玩具词库而不是真实 `dict.bin`:容错的机制(音节级索引 + 容错格 +
+    /// 分层)与词库大小无关,而玩具词库的期望值是确定的——真实词库里同一
+    /// 输入会有几十条长尾候选,断言容易写成「恰好第 1 名是某词」那种脆弱的
+    /// 形式。真实词库上的实测数据见 `docs/HANDOFF.md`。
+    #[test]
+    fn typo_pinyin_still_yields_the_intended_word() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("你好", "ni hao", 900).expect("插入失败");
+        engine.dict.upsert("你", "ni", 500).expect("插入失败");
+        engine.dict.upsert("什么", "shen me", 800).expect("插入失败");
+        // 四类编辑各一条代表 + 一条「少打一个字母」的反面样本(它不属于本
+        // 阶段能力,见 HANDOFF 的已知缺口)。
+        for (input, want) in [
+            ("nihoa", "你好"),  // 调换相邻字母(o/a)
+            ("niqhao", "你好"), // 中间多打一个字母
+            ("qnihao", "你好"), // 开头多打一个字母
+            ("shenem", "什么"), // 调换(m/e),CHIME 的经典例子
+            ("nihaoo", "你好"), // 重复字母(对照组:本来就该出)
+        ] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            assert!(
+                cands.iter().any(|c| c.word == want),
+                "{input} 的候选里应有「{want}」(容错解码回归): {:?}",
+                cands.iter().take(8).map(|c| &c.word).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// 容错只在**精确解不出整串**时启用:打对的输入不出现模糊/容错层候选。
+    ///
+    /// 这是「不退化」的结构性保证(第一个门槛),不依赖测量:整串可切且精确
+    /// 路能解出完整路径时,容错格根本不会被构建(模糊音默认关闭,所以这些
+    /// 输入不该有任何模糊层候选)。
+    #[test]
+    fn tolerant_pass_leaves_exactly_typed_inputs_alone() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let dict = root.join("dict.bin");
+        if !dict.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict)).expect("mmap 词库加载失败");
+        let abbrev = root.join("abbrev.bin");
+        if abbrev.is_file() {
+            engine.dict = engine.dict.with_abbrev(&abbrev);
+        }
+        for input in ["nihao", "womenjintianqugongyuan", "zhongguor", "wsm", "zgr", "nih"] {
+            let cands = engine
+                .lookup_candidates(input, &LmContext::empty())
+                .expect("查询失败");
+            assert!(!cands.is_empty(), "{input} 应有候选");
+            assert!(
+                cands.iter().all(|c| c.spelling != SpellingKind::Fuzzy),
+                "{input}: 打对的输入不该出现模糊/容错层候选: {:?}",
+                cands.iter().take(8).map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+            );
         }
     }
 
@@ -4071,3 +4397,7 @@ mod tests {
         assert_eq!(words, ["你", "逆"], "词频降序,且无模糊候选: {cands:?}");
     }
 }
+
+
+
+
