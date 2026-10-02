@@ -81,6 +81,16 @@ const MAX_MIXED_DFS_STEPS: usize = 20_000;
 /// [`MAX_LOOKUP_RESULTS`] 条),这里只是「看多少」的上界。
 const MAX_MIXED_COLLECT: usize = MAX_LOOKUP_RESULTS as usize * 8;
 
+/// 末尾「半音节」读法要求尾巴至少这么长。
+///
+/// 取 2 而不是 1:单个字母的尾巴(`n`、`x`、`z`)是**首字母缩写**的职责
+/// (副索引 + DFS 的首字母分支已经覆盖),把它也当半音节会让 `n*` 这种
+/// 巨大的音节区间被整段扫一遍,而召回上并没有新增(那些词本来就能查到)。
+/// 2 个字母(`zho`、`sh`、`ha`)不是任何音节的完整写法时,才是真正需要
+/// 「当成长音节的半个」的形态——这正是用户报的 `zho`→中国、`niha`→你好、
+/// `beijin`→北京、`meiyo`→没有。
+const MIN_PARTIAL_TAIL: usize = 2;
+
 
 /// 词库错误。
 #[derive(Debug, Error)]
@@ -731,16 +741,27 @@ impl MmapDict {
         if table.is_empty() || input.is_empty() || !input.is_ascii() {
             return Ok(Vec::new());
         }
-        if is_full_pinyin(input, table) {
-            return self.lookup_mixed_full_pinyin(input);
-        }
         // 按长度降序:字面音节分支贪心最长优先(与旧 segment_input 一致)。
         let mut by_len: Vec<&'static str> = table.to_vec();
         by_len.sort_by_key(|s| std::cmp::Reverse(s.len()));
 
         let mut best: std::collections::HashMap<(String, String), u64> =
             std::collections::HashMap::new();
-        {
+
+        // (1)(2) 两条既有路:**整串合法全拼** 精确匹配 / 否则交错 DFS。
+        // 全拼那条路的候选构造本身逐字节未变(见
+        // [`Self::lookup_mixed_full_pinyin`]),这里只是把它的结果搬进池子
+        // ——因为末尾半音节补充(T2)对**两者都要生效**:`niha`/`beijin`/
+        // `meiyo` 都是「整串合法全拼」,但它们同时是「末尾音节还没打完」的
+        // 形态(ha→hao、jin→jing、yo→you)。
+        if is_full_pinyin(input, table) {
+            for c in self.lookup_mixed_full_pinyin(input)? {
+                let e = best.entry((c.word, c.pinyin)).or_insert(0);
+                if c.freq > *e {
+                    *e = c.freq;
+                }
+            }
+        } else {
             let mut dfs = MixedDfs {
                 dict: self,
                 input: input.as_bytes(),
@@ -752,6 +773,58 @@ impl MmapDict {
             };
             dfs.dfs(0, &[], false, false)?;
         }
+
+        // (3) **末尾半音节补充召回(T2,2026-10-02)**:把输入切成
+        // 「完整音节前缀 + 尾巴」,尾巴当成某个**更长音节的开头**去收集。
+        // 两条既有路都覆盖不到这种形态:
+        // - `zho`(尾巴不构成音节)旧实现只把首字母当缩写,试的是
+        //   `zhong + o`(把尾巴末位当独立音节),整词中国永远不会出现;
+        // - `niha`/`beijin`/`meiyo`(尾巴「ha」/「jin」/「yo」碰巧是合法
+        //   音节)被判成「整串全拼」走精确匹配,只找 key 恰好等于它的词,
+        //   于是 你好(hao)/北京(jing)/没有(you)全被排除在外。
+        // 尾巴长度 ≥ [`MIN_PARTIAL_TAIL`] 才启用(理由见常量注释)。
+        // 门槛:池子里现有最差的一条(在借用 `best` 之前算好)。
+        // 半音节区间动辄几千条(`xian` 的 `xiang*`、`sh` 的 `sh*`),而
+        // **比现有最差还差**的补充候选永远进不了最终列表(排序后按词频截断),
+        // 不值得扫。精确剪枝:块内 freq 降序,key 的天花板低于门槛 ⇒ 该 key
+        // 一条都挤不进来。
+        let partial_threshold = best.values().copied().min().unwrap_or(0);
+        {
+            let mut dfs = MixedDfs {
+                dict: self,
+                input: input.as_bytes(),
+                by_len: Vec::new(),
+                out: &mut best,
+                budget: MAX_MIXED_DFS_STEPS,
+                threshold: partial_threshold,
+                threshold_at: 0,
+            };
+            // 门槛先设成「池子里现有最差的一条」:半音节区间动辄几千条
+            // (`xian` 的 `xiang*`、`sh` 的 `sh*`),而**比现有最差还差**的
+            // 补充候选永远进不了最终列表(排序后按词频截断),不值得扫。
+            // 这是精确剪枝:块内 freq 降序,key 的天花板低于门槛 ⇒ 该 key
+            // 一条都挤不进来。实测端到端 `xian` 7.63ms → 见 bench。
+            // `p = 0`(整串都当半个音节)只在**整串不是合法全拼**时启用:
+            // 那种形态才是「末尾半截」(`zho` → zhong、`sh` → shi);
+            // 整串已经是合法全拼时,`p = 0` 的含义变成「音节前缀补全」
+            // (`xian` → `xiang*` 整个区间、几千条),那不是 T2 要的能力,
+            // 而代价实测 +4.5ms 端到端。去掉它不影响四个目标形态:
+            // 它们都走「最后一个音节边界」的读法(`ni|ha`、`bei|jin`、
+            // `mei|yo`)。
+            let allow_p0 = !is_full_pinyin(input, table);
+            for (index_prefix, tail_len) in partial_tail_readings(input, table) {
+                if tail_len < MIN_PARTIAL_TAIL || dfs.out.len() >= MAX_MIXED_COLLECT {
+                    break;
+                }
+                // 只是**跳过这一条读法**,不是终止整轮——`p = 0` 排在
+                // 最前面,后面的「最后一个音节边界」读法才是目标形态。
+                if !allow_p0 && index_prefix.as_str() == input {
+                    continue;
+                }
+                dfs.collect(index_prefix.as_bytes(), true)?;
+            }
+        }
+
         let mut out: Vec<Candidate> = best
             .into_iter()
             .map(|((word, py), freq)| Candidate::new(word, py, freq))
@@ -764,6 +837,7 @@ impl MmapDict {
         out.truncate(MAX_LOOKUP_RESULTS as usize);
         Ok(out)
     }
+
     /// 混合简拼的**全拼**路径:**改动前的原实现,逐字节不动**。
     ///
     /// 只在 [`is_full_pinyin`] 为真时调用(见 [`Self::lookup_mixed`])。
@@ -878,6 +952,98 @@ fn is_full_pinyin(input: &str, table: &[&str]) -> bool {
         }
     }
     reachable[n]
+}
+
+/// 「完整音节前缀 + 尾巴」的全部读法(T2:末尾半音节)。
+///
+/// 返回 `(空格分隔的音节前缀, 尾巴字节数)`,按前缀从短到长排列。
+/// `p` 遍历所有「`input[..p]` 恰好能切成音节」的位置(含 `p = 0`),
+/// 尾巴就是 `input[p..]`——它既可能是半个音节(`zho` → zhong、
+/// `ha` → hao),也可能碰巧是完整音节(`jin` → jing),两种都要当半音节试。
+///
+/// 不做去重:不同 `p` 给出的前缀不同,收集区间也不同。
+fn partial_tail_readings(input: &str, table: &[&str]) -> Vec<(String, usize)> {
+    let n = input.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // reach[i] = input[..i] 可完整切成音节(与 is_full_pinyin 同一套 DP)。
+    let mut reach = vec![false; n + 1];
+    reach[0] = true;
+    for i in 0..n {
+        if !reach[i] {
+            continue;
+        }
+        for s in table {
+            if input[i..].starts_with(s) {
+                reach[i + s.len()] = true;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for p in 0..n {
+        if !reach[p] {
+            continue;
+        }
+        let Some(prefix) = segment_prefix(&input[..p], table) else {
+            continue;
+        };
+        // 送给主索引的前缀 = 「完整音节前缀 + 半个音节」本身。
+        // `p = 0`(整串都是半音节,如 `zho`/`sh`)时前缀就是尾巴本身,
+        // **绝不能传空前缀**——那等于从索引第 0 条开始扫全表。
+        let tail = &input[p..];
+        let index_prefix = if prefix.is_empty() {
+            tail.to_string()
+        } else {
+            format!("{prefix} {tail}")
+        };
+        debug_assert!(!index_prefix.is_empty(), "半音节读法不得产出空前缀");
+        out.push((index_prefix, n - p));
+    }
+    out
+}
+
+/// 把已知可完整切分的串拼成空格分隔的音节串(回溯:每一步取最长的合法音节)。
+fn segment_prefix(s: &str, table: &[&str]) -> Option<String> {
+    if s.is_empty() {
+        return Some(String::new());
+    }
+    let n = s.len();
+    let mut reach = vec![false; n + 1];
+    reach[0] = true;
+    for i in 0..n {
+        if !reach[i] {
+            continue;
+        }
+        for syl in table {
+            if s[i..].starts_with(syl) {
+                reach[i + syl.len()] = true;
+            }
+        }
+    }
+    if !reach[n] {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    let mut end = n;
+    while end > 0 {
+        let mut picked = None;
+        for syl in table {
+            let len = syl.len();
+            if len <= end
+                && reach[end - len]
+                && s[end - len..].starts_with(syl)
+                && picked.is_none_or(|(_, best): (_, usize)| len > best)
+            {
+                picked = Some((*syl, len));
+            }
+        }
+        let (syl, len) = picked?;
+        parts.push(syl);
+        end -= len;
+    }
+    parts.reverse();
+    Some(parts.join(" "))
 }
 
 /// 交错简拼 DFS 的状态(见 [`MmapDict::lookup_mixed`])。
@@ -1017,7 +1183,7 @@ impl MixedDfs<'_> {
             // 词频都低于「收集池第 N 名的下界」,它一条都进不了最终列表。
             // 没有这一条时,`zhongg` 要把「zhong g*」下几百个 key、8000+ 条
             // 词条全部解析并分配字符串:0.343ms → 5.35ms(破 5ms 门槛)。
-            if self.out.len() >= MAX_LOOKUP_RESULTS as usize
+            if self.threshold > 0
                 && dict.first_entry_freq(dict.entries_off + rec.ent_off, rec.ent_len)? < self.threshold
             {
                 i += 1;
@@ -1697,6 +1863,44 @@ mod tests {
                 res.len() <= MAX_LOOKUP_RESULTS as usize,
                 "{input:?} 返回 {} 条,超过上限",
                 res.len()
+            );
+        }
+    }
+
+    #[test]
+    fn real_abbrev_mixed_recalls_partial_last_syllable() {
+        // **T2(2026-10-02)**:末尾「半个音节」必须能召回整词。
+        //
+        // 两种旧行为都覆盖不到它:
+        // - `zho`(尾巴不构成音节):旧 DFS 只把首字母当缩写,试的是
+        //   `zhong + o`(把尾巴末位当独立音节),中国永远不出现;
+        // - `niha`/`beijin`/`meiyo`(尾巴「ha」/「jin」/「yo」碰巧是合法
+        //   音节):整串被判成全拼走精确匹配,只找 key 恰好等于它的词,
+        //   于是 你好(hao)/北京(jing)/没有(you)全被排除。
+        //
+        // 失败见证:把 `lookup_mixed` 里那段半音节补充(partial_tail_readings
+        // 那一轮)注释掉 → 四条全红。
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let dict = MmapDict::open(&dict_path).expect("词库加载失败")
+            .with_abbrev(&abbrev_path);
+        for (input, want) in [
+            ("zho", "中国"),     // 尾巴整个是半音节(zhong)
+            ("niha", "你好"),    // 尾巴 ha 是 hao 的半个
+            ("beijin", "北京"),  // 尾巴 jin 是 jing 的半个
+            ("meiyo", "没有"),   // 尾巴 yo 是 you 的半个
+        ] {
+            // 不测 `sh`→是:那个词由**精确层/副索引**提供(用户可见行为正常),
+            // 而混合层要在探索上界内扫完整个 `sh*` 区间才轮得到 `shi`,
+            // 属于「音节区间太大」的已知代价(见 `MAX_MIXED_COLLECT`)。
+            let res = dict.lookup_mixed(input).expect("混合简拼查询失败");
+            assert!(
+                res.iter().any(|c| c.word == want),
+                "{input} 应召回「{want}」: 前 8 = {:?}",
+                res.iter().take(8).map(|c| &c.word).collect::<Vec<_>>()
             );
         }
     }

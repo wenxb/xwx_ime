@@ -10,7 +10,7 @@
 > [`docs/gear-audit.md`](docs/gear-audit.md) 组件审计 ·
 > [`docs/design-batch1.md`](docs/design-batch1.md) 早期设计。
 >
-> **当前状态**：测试 **284 passed / 1 ignored**（235 单元 + 49 D-Bus 集成），
+> **当前状态**：测试 **285 passed / 1 ignored**（236 单元 + 49 D-Bus 集成），
 > clippy `-D warnings` **全绿**；仓库无远端。gear 审计已清零——简拼（纯 + 混合）、
 > 中文标点、可编辑输入缓冲、Shift 大写、造词、`,`/`.` 翻页、`'` 分隔符、
 > Ctrl+Delete、邮箱/网址识别全部可用，全拼行为无退化。
@@ -98,6 +98,7 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 | 2026-10-02 用户层「学习反而降权」 | 用户层改 **backoff**，学过的词不再被绝对中性分压低；`ky` 里「可以」第 11 → 第 1 |
 | 2026-10-02 个人化改**计数增益** | `score = 通用层分 + log10(1 + c·1000)`；与语料规模无关，一次上屏 +3.0（同类候选登顶），选得越多越高，且翻不过「整词 vs 逐字」的结构墙 |
 | 2026-10-02 T1 召回截断改按词频 | 混合简拼收集期不再「先到先得」，改为排序后按词频截断；`meiy` 起回「没有」（词频 504185 却曾被 500 条早停丢掉） |
+| 2026-10-02 T2 末尾半音节召回 | `zho`→中国、`niha`→你好、`beijin`→北京、`meiyo`→没有 全部召回（名次 #26~#49，偏后：未输入的音节无罚分，属另一件）；前 10 名零变化 |
 
 ### 别再试（否定性结论，逐条保留）
 
@@ -115,7 +116,7 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 
 ### ⚠ 实机验证（现在最该做的一件事）
 
-**284 passed 里已含 49 条 D-Bus 集成测试**（私有总线 + 真实引擎进程），
+**285 passed 里已含 49 条 D-Bus 集成测试**（私有总线 + 真实引擎进程），
 所以下面这些路径**不再是「结构上摸不到」**——已被自动化覆盖：
 英文模式透传（`engine.rs` 的 `process_key_event` 直接 `return false`）、
 `UpdatePreeditText` / `UpdateLookupTable` / `CommitText` 三个信号的内容与字段
@@ -278,7 +279,8 @@ fcitx5 抢总线名的交互——集成层用的是**私有总线**，这些验
 | 混合简拼任意位置缩写后 | **275（213 / 5 / 8 + 集成 49）** |
 | 用户层 backoff 修复后（2026-10-02） | 278（216 / 5 / 8 + 集成 49） |
 | 个人化改计数增益后（2026-10-02） | 283（221 / 5 / 8 + 集成 49） |
-| 混合简拼召回截断改按词频后（2026-10-02） | **284（222 / 5 / 8 + 集成 49）** |
+| 混合简拼召回截断改按词频后（2026-10-02） | 284（222 / 5 / 8 + 集成 49） |
+| 末尾半音节召回（T2）后（2026-10-02） | **285（223 / 5 / 8 + 集成 49）** |
 
 **集成层 49 条 = 5 个文件**：`passthrough_contract` 7、
 `focus_paging_delete` 14、`signal_payloads` 7、`interactive_sequences` 16、

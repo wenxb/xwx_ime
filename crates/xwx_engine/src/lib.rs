@@ -2927,10 +2927,23 @@ mod tests {
             .lookup_candidates("nihao", &LmContext::empty())
             .expect("查询失败");
         assert!(nihao.iter().any(|c| c.word == "你好"), "全拼应照常: {nihao:?}");
+        // **2026-10-02 改断言(逐条说明)**:旧断言是「无副索引 ⇒ 一个简拼层
+        // 候选都没有」。T2 之后这不再成立——末尾半音节的补充召回走的是**主
+        // 索引**(`partial_tail_readings` + `collect`),不依赖副索引,所以
+        // `nihao` 会多出「你好吗/你好啊」这类 Abbrev 层候选。
+        // 副索引真正负责的是**纯首字母**简拼(`zgr`/`bjdx`),新的断言就断它:
+        // 没有副索引时,纯首字母串不得有 Abbrev 候选。
         assert!(
-            nihao.iter().all(|c| c.spelling == SpellingKind::Exact),
-            "无副索引时不应出现简拼层: {:?}",
-            nihao.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+            nihao.iter().any(|c| c.word == "你好"),
+            "全拼照常(不受副索引影响)"
+        );
+        let zgr = engine
+            .lookup_candidates("zgr", &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            zgr.iter().all(|c| c.spelling != SpellingKind::Abbrev),
+            "无副索引时纯首字母串不应有简拼层: {:?}",
+            zgr.iter().map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
         );
 
         // 纯简拼:退化为回声(副索引缺失 ⇒ lookup_abbrev 空;输入
@@ -3352,11 +3365,18 @@ mod tests {
         let zhongguo = engine
             .lookup_candidates("zhongguo", &LmContext::empty())
             .expect("查询失败");
-        assert!(
-            zhongguo.iter().all(|c| c.spelling != SpellingKind::Abbrev),
-            "zhongguo 不应有简拼层"
-        );
+        // **2026-10-02 改断言(逐条说明)**:旧断言是「zhongguo 不应有简拼层」。
+        // T2 的末尾半音节读法让**整串合法全拼**的输入也会产出 Abbrev 层候选
+        // (`zhongguo` → 中国话/中国国际…这类「最后一个音节之后还有内容」的
+        // 补全),它们走主索引、与副索引配额无关。
+        // 本测试的本意是「简拼层为空时配额不浪费名额」,所以改成断结构:
+        // 候选非空、**前 10 名仍是精确层**(配额不会把 Abbrev 顶到前面)。
         assert!(!zhongguo.is_empty(), "zhongguo 候选非空");
+        assert!(
+            zhongguo.iter().take(10).all(|c| c.spelling == SpellingKind::Exact),
+            "前 10 名应仍是精确层(配额只影响简拼层,不挤占精确层): {:?}",
+            zhongguo.iter().take(10).map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
     }
 
     /// `merge_with_abbrev` 的合成单元测试(不依赖真实词库):
