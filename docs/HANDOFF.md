@@ -1376,3 +1376,38 @@ codex 审查第二批性能 P1:「先移除生产查询中只为判可达而执�
   所以这里给的是实测分位,不是推算。
 - **门槛**:`just verify` **350 用例全绿**(281 engine + 6 ibus + 9 bin + 54 集成),
   clippy `-D warnings` 无输出。
+
+## ㉜ 首键 / 首次纠错的初始化搬到发布服务名之前(2026-10-03)
+
+codex 审查第二批 P1:「首键和首次纠错存在被预热隐藏的初始化」——审查的原话
+是「在发布服务名之前完成词频总量计算和 typo 表准备」,即**搬走**而不是遮住。
+
+- **两笔懒初始化**:`MmapDict::total_freq()` 第一次调用会线性扫描词条区求和
+  (真实词库 187 万条,`OnceLock` 缓存);`segmenter` 的
+  `OnceLock<TypoSyllables>` 纠错变体表第一次走容错查询才构建。
+- **改法**:新增 `ImeEngine::prepare_startup(&self)`
+  (`crates/xwx_engine/src/engine/api.rs`)——同步调用 `dict.total_freq()` 与
+  新增的 `crate::segmenter::prepare_typo_table()`;`src/main.rs` 在 `Arc::new`
+  之后、**总线连接与 `request_name` 之前**调用它并记录耗时。与后台的
+  `prewarm`(㉙)分工写进了文档:这里同步且确定性(返回即已完成),
+  `prewarm` 覆盖的是查询形状的首次触碰。
+- **实测(审查指定的验证方式:独立进程、不做查询预热)**:`perf_probe --cold-probe`
+  新增两个开关(`--skip-startup-prepare` 做对照,`--cold-probe` 只量冷首键与
+  首次纠错并退出),每组 **30 个独立进程**:
+
+  | | 首键(中位) | 首次纠错(中位) |
+  |---|---|---|
+  | 搬走前(旧行为) | 10.795ms(10.124~14.430) | 29.252ms(28.649~31.376) |
+  | 搬走后 | **1.000ms**(0.964~1.145) | **2.268ms**(2.221~2.628) |
+
+  代价:**启动期一次性 36.816ms**(12 次中位,35.651~41.415);RSS 无实质变化
+  (53836 KiB vs 53672 KiB)。搬走前首键 10.8ms 已经贴着 12ms 预算,
+  首次纠错 29.3ms 是预算的 2.4 倍。
+- **不变式**:`prewarm_is_read_only` 旁边新增
+  `prepare_startup_is_read_only_and_repeatable`(`engine/tests/prewarm.rs`):
+  可重复调用、查询结果不变、词频总量前后一致、不学习/不写计数
+  (它在 `src/main.rs` 里是无条件同步执行的,出错整机输入法起不来)。
+- **未做(审查提的后续)**:把总词频写进数据文件头部,省掉这次线性扫描——
+  属于数据格式版本升级,单列。
+- **门槛**:`just verify` **351 用例全绿**(282 engine + 6 ibus + 9 bin + 54 集成),
+  clippy `-D warnings` 无输出。

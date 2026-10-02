@@ -200,6 +200,15 @@ fn deletion_penalty(deleted: char, prev: Option<char>) -> f32 {
     }
 }
 
+/// 启动期预热:把懒构建的纠错变体表**先建好**。
+///
+/// 表本身是 `OnceLock`,不加这一句也能工作——代价是「用户第一次打错」
+/// 才构建。生产在发布 IBus 服务名之前调用它(见
+/// `ImeEngine::prepare_startup`),把成本搬到启动期。
+pub(crate) fn prepare_typo_table() {
+    let _ = TypoSyllables::get();
+}
+
 impl TypoSyllables {
     /// 懒构建的全局实例(首次容错查询时展开,正常打字一次都不付这个成本)。
     fn get() -> &'static TypoSyllables {

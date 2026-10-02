@@ -46,6 +46,11 @@ struct Args {
     /// 量之前先空跑一遍所有脚本(样本丢弃):用来验证「首次触碰」成本
     /// 到底是一次性的、还是每次都会付。
     prewarm: bool,
+    /// 跳过启动期确定性初始化(词频总量 + 纠错变体表)。默认**做**,
+    /// 与 `src/main.rs` 一致;加这个开关只为做「搬走前/搬走后」的对照。
+    skip_startup_prepare: bool,
+    /// 只量冷启动首键与首次纠错,打印一行后退出(独立进程重复用)。
+    cold_probe: bool,
 }
 
 impl Args {
@@ -56,6 +61,8 @@ impl Args {
             limit_ms: 12.0,
             user_model: None,
             prewarm: false,
+            skip_startup_prepare: false,
+            cold_probe: false,
         };
         let mut it = std::env::args().skip(1);
         while let Some(arg) = it.next() {
@@ -88,6 +95,8 @@ impl Args {
                     );
                 }
                 "--prewarm" => args.prewarm = true,
+                "--skip-startup-prepare" => args.skip_startup_prepare = true,
+                "--cold-probe" => args.cold_probe = true,
                 other => return Err(format!("未知参数:{other}")),
             }
         }
@@ -235,6 +244,19 @@ fn run_keys(
     Ok(any_output)
 }
 
+/// 常驻内存(约):只用于「搬走初始化前后 RSS 有没有明显变化」的量级对比。
+fn rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| {
+            s.split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+        .map(|pages| pages * 4) // 页大小 4KiB,近似值
+        .unwrap_or(0)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = match Args::parse() {
         Ok(a) => a,
@@ -247,6 +269,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 真冷启动:装配完成后第一个键(含 mmap 缺页/首次分配)。
     let (cold_engine, lm_units) = open_engine(&args.data, args.user_model.as_deref())
         .map_err(|e| format!("装配失败:{e}"))?;
+
+    // 启动期确定性初始化:生产在 `src/main.rs` 里同步做在发布服务名之前。
+    let prepare_ms = if args.skip_startup_prepare {
+        None
+    } else {
+        let started = Instant::now();
+        cold_engine.prepare_startup();
+        Some(started.elapsed().as_secs_f64() * 1000.0)
+    };
+
+    if args.cold_probe {
+        // 「进程启动后首键」:装配完成后用户按下的第一个键。
+        let mut session = cold_engine.create_session();
+        let t0 = Instant::now();
+        let _ = session.handle(InputEvent::Char('w'))?;
+        let first_key_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        // 「首次纠错」:第一次走容错分支(nihoa 是打错一处的典型)。
+        let mut session = cold_engine.create_session();
+        let t0 = Instant::now();
+        for ch in "nihoa".chars() {
+            let _ = session.handle(InputEvent::Char(ch))?;
+        }
+        let first_typo_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "COLD first_key={first_key_ms:.3} first_typo={first_typo_ms:.3} prepare={} rss_kb={}",
+            prepare_ms.map_or("skipped".to_owned(), |ms| format!("{ms:.3}")),
+            rss_kb()
+        );
+        return Ok(());
+    }
     let scripts = scripts();
     let mut samples: Vec<Sample> = Vec::new();
     {
@@ -306,6 +358,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         lm_units,
         if args.user_model.is_some() { "文件" } else { "内存" }
     );
+    println!(
+        "启动期初始化(词频总量 + 纠错变体表):{}",
+        prepare_ms.map_or("已跳过(--skip-startup-prepare)".to_owned(), |ms| format!("{ms:.3}ms"))
+    );
+    println!("常驻内存 RSS(约):{} KiB", rss_kb());
     println!("重复 {} 轮,稳态样本 {} 个\n", args.repeat, steady.len());
     println!(
         "{:<28} {:>5} {:>9} {:>9} {:>9}",

@@ -1020,3 +1020,14 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 - 规格:`docs/HANDOFF.md` ㉛;门槛 `just verify` 350 用例全绿。
 - 下一步(审查顺序):查询内去重复分配/静态音节预处理(P2),
   随后 A1/A2 + D13。
+
+## 九、codex 审查第二批:首键/首次纠错的初始化搬到启动期
+
+- 审查原文:「在发布服务名之前完成词频总量计算和 typo 表准备」——新增
+  `ImeEngine::prepare_startup`(同步,词频总量 + 纠错变体表),`src/main.rs`
+  在 `request_name` 之前调用;后台 `prewarm` 继续负责查询形状的首次触碰。
+- 实测(30 个独立进程、不做查询预热):首键 10.795 → **1.000ms**,
+  首次纠错 29.252 → **2.268ms**;代价是启动期一次性 **36.8ms**,RSS 无实质变化。
+- 规格:`docs/HANDOFF.md` ㉜;门槛 `just verify` 351 用例全绿。
+- 下一步(审查顺序):查询内去重复分配(P2,`lattice.rs:480-496`、`rank.rs:82-95`、
+  `session/view.rs:74`、`lm/mod.rs:392-407`),随后 A1/A2 + D13 与 Q3/Q4/Q5。

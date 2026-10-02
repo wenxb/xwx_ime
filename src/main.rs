@@ -219,6 +219,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(path = %user_lm_path.display(), "用户学习模型已接入");
     let engine = Arc::new(engine);
 
+    // 启动期确定性初始化(codex 审查第二批 P1):词频总量线性扫描 + 纠错变体表。
+    // 两笔都是懒初始化,不搬走就由用户的前几个按键/第一次打错来付;这里同步
+    // 做完,而且早于下面的总线连接与 `request_name`,所以服务名可见时已经付清。
+    let prepare_started = std::time::Instant::now();
+    engine.prepare_startup();
+    tracing::info!(
+        ms = prepare_started.elapsed().as_secs_f64() * 1000.0,
+        "启动期初始化完成(词频总量 + 纠错变体表)"
+    );
+
     // 首键预热:进程内第一次走到混合/简拼形状要付 ~26ms(见
     // `ImeEngine::prewarm` 的实测数字),放后台线程先付掉,不挡启动。
     // 只读预热,不学习、不碰用户模型文件。
