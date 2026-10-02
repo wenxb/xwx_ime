@@ -361,16 +361,31 @@ impl LanguageModel for MixedLM {
 
     fn score(&self, state: &MixedState, word: &str) -> (f32, MixedState) {
         let (base_logp, base_next) = self.base.score(&state.base, word);
-        let user_logp = self
-            .user
-            .score_with(&state.snap, state.user_prev.as_deref(), word);
-        // 概率域线性插值(分数是 log10,先回概率再加权再取对数)。
-        // log10(10^x + 10^y) = max + log10(1 + 10^(min-max)),数值稳定。
-        let w = self.user_weight;
-        let bx = base_logp + (1.0 - w).log10();
-        let ux = user_logp + w.log10();
-        let (hi, lo) = if bx >= ux { (bx, ux) } else { (ux, bx) };
-        let mixed = hi + (1.0 + 10f32.powf(lo - hi)).log10();
+        let evidence =
+            self.user
+                .evidence_with(&state.snap, state.user_prev.as_deref(), word);
+        // 没有个人证据 ⇒ 原样用通用层(backoff),不拿中性常数顶替。
+        // 旧实现给「没学过」的词一个绝对中性分,而用户层自己的概率按
+        // **用户语料规模**归一化,两者量纲不可比,实测出现「学习反而
+        // 降权」:简拼 `ky` 下用户学过的「可以」被压到第 11 名。
+        // 详见 `user_lm.rs` 文件头。
+        let mixed = match evidence {
+            None => base_logp,
+            Some(user_logp) => {
+                // 概率域线性插值(分数是 log10,先回概率再加权再取对数)。
+                // log10(10^x + 10^y) = max + log10(1 + 10^(min-max)),数值稳定。
+                let w = self.user_weight;
+                let bx = base_logp + (1.0 - w).log10();
+                let ux = user_logp + w.log10();
+                let (hi, lo) = if bx >= ux { (bx, ux) } else { (ux, bx) };
+                let interpolated = hi + (1.0 + 10f32.powf(lo - hi)).log10();
+                // 学习永不降权:计数只有**正证据**(负证据是 Ctrl+Delete
+                // 的屏蔽表,不在计数里),故插值结果钳在通用层之上——
+                // 用户自己的语料再小,学过也不该比没学过更差。由
+                // `mixed_learning_never_demotes` 测量守住。
+                interpolated.max(base_logp)
+            }
+        };
         (
             mixed,
             MixedState {
@@ -718,5 +733,84 @@ mod tests {
         let c = LmContext::empty();
         assert!(c.tail.is_empty(), "tail 必须为空串(否则万象不走早退)");
         assert!(c.last_word.is_none(), "last_word 必须为 None(否则用户层走 bigram)");
+    }
+
+    /// **没有个人证据的词,混合分必须与通用层逐位相同**(backoff)。
+    ///
+    /// 旧实现给「没学过」的词一个绝对中性分 `-1.0`,于是用户层里
+    /// **有任何证据**的词反而更差——实测简拼 `ky` 下用户学过 3 次的
+    /// 「可以」被压到第 11 名,而没学过的「跨越」白拿 -1.15
+    /// (真实数据,2026-10-02)。这条测试钉住修复后的口径:
+    /// 没证据 ⇒ 通用层原样输出,用户层一个字都不改。
+    #[test]
+    fn mixed_no_evidence_falls_back_to_base_exactly() {
+        let mut base = BigramLM::new();
+        base.add_unigram("今天", 1000);
+        base.add_unigram("天气", 500);
+        let mut plain = BigramLM::new();
+        plain.add_unigram("今天", 1000);
+        plain.add_unigram("天气", 500);
+        let user = UserLM::in_memory();
+        user.learn(None, "斯巴克"); // 只学过这一个词
+        let mixed = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user, MIX_USER_WEIGHT));
+        let plain = LmStore::Bigram(plain);
+
+        for word in ["天气", "没见过的词"] {
+            let (m, _) = mixed.score(&mixed.initial_state(), word);
+            let (b, _) = plain.score(&plain.initial_state(), word);
+            assert_eq!(
+                m, b,
+                "{word} 无个人证据时混合分应与通用层逐位相同: {m} vs {b}"
+            );
+        }
+        // 反面对照:学过的那一个词必须**高于**通用层,否则上面两条
+        // 断言没有区分力(一个恒等于通用层的实现也能过)。
+        let (learned, _) = mixed.score(&mixed.initial_state(), "斯巴克");
+        let (b, _) = plain.score(&plain.initial_state(), "斯巴克");
+        assert!(learned > b, "学过的词应高于通用层: {learned} vs {b}");
+    }
+
+    /// **学习永不降权**:同一个词学 0/1/2/3/6/11 次,混合分单调不降,
+    /// 且学过就不低于通用层;没学过的词保持通用层原样。
+    ///
+    /// 计数只有**正证据**(负证据走 Ctrl+Delete 屏蔽表,不进计数),
+    /// 所以「学过反而更差」在任何数据规模下都是 bug。上面 `ky` 那次
+    /// 事故(用户语料很小 ⇒ 用户层概率低于中性常数)正是被这条挡住
+    /// 的那一类;任何让学过比没学过更差的改动都会在这里红。
+    #[test]
+    fn mixed_learning_never_demotes() {
+        let mut plain = BigramLM::new();
+        plain.add_unigram("跨越", 10_000);
+        let plain = LmStore::Bigram(plain);
+        let mut base = BigramLM::new();
+        base.add_unigram("跨越", 10_000);
+        let user = UserLM::in_memory();
+        let mixed = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user, MIX_USER_WEIGHT));
+        let LmStore::Mixed(m) = &mixed else {
+            panic!("应为混合模型");
+        };
+        let (base_learned, _) = plain.score(&plain.initial_state(), "可以");
+
+        let mut prev: Option<f32> = None;
+        let mut learns = 0usize;
+        for target in [0usize, 1, 2, 3, 6, 11] {
+            while learns < target {
+                m.user().learn(None, "可以");
+                learns += 1;
+            }
+            let (s, _) = mixed.score(&mixed.initial_state(), "可以");
+            if let Some(p) = prev {
+                assert!(s >= p, "学到第 {learns} 次时分不得下降: {p} -> {s}");
+            }
+            if target > 0 {
+                assert!(s > base_learned, "学过就不该低于通用层: {s} vs {base_learned}");
+            }
+            prev = Some(s);
+        }
+        // 没学过的词:原样保留通用层分(与上面第一条测试同口径,
+        // 这里连同「用户层已有计数」一起再钉一次)。
+        let (untouched, _) = mixed.score(&mixed.initial_state(), "跨越");
+        let (b_untouched, _) = plain.score(&plain.initial_state(), "跨越");
+        assert_eq!(untouched, b_untouched, "没学过的词必须原样保留通用层分");
     }
 }

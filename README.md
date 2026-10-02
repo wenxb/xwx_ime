@@ -190,7 +190,7 @@ cargo test -p xwx_engine                  # 只跑引擎（切分/词库/LM/会�
 cargo test -p xwx_ibus                    # 协议序列化与按键翻译测试
 ```
 
-当前基线 **275 passed / 0 failed / 1 ignored** = 226 单元（213 引擎 + 5 协议
+当前基线 **278 passed / 0 failed / 1 ignored** = 229 单元（216 引擎 + 5 协议
 + 8 二进制）+ **49 D-Bus 集成**。
 
 > 测试分三层，**别把上层当成下层的证据**：

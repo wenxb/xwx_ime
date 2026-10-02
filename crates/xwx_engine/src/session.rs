@@ -1362,9 +1362,12 @@ mod tests {
         );
         let user = engine.user_lm().expect("引擎应有用户层");
         let snap = user.snapshot();
-        let learned = user.score_with(&snap, None, "测试");
-        let unknown = user.score_with(&snap, None, "没学过的词");
-        assert!(learned > unknown, "候选词上屏应学习: {learned} vs {unknown}");
+        let learned = user.evidence_with(&snap, None, "测试");
+        let unknown = user.evidence_with(&snap, None, "没学过的词");
+        assert!(
+            learned.is_some() && unknown.is_none(),
+            "候选词上屏应产生用户层证据,没学过的词不应有证据: {learned:?} vs {unknown:?}"
+        );
 
         let before = user.unigram_len();
         s.handle(InputEvent::Char('a')).expect("按键失败");

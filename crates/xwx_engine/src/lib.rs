@@ -443,6 +443,12 @@ impl ImeEngine {
             return;
         };
         user.add_entry(word, pinyin_key);
+        // **召回与打分必须成对**(见 `user_lm.rs` 的 `entries` 字段注释):
+        // `add_entry` 让词库里没有的短语能被查到,`learn` 记一次上屏计数,
+        // 它下次才会排到前面。只 add_entry 时自造词「查得到但排不上」——
+        // 实测 `coined_entry_surfaces_via_lattice_like_dict_word` 里
+        // 会被同串的首字「张」挤到第 2。
+        user.learn(None, word);
     }
 
     /// 删一条候选(Ctrl+Delete 的引擎侧落点):屏蔽它,此后同拼音查询
@@ -2707,6 +2713,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **纯简拼下「用户学过的词」必须排在前面**(用户实测报的 `ky` → 可以)。
+    ///
+    /// 事故(2026-10-02,真实词库 + 真实用户模型):用户层对「没学过」的词
+    /// 给一个绝对中性分 `-1.0`,而用户层自己的概率按**用户语料规模**
+    /// 归一化(计数 3 时 ≈ log10(4/175) = -1.64),于是学过的「可以」
+    /// 反而比没学过的「跨越/可用」低 0.64 个数量级——实测第 **11** 名。
+    /// 修法见 `lm::MixedLM::score`:无个人证据原样回退通用层,有证据时
+    /// 插值且不低于通用层。
+    ///
+    /// 失败见证:把 `MixedLM::score` 的无证据分支换回任何「固定分」写法
+    /// → 「可以」的总分要比「跨越」低 0.64(log10(505814/497857) 只有
+    /// 0.007,补不回来)→ 红。
+    #[test]
+    fn real_dict_learned_word_tops_pure_abbrev() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let build = || {
+            let mut e = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+            e.dict = e.dict.with_abbrev(&abbrev_path);
+            e
+        };
+        let score_of = |e: &ImeEngine, word: &str| -> f32 {
+            e.lookup_candidates("ky", &LmContext::empty())
+                .expect("查询失败")
+                .into_iter()
+                .find(|c| c.word == word)
+                .unwrap_or_else(|| panic!("ky 候选里应有「{word}」"))
+                .score
+        };
+
+        let bare = build();
+        let user = crate::UserLM::in_memory();
+        for _ in 0..3 {
+            user.learn(None, "可以"); // 等价于用户上屏 3 次
+        }
+        let with_user = build().with_user_lm(user);
+
+        let learned_before = score_of(&bare, "可以");
+        let learned_after = score_of(&with_user, "可以");
+        assert!(
+            learned_after > learned_before,
+            "学过 3 次的「可以」应比没学过时高: {learned_before} -> {learned_after}"
+        );
+
+        // 没学过的近频竞争者必须**原样保留**通用层分(学习不连坐)。
+        for rival in ["跨越", "可用"] {
+            let b = score_of(&bare, rival);
+            let u = score_of(&with_user, rival);
+            assert_eq!(b, u, "没学过的「{rival}」不得被用户层改动: {b} vs {u}");
+        }
+
+        let cands = with_user
+            .lookup_candidates("ky", &LmContext::empty())
+            .expect("查询失败");
+        let head: Vec<(&str, f32)> = cands.iter().take(3).map(|c| (c.word.as_str(), c.score)).collect();
+        assert_eq!(
+            cands[0].word, "可以",
+            "纯简拼 `ky` 下学过的「可以」必须排第一(旧实现排第 11): {head:?}"
+        );
+        assert!(
+            score_of(&with_user, "可以") > score_of(&with_user, "跨越"),
+            "学过的「可以」应高于没学过的「跨越」"
+        );
     }
 
     /// 回声语义未变(真实词库 + 简拼):`zgr` 现在有真实简拼候选,

@@ -78,14 +78,19 @@ enum Section {
     Blocklist,
 }
 
-/// 用户模型对「没学过」的词给的中性分(log10)。
-///
-/// 不是概率,是混合层的「不表态」票:-1.0 高于真未知词兜底
-/// ([`crate::lm::UNK_LOG_PROB`] = -8),低于任何真实命中
-/// (bigram/unigram 平滑分约 -2 起步、随计数上升)。混合后没学过的
-/// 通用搭配仍由通用层主导,学过的搭配由用户层压过。推导与验证见
-/// [`crate::lm::MixedLM`] 与 `lm::tests::mixed_prefers_user_hits_*`。
-pub(crate) const NEUTRAL_LOG_PROB: f32 = -1.0;
+// 这里曾有一个 `NEUTRAL_LOG_PROB = -1.0`(用户层对「没学过」的词给的
+// 中性分)。它已删除,原因是一次实测到的**学习反而降权**:
+//
+// 用户层自己的概率按**用户语料规模**归一化,与通用模型量纲不可比。
+// 真实 `~/.local/share/xwx/user_bigram.txt`(Σc+vocab ≈ 175)下,计数 1 ≈
+// log10(2/175) = -1.94、计数 3 ≈ -1.64——**全在中性分 -1.0 之下**。
+// 于是「可以」(用户学过 3 次)在简拼 `ky` 里被压到第 11 名,而同串
+// 从没学过的「跨越」白拿 -1.15。中性分是个绝对量纲,用户多打一些字
+// (分母变大)结论就翻转,属于不可用的修法。
+//
+// 现在的口径:没证据就**不下结论**(`evidence_log10_prob` 返回 `None`),
+// 由混合层原样回退通用层;有证据时才插值,且不低于通用层。见
+// [`crate::lm::MixedLM::score`]。
 
 /// 计数表本体(不跨线程共享;共享由 [`UserLM`] 的 `RwLock` 承担)。
 #[derive(Debug, Default)]
@@ -135,10 +140,14 @@ pub struct UserLmSnapshot {
 }
 
 impl UserLmSnapshot {
-    /// log10 P(word | prev):与 [`BigramLM::log10_prob`] 同链
-    /// (bigram → unigram → 未知词兜底),分母用快照自己的统计,
-    /// 与通用模型语料规模无关。
-    fn log10_prob(&self, prev: Option<&str>, word: &str) -> f32 {
+    /// log10 P(word | prev) 的**用户层证据**:`None` = 这个词没有任何
+    /// 个人证据,混合层据此原样回退通用层(见文件头那段说明)。
+    ///
+    /// 有证据时与 [`BigramLM::log10_prob`] 同链(bigram → unigram),
+    /// 分母用快照自己的统计;概率的绝对量纲只在本层内部自洽,
+    /// **不跨层比较**——跨层由 [`crate::lm::MixedLM::score`] 在概率域
+    /// 插值,且插值结果不低于通用层。
+    fn evidence_log10_prob(&self, prev: Option<&str>, word: &str) -> Option<f32> {
         let t = &*self.tables;
         // 词表规模 = 已有 key 数(维护一个独立 vocab 字段反而要处理
         // 「计数衰减到 0 的词是否还算词表」的歧义,key 数定义更清晰)。
@@ -148,23 +157,16 @@ impl UserLmSnapshot {
                 let ch = t.unigrams.get(prev).copied().unwrap_or(0) as f32;
                 let denom = ch + vocab;
                 if denom > 0.0 {
-                    return ((c as f32 + 1.0) / denom).log10();
+                    return Some(((c as f32 + 1.0) / denom).log10());
                 }
             }
         }
         let cw = t.unigrams.get(word).copied().unwrap_or(0) as f32;
         let denom = t.unigram_total as f32 + vocab;
         if cw > 0.0 && denom > 0.0 {
-            return ((cw + 1.0) / denom).log10();
+            return Some(((cw + 1.0) / denom).log10());
         }
-        // 「通用模型有、用户没学过」的未知词:给中性分而不是
-        // 未知词兜底分。用户模型是「按上屏次数采样的稀疏观察表」,
-        // 没观察到 ≠ 概率低到 1e-8——它和通用模型在混合层做概率域
-        // 线性插值,若此处给 -8,一次没学过的通用高频搭配会被用户层
-        // 拖掉 ≈2.4 个数量级(0.3×10^-1.03 + 0.7×10^-8),用户层变成
-        // 全场否决票,通用语料的覆盖率优势被稀释。真未知词(通用层
-        // 也不认识)两侧同取兜底,混合分 ≈ -3.4,仍远低于任何命中。
-        NEUTRAL_LOG_PROB
+        None
     }
 
     /// 按拼音 key(音节空格分隔,与词典 key 同格式)查造词条目。
@@ -637,9 +639,17 @@ impl UserLM {
     }
 
     /// 内部查询打分(供 [`crate::lm::MixedLM`] 调用)。
-    pub(crate) fn score_with(&self, snap: &UserLmSnapshot, prev: Option<&str>, word: &str) -> f32 {
+    ///
+    /// 返回 `None` = 无个人证据(混合层回退通用层),`Some(logp)` =
+    /// 用户层自己的概率(量纲只在本层内部自洽)。
+    pub(crate) fn evidence_with(
+        &self,
+        snap: &UserLmSnapshot,
+        prev: Option<&str>,
+        word: &str,
+    ) -> Option<f32> {
         let _ = self; // 打分只依赖快照,不需要锁
-        snap.log10_prob(prev, word)
+        snap.evidence_log10_prob(prev, word)
     }
 }
 
@@ -675,22 +685,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn learn_raises_score_for_committed_word() {
+    fn learn_produces_evidence_for_committed_word() {
         let lm = UserLM::in_memory();
-        let before = lm.score_with(&lm.snapshot(), None, "斯巴克");
+        let before = lm.evidence_with(&lm.snapshot(), None, "斯巴克");
+        assert!(before.is_none(), "没学过就不该有证据: {before:?}");
         for _ in 0..5 {
             lm.learn(None, "斯巴克");
         }
-        let after = lm.score_with(&lm.snapshot(), None, "斯巴克");
-        assert!(after > before, "学习后 unigram 分应升高: {before} -> {after}");
-        // 上文搭配也应命中:中→国 学过后,有中上文时分更高
+        let after = lm.evidence_with(&lm.snapshot(), None, "斯巴克");
+        assert!(after.is_some(), "学习后应产生 unigram 证据: {after:?}");
+        // 上文搭配也应命中:中→国 学过后,有中上文时也有证据
         for _ in 0..5 {
             lm.learn(Some("中"), "国");
         }
         let snap = lm.snapshot();
-        let with_prev = lm.score_with(&snap, Some("中"), "国");
-        let no_prev = lm.score_with(&snap, None, "国");
-        assert!(with_prev > no_prev, "学习 bigram 后有上文分应更高: {with_prev} vs {no_prev}");
+        let with_prev = lm.evidence_with(&snap, Some("中"), "国");
+        let no_prev = lm.evidence_with(&snap, None, "国");
+        assert!(
+            with_prev.is_some() && no_prev.is_some(),
+            "bigram 与 unigram 两条路都应有证据: {with_prev:?} / {no_prev:?}"
+        );
+        assert!(
+            with_prev > no_prev,
+            "bigram 分母更小(只看「中」后接什么),分值应更高: {with_prev:?} vs {no_prev:?}"
+        );
     }
 
     #[test]
@@ -713,11 +731,11 @@ mod tests {
         {
             let lm = UserLM::open_or_create(&path);
             let snap = lm.snapshot();
-            let with_prev = lm.score_with(&snap, Some("今天"), "天气");
-            let unknown = lm.score_with(&snap, None, "没学过的词");
+            let with_prev = lm.evidence_with(&snap, Some("今天"), "天气");
+            let unknown = lm.evidence_with(&snap, None, "没学过的词");
             assert!(
-                with_prev > unknown,
-                "重载后学习效果应仍在: {with_prev} vs {unknown}"
+                with_prev.is_some() && unknown.is_none(),
+                "重载后学习效果应仍在: {with_prev:?} vs {unknown:?}"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -760,9 +778,12 @@ mod tests {
         let n = lm.unigram_len();
         assert!(n <= MAX_USER_UNIGRAMS, "衰减后条数应回到上限内: {n}");
         let snap = lm.snapshot();
-        let hot = lm.score_with(&snap, None, "常用词");
-        let cold = lm.score_with(&snap, None, "长尾词0");
-        assert!(hot > cold, "高频词应在衰减后仍高于长尾: {hot} vs {cold}");
+        let hot = lm.evidence_with(&snap, None, "常用词");
+        let cold = lm.evidence_with(&snap, None, "长尾词0");
+        assert!(
+            hot > cold,
+            "高频词应在衰减后仍高于长尾: {hot:?} vs {cold:?}"
+        );
     }
 
     #[test]
