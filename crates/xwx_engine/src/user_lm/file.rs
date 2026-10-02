@@ -6,7 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::path::Path;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tracing::{info, warn};
@@ -95,17 +96,24 @@ impl UserLM {
                     *lm.tables.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(t);
                 }
                 Err(e) => {
-                    // 文件损坏:不 panic、不截断原文件(它是唯一副本,
-                    // flush 才会覆盖);从空模型继续,下次 flush 重写。
+                    // 文件损坏:不 panic、不截断原文件。**进入只读恢复态**
+                    // (codex 审查 D11):旧实现继续用空模型 + 保留写路径,
+                    // 下一次 flush 就把唯一副本覆盖成空文件。现在只读,
+                    // 直到显式 [`Self::recover_corrupt_file`]。
+                    lm.read_only.store(true, std::sync::atomic::Ordering::Relaxed);
                     warn!(error = %e, path = %path.display(),
-                        "用户语言模型损坏,从空模型重新开始(原文件保留到下次回写)");
+                        "用户语言模型损坏:进入只读恢复态,不再回写(原文件保留;                         确认后调用 recover_corrupt_file 留档并重新开始)");
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 info!(path = %path.display(), "用户语言模型不存在,首次运行从空模型开始");
             }
             Err(e) => {
-                warn!(error = %e, path = %path.display(), "用户语言模型打开失败,本次不加载");
+                // 打不开(权限等)同样进只读态:否则 flush 会把读不出来的
+                // 文件截断成空模型(codex 审查 D11)。
+                lm.read_only.store(true, std::sync::atomic::Ordering::Relaxed);
+                warn!(error = %e, path = %path.display(),
+                    "用户语言模型打开失败:进入只读恢复态,不再回写");
             }
         }
         lm
@@ -188,6 +196,12 @@ impl UserLM {
         // **串行化**:两次 flush 并发会交错写同一个临时文件、rename 顺序也
         // 无法保证(codex 审查 D4)。
         let _serial = self.flush_lock.lock().unwrap_or_else(|p| p.into_inner());
+        if self.read_only.load(std::sync::atomic::Ordering::Relaxed) {
+            if !self.read_only_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                warn!("用户语言模型处于只读恢复态:本次不落盘(原文件保留)");
+            }
+            return Ok(());
+        }
         let Some(path) = &self.path else {
             self.dirty.store(0, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
@@ -211,6 +225,32 @@ impl UserLM {
                 Err(e)
             }
         }
+    }
+
+    /// 显式从损坏文件恢复:把原件**改名留档**,再允许回写(新文件由下一次
+    /// `flush` 写出)。这是唯一的解除只读态的方式(codex 审查 D11)。
+    ///
+    /// 返回留档路径(`None` = 本来就不是只读态,或原文件已不在)。
+    pub fn recover_corrupt_file(&self) -> Result<Option<PathBuf>, LmError> {
+        if !self.read_only.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let Some(path) = &self.path else {
+            self.read_only.store(false, std::sync::atomic::Ordering::Relaxed);
+            return Ok(None);
+        };
+        let backup = if path.is_file() {
+            let mut name = path.file_name().unwrap_or_default().to_os_string();
+            name.push(format!(".corrupt.{}", std::process::id()));
+            let b = path.with_file_name(name);
+            std::fs::rename(path, &b)?;
+            Some(b)
+        } else {
+            None
+        };
+        self.read_only.store(false, std::sync::atomic::Ordering::Relaxed);
+        warn!(path = %path.display(), "损坏的用户语言模型已留档,后续回写重新开始");
+        Ok(backup)
     }
 
     /// 落盘实现:取快照 → 序列化 → 同目录临时文件 → 原子 rename。
@@ -292,7 +332,14 @@ impl UserLM {
         tmp_name.push(format!(".tmp.{}", std::process::id()));
         let tmp = path.with_file_name(tmp_name);
         let write_result = (|| -> Result<(), LmError> {
-            let mut f = std::fs::File::create(&tmp)?;
+            // 0600:用户词频/造词/屏蔽是个人输入历史,不给同机其它用户读
+            // (codex 审查 D11)。
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
             f.write_all(text.as_bytes())?;
             f.sync_data().ok(); // 尽力而为:数据页落盘失败不致命
             drop(f);

@@ -163,6 +163,13 @@ pub struct UserLM {
     /// 落盘串行化:两次 flush 并发会交错写同一个临时文件,rename 顺序也
     /// 无法保证(codex 审查 D4)。
     flush_lock: std::sync::Mutex<()>,
+    /// **只读恢复态**:加载时发现文件损坏/读不出来 → 置位。
+    /// 置位后 [`Self::flush`] 一律不写盘——原文件是用户数据的唯一副本,
+    /// 空模型把它覆盖掉才是真正的数据丢失(codex 审查 D11)。
+    /// 只能由 [`Self::recover_corrupt_file`] 显式解除。
+    read_only: std::sync::atomic::AtomicBool,
+    /// 只读告警只打一次(定时器每 30s 会来一次,别刷屏)。
+    read_only_warned: std::sync::atomic::AtomicBool,
 }
 
 impl UserLM {
@@ -173,7 +180,14 @@ impl UserLM {
             path: None,
             dirty: std::sync::atomic::AtomicU32::new(0),
             flush_lock: std::sync::Mutex::new(()),
+            read_only: std::sync::atomic::AtomicBool::new(false),
+            read_only_warned: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// 是否处于「损坏文件只读恢复态」(测试/日志用)。
+    pub fn is_read_only(&self) -> bool {
+        self.read_only.load(std::sync::atomic::Ordering::Relaxed)
     }
 
 

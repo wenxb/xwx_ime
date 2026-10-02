@@ -86,9 +86,17 @@ fn missing_and_corrupt_files_degrade_gracefully() {
     std::fs::write(&bad, "好\t不是数字\n两\t个\t字段\t太多\n").unwrap();
     let lm = UserLM::open_or_create(&bad);
     assert_eq!(lm.unigram_len(), 0, "损坏文件应退化为空模型");
-    // 损坏文件仍可被下次 flush 覆盖重写
+    // **契约变更(codex 审查 D11)**:损坏文件进只读恢复态,不再被下次 flush
+    // 自动覆盖——空模型覆盖唯一副本才是真正的数据丢失。旧断言就是
+    // 「损坏后 flush 能重写」,那正是要修的行为。
+    assert!(lm.is_read_only(), "损坏文件应进只读恢复态");
     lm.learn(None, "好");
-    lm.flush().expect("损坏后 flush 应能重写");
+    let before = std::fs::read(&bad).unwrap();
+    lm.flush().expect("只读态 flush 不该报错");
+    assert_eq!(std::fs::read(&bad).unwrap(), before, "只读态不许覆盖原文件");
+    // 显式恢复后才允许重新开始
+    lm.recover_corrupt_file().expect("恢复失败");
+    lm.flush().expect("恢复后 flush 应能重写");
     let lm = UserLM::open_or_create(&bad);
     assert_eq!(lm.unigram_len(), 1, "重写后应能正常加载");
     let _ = std::fs::remove_dir_all(&dir);
@@ -413,18 +421,112 @@ fn flush_then_reload_keeps_every_count() {
 /// 把路径的父目录指成一个普通文件,`create_dir_all` 必失败。
 #[test]
 fn failed_flush_keeps_the_generation_dirty() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("xwx_userlm_fail_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建目录失败");
-    let blocker = dir.join("not-a-dir");
-    std::fs::write(&blocker, b"x").expect("写文件失败");
-    let path = blocker.join("user_bigram.txt");
-
+    let path = dir.join("user_bigram.txt");
     let lm = UserLM::open_or_create(&path);
     lm.learn(None, "我们");
     assert_eq!(lm.dirty_count(), 1);
-    assert!(lm.flush().is_err(), "父目录是文件,落盘必须失败");
-    assert_eq!(lm.dirty_count(), 1, "失败后这一代必须还回去,不能丢");
 
+    // 目录设成只读 → 临时文件写不进去(可写状态下真实发生的写失败)。
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).expect("chmod 失败");
+    let result = lm.flush();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod 恢复失败");
+    if result.is_ok() {
+        // root 无视权限位:这条用例在这种情况下没有可测的东西。
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    assert_eq!(lm.dirty_count(), 1, "失败后这一代必须还回去,不能丢");
+    lm.flush().expect("恢复可写后应能补上");
+    assert_eq!(lm.dirty_count(), 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 损坏的用户文件绝不能被「空模型 + 回写」覆盖掉(codex 审查 D11,P1)。
+///
+/// 三张表各自的坏行都要进只读恢复态:计数区(坏 count)、造词区、屏蔽区
+/// (后两者是缺制表符的坏行)。只读态下 learn/flush 都不许改动原文件。
+#[test]
+fn corrupt_user_file_is_never_overwritten() {
+    let dir = std::env::temp_dir().join(format!("xwx_userlm_corrupt_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("建目录失败");
+
+    let cases: [(&str, String); 3] = [
+        ("counts", "# xwx\n我们\tnot-a-number\n".to_string()),
+        (
+            "entries",
+            "# xwx\n# xwx-user-entries\n坏行没有制表符\n".to_string(),
+        ),
+        (
+            "blocklist",
+            "# xwx\n# xwx-user-blocklist\n坏行没有制表符\n".to_string(),
+        ),
+    ];
+    for (tag, content) in cases {
+        let path = dir.join(format!("{tag}.txt"));
+        std::fs::write(&path, &content).expect("写坏文件失败");
+        let before = std::fs::read(&path).expect("读坏文件失败");
+
+        let lm = UserLM::open_or_create(&path);
+        assert!(lm.is_read_only(), "{tag}: 坏文件必须进只读恢复态");
+
+        lm.learn(None, "新词");
+        lm.add_entry("新词", "xin ci");
+        lm.block_candidate("新词", "xin ci");
+        lm.flush().expect("只读态 flush 不该报错(只是不写盘)");
+        assert_eq!(
+            std::fs::read(&path).expect("读文件失败"),
+            before,
+            "{tag}: 只读态下原文件必须逐字节不变"
+        );
+
+        // 显式恢复:先把原件留档,再允许回写。
+        let backup = lm
+            .recover_corrupt_file()
+            .expect("恢复失败")
+            .expect("应留下备份");
+        assert_eq!(
+            std::fs::read(&backup).expect("读备份失败"),
+            before,
+            "{tag}: 备份必须是原件字节"
+        );
+        assert!(!lm.is_read_only(), "{tag}: 恢复后应解除只读");
+        lm.flush().expect("恢复后应能回写");
+        let rewritten = std::fs::read_to_string(&path).expect("读新文件失败");
+        assert!(rewritten.contains("新词"), "{tag}: 新文件应含新数据");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 读不出文件(权限)同样不许转成覆盖:进只读态、原文件大小不变。
+#[test]
+fn unreadable_user_file_is_not_truncated() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("xwx_userlm_perm_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("建目录失败");
+    let path = dir.join("user_bigram.txt");
+    std::fs::write(&path, "我们\t3\n").expect("写文件失败");
+    // root 无视权限位:那种情况下这条用例没有可测的东西,跳过。
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod 失败");
+    let readable = std::fs::read(&path).is_ok();
+    if !readable {
+        let lm = UserLM::open_or_create(&path);
+        assert!(lm.is_read_only(), "读不出来必须进只读态");
+        lm.learn(None, "新词");
+        lm.flush().expect("只读态 flush 不该报错");
+        assert_eq!(
+            std::fs::metadata(&path).expect("stat 失败").len(),
+            "我们\t3\n".len() as u64,
+            "只读态下文件不许被截断"
+        );
+    }
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     let _ = std::fs::remove_dir_all(&dir);
 }
