@@ -39,6 +39,14 @@ impl ImeEngine {
         if pinyin.is_empty() {
             return Ok(Vec::new());
         }
+        // **非拼音文本在这里就挡住**(codex 审查 D12):这些字符会进到按
+        // **字节**切片的排序代码(`rank.rs` 的 `inp[..cp_len]`),调用
+        // `lookup_candidates("你")` 直接 panic——库调用方与探针可以击穿进程。
+        // 返回**原文回声**:与识别态/回声候选同一出口(内核只做拼音,
+        // 「原样上屏」交给上层),既不 panic 也不假装有候选。
+        if !pinyin.is_ascii() {
+            return Ok(vec![Self::echo_candidate(pinyin)]);
+        }
 
         // B2 音节分隔符:`'` 是用户敲的**强制切分点**(`xi'an` 消歧出
         // 「西安」)。这里把它归一化成「干净串 + 边界表」两个量:

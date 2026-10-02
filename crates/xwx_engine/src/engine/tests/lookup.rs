@@ -511,3 +511,26 @@ fn tolerant_pass_leaves_exactly_typed_inputs_alone() {
         );
     }
 }
+
+/// 公开查询入口必须挡住非拼音文本(codex 审查 D12,P2):
+/// 中文/emoji/混合串过去会直接进按字节切片的排序代码并 panic。
+/// 非 ASCII 一律返回**原文回声**(原样上屏的既有出口),绝不 panic。
+#[test]
+fn non_ascii_input_returns_an_echo_instead_of_panicking() {
+    let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+    for input in ["你", "你好", "🎉", "a中b", "ni你hao", "\u{0301}"] {
+        let cands = engine
+            .lookup_candidates(input, &LmContext::empty())
+            .unwrap_or_else(|e| panic!("{input:?} 不该报错: {e}"));
+        assert!(
+            cands.iter().any(|c| c.echo && c.word == input),
+            "{input:?} 应返回原文回声,实际: {:?}",
+            cands.iter().map(|c| (&c.word, c.echo)).collect::<Vec<_>>()
+        );
+    }
+    // 空串仍是空(既有契约)。
+    assert!(engine.lookup_candidates("", &LmContext::empty()).unwrap().is_empty());
+    // ASCII 既有输出不变:同一次调用两次结果一致且非空。
+    let ascii = engine.lookup_candidates("nihao", &LmContext::empty()).expect("查询失败");
+    assert!(!ascii.is_empty(), "ASCII 路径不该被这次守卫影响");
+}
