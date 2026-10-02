@@ -49,32 +49,46 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
     let inp: &str = normalized.clean();
     let bounds: Option<&[usize]> = normalized.bounds();
     let umin = unreachable_tail(inp, bounds);
-    // 预计算每个候选的数值键:`sort_by` 每次比较调两次 `sort_key`,
-    // 而 `sort_key` 里的 `unexplained_letters` / `cp_len` 都要对
-    // `c.pinyin` 做一次 chars 过滤(O(拼音长));500 条候选的简拼层
-    // 排序 ~4500 次比较 × 2 键 × 2 次过滤,release 下实测 zhongg
-    // 从 0.99ms 涨到 1.23ms。预算成 (bucket, 罚后分) 的 PlainKey
-    // 后比较是 O(1),延迟回到 0.99ms 量级。
-    // 键预算 + 克隆重排:`sort_by` 每次比较调两次 `sort_key`,而
-    // `sort_key` 里的 `unexplained_letters` / `cp_len` 都要对
-    // `c.pinyin` 做一次 chars 过滤;500 条候选的简拼层排序
-    // ~4500 次比较 × 2 键 × 2 次过滤,release 下实测 zhongg 从
-    // 0.99ms 涨到 1.23ms。预算成 PlainKey 后比较是 O(1),延迟
-    // 回到 1.10ms(克隆 500 条候选的代价比反复重算键小)。
-    let mut keyed: Vec<(PlainKey, Candidate)> = ranked
-        .iter()
-        .map(|c| (plain_key(inp, &umin, c), c.clone()))
-        .collect();
-    keyed.sort_by(|(ka, a), (kb, b)| {
-        ka.cmp(kb).then_with(|| {
+    // 预计算每个候选的数值键:`sort_by` 每次比较调两次 `sort_key`,而
+    // `sort_key` 里的 `unexplained_letters` / `cp_len` 都要对 `c.pinyin`
+    // 做一次 chars 过滤(O(拼音长));500 条候选的简拼层排序 ~4500 次比较
+    // × 2 键 × 2 次过滤,release 下实测 zhongg 从 0.99ms 涨到 1.23ms。
+    // 预计算成 `PlainKey` 后比较是 O(1),延迟回到 1.0ms 量级。
+    //
+    // **只排下标(codex 审查 P2)**:旧实现把候选本身克隆进 `keyed`、排完再
+    // `clone_from_slice` 写回,一次排序克隆两遍整个候选表(`Candidate` 带
+    // 三个 `String`,500 条 ≈ 1500 次分配)。改成「键 + 下标」后按下标置换
+    // 就地交换,零克隆——省的是分配,不是毫秒(与 `score_only` 同一结论)。
+    let keys: Vec<PlainKey> = ranked.iter().map(|c| plain_key(inp, &umin, c)).collect();
+    let mut order: Vec<usize> = (0..ranked.len()).collect();
+    order.sort_by(|&a, &b| {
+        keys[a].cmp(&keys[b]).then_with(|| {
             // 数值键并列时的确定性收尾,与旧 `sort_key` 尾部字段一致
+            let (a, b) = (&ranked[a], &ranked[b]);
             b.freq
                 .cmp(&a.freq)
                 .then_with(|| a.word.cmp(&b.word))
                 .then_with(|| a.pinyin.cmp(&b.pinyin))
         })
     });
-    ranked.clone_from_slice(&keyed.into_iter().map(|(_, c)| c).collect::<Vec<_>>());
+    // 就地应用置换:目标是 `ranked[i] = 旧 ranked[order[i]]`。把置换分解成
+    // 环,在每个环里沿 `order` 反向搬(每步 swap 一个元素),零克隆。
+    let mut placed = vec![false; ranked.len()];
+    for start in 0..ranked.len() {
+        if placed[start] {
+            continue;
+        }
+        let mut i = start;
+        loop {
+            placed[i] = true;
+            let j = order[i];
+            if j == start {
+                break;
+            }
+            ranked.swap(i, j);
+            i = j;
+        }
+    }
 }
 
 /// `sort_key` 的数值前缀(bucket + 罚后分),供 `sort_candidates`
