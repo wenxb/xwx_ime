@@ -42,7 +42,7 @@ check:
 # test + check 一把过（提交前跑这个）
 verify: check test
 
-# dev：编译并前台跑引擎（debug，连接到 ibus-daemon）
+# dev：前台跑引擎（debug）；ibus-daemon 在跑时先 pkill -x ibus-daemon
 dev:
     cargo build -p xwx_ime
     exec {{target_dir}}/debug/xwx_ime --ibus
