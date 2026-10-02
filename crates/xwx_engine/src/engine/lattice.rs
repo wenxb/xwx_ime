@@ -109,14 +109,24 @@ fn window_has_vowel(window: &str) -> bool {
         reach.first().copied().unwrap_or(false)
     }
 
-    /// 后向 DP(A3):`result[pos]` = 从 `pos` 到串尾的最优补全分
-    /// (log10 域,越大越好);不可达串尾的位置为 `f32::NEG_INFINITY`。
+    /// 后向 DP(A3 + D13):`result[r][pos]` = 从 `pos` 到串尾、**最多再用
+    /// `r` 次容错编辑**的最优补全分(log10 域,越大越好);不可达串尾的
+    /// 位置为 `f32::NEG_INFINITY`。预算更大的一行恒 ≥ 更小的一行
+    /// (用不完的预算不强制花掉)。
     ///
-    /// 递推(从串尾往前,与 [`Self::decode_beam_with_lattice`] 的前向
-    /// beam 对称):`result[pos] = max over lattice[pos] 的边 e of
-    /// (e 的词频项 + lm_weight × LM 近似分 - e.fuzzy_penalty + result[e.end])`,
-    /// 边界 `result[len] = 0`(空后缀代价为零)。每条边只处理一次,
-    /// 复杂度 O(边数)。
+    /// 递推(从串尾往前,与 [`Self::decode_beam_with_lattice`] 的前向 beam 对称):
+    /// `result[r][pos]` 取遍 `lattice[pos]` 中 `edit_count ≤ r` 的边,每条边给出的
+    /// 候选值 = e 的词频项 + lm_weight × LM 近似分 − e.fuzzy_penalty − e.typo_penalty +
+    /// `result[r - e.edit_count][e.end]`,取其中最大。边界 `result[r][len] = 0`
+    /// (空后缀代价为零)。每条边在每个预算行里只处理一次,复杂度
+    /// O(边数 × (预算 + 1))。
+    ///
+    /// **为什么要有预算这一维(codex 审查 D13)**:[`MAX_TYPO_EDITS`] 原先
+    /// 只卡「单次链枚举」——编辑次数落成 [`LatticeEdge`] 后只剩罚分,后向
+    /// DP 无从限制**整条路径**的累计编辑数,于是「两个各错一处的词」能拼出
+    /// 一条两次编辑的读法,与「整条路径最多一次编辑」的口径自相矛盾。
+    /// 现在边的 `edit_count` 参与递推:`result[预算][0]` 有限 ⟺ **在预算内**
+    /// 存在覆盖整串的读法。
     ///
     /// **刻意的近似,不是 bug**:LM 是左到右的(打分需要左侧上下文),
     /// 后向 DP 在位置 `pos` 拿不到「从开头走到这里」的精确 LM 状态,
@@ -132,10 +142,9 @@ fn window_has_vowel(window: &str) -> bool {
         pinyin: &str,
         ctx: &LmContext<'_>,
         lattice: &[Vec<LatticeEdge>],
-    ) -> Result<Vec<f32>, EngineError> {
+        max_edits: u8,
+    ) -> Result<Vec<Vec<f32>>, EngineError> {
         let len = pinyin.len();
-        let mut result = vec![f32::NEG_INFINITY; len + 1];
-        result[len] = 0.0;
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
         // LM 近似的起点状态:无上文。`ctx` 仅供首词(位置 0)精确打分,
@@ -143,31 +152,65 @@ fn window_has_vowel(window: &str) -> bool {
         let _ = ctx;
         let initial = self.lm.initial_state();
 
+        // 每条边自身的分数与剩余预算无关 ⇒ 先算一遍(每边一次 `score_only`),
+        // 再按预算递推;否则预算这一维会把 LM 调用次数乘以 (预算 + 1)。
+        // 空词边没有词频项、没有 LM 转移,只有它自己的编辑惩罚。
+        let edge_scores: Vec<Vec<f32>> = lattice
+            .iter()
+            .map(|bucket| {
+                bucket
+                    .iter()
+                    .map(|edge| {
+                        if edge.gap {
+                            -edge.typo_penalty
+                        } else {
+                            let logp = self.lm.score_only(&initial, &edge.word);
+                            let dict_logp = if total_freq > 0 {
+                                ((edge.freq.max(1) as f64).log10() - log10_total) as f32
+                            } else {
+                                0.0
+                            };
+                            dict_logp + logp * self.lm_weight - edge.fuzzy_penalty
+                                - edge.typo_penalty
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
         // `'` 强制切分点的语义已在 `build_lattice` 的逐音节检查里完全
         // 落实——格里本来就不含任何跨 `'` 的边,后向 DP 在格上递推,
         // 继承格的边界语义即可,不需要也不应再做边界过滤。
-        for pos in (0..len).rev() {
-            for edge in &lattice[pos] {
-                if !result[edge.end].is_finite() {
-                    continue; // 该边到不了串尾,不构成完整补全
-                }
-                // 空词边(容错解码里「吃掉一段字母」的弧):没有词频项、没有
-                // LM 转移,只有它自己的编辑惩罚。
-                let score = if edge.gap {
-                    -edge.typo_penalty + result[edge.end]
+        let mut result: Vec<Vec<f32>> = Vec::with_capacity(max_edits as usize + 1);
+        for budget in 0..=max_edits {
+            // 本行**先入容器再填**:零编辑边会读 `result[budget]` 自己这一行
+            // (边严格前进 ⇒ `edge.end > pos`,而 `pos` 从串尾往前推进,
+            // 所以同行的 `edge.end` 一定已经填好)。少了这一步,预算 0 的行
+            // 会在第一次遇到零编辑边时越界。
+            result.push(vec![f32::NEG_INFINITY; len + 1]);
+            let row = result.len() - 1;
+            result[row][len] = 0.0;
+            for pos in (0..len).rev() {
+                // 用不完的预算不强制花掉:小预算能做到的,大预算同样能做到。
+                let mut best = if budget > 0 {
+                    result[row - 1][pos]
                 } else {
-                    let logp = self.lm.score_only(&initial, &edge.word);
-                    let dict_logp = if total_freq > 0 {
-                        ((edge.freq.max(1) as f64).log10() - log10_total) as f32
-                    } else {
-                        0.0
-                    };
-                    dict_logp + logp * self.lm_weight - edge.fuzzy_penalty - edge.typo_penalty
-                        + result[edge.end]
+                    f32::NEG_INFINITY
                 };
-                if score > result[pos] {
-                    result[pos] = score;
+                for (slot, edge) in lattice[pos].iter().enumerate() {
+                    if edge.edit_count > budget {
+                        continue;
+                    }
+                    let rest = result[row - edge.edit_count as usize][edge.end];
+                    if !rest.is_finite() {
+                        continue; // 该边到不了串尾,不构成完整补全
+                    }
+                    let score = edge_scores[pos][slot] + rest;
+                    if score > best {
+                        best = score;
+                    }
                 }
+                result[row][pos] = best;
             }
         }
         Ok(result)
@@ -554,6 +597,7 @@ fn window_has_vowel(window: &str) -> bool {
                         freq: c.freq,
                         fuzzy_penalty: *fuzzy_penalty,
                         typo_penalty: arc_penalty,
+                        edit_count: arc_edits,
                         gap: false,
                     });
                 }
@@ -571,6 +615,7 @@ fn window_has_vowel(window: &str) -> bool {
                                 freq: 0,
                                 fuzzy_penalty: 0.0,
                                 typo_penalty: arc_penalty,
+                                edit_count: arc_edits,
                                 gap: false,
                             });
                         }
@@ -619,6 +664,7 @@ fn window_has_vowel(window: &str) -> bool {
                             freq: 0,
                             fuzzy_penalty: 0.0,
                             typo_penalty: cost,
+                            edit_count: 1,
                             gap: true,
                         });
                     }

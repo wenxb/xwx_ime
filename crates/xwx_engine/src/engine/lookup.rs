@@ -185,8 +185,11 @@ impl ImeEngine {
             // beam 是 O(位置 × 桶宽 × 桶内边数),长串上要几万次 LM 打分
             // (实测这一步就吃掉 10ms,是延迟超标的主因);而后向 DP 每条边
             // 只碰一次,`result[0]` 有限 ⟺ 存在覆盖整串的读法,语义等价。
-            let tolerant_suffix = self.backward_completion(pinyin, ctx, &tolerant_lattice)?;
-            tolerant_explains = tolerant_suffix[0].is_finite();
+            let tolerant_suffix =
+                self.backward_completion(pinyin, ctx, &tolerant_lattice, MAX_TYPO_EDITS)?;
+            // 「走到底」必须**在编辑预算内**成立(codex 审查 D13):预算这一维
+            // 的最后一行就是「整条路径最多 MAX_TYPO_EDITS 次编辑」。
+            tolerant_explains = tolerant_suffix[MAX_TYPO_EDITS as usize][0].is_finite();
             if tolerant_explains {
                 // 复用上面那次后向 DP(`lattice_candidates` 会再算一遍)。
                 let tolerant =
@@ -280,11 +283,11 @@ impl ImeEngine {
         // A3 打分:候选分 = 以该候选开头的最优完整路径分。
         // 先跑后向 DP 拿「每个位置到串尾的最优补全分」,再给 lattice[0]
         // 上每条边打分。
-        let best_suffix = self.backward_completion(pinyin, ctx, lattice)?;
+        let best_suffix = self.backward_completion(pinyin, ctx, lattice, MAX_TYPO_EDITS)?;
         self.lattice_candidates_scored(ctx, lattice, &best_suffix)
     }
 
-    /// [`Self::lattice_candidates`] 的主体,但后向 DP 由调用方传入。
+    /// [`Self::lattice_candidates`] 的主体,但后向 DP(带预算维)由调用方传入。
     ///
     /// 容错路径上这个 DP 已经被算过一次(判「容错格有没有走到底」),
     /// 再让 `lattice_candidates` 自己算一遍就是把整张格的 LM 打分做两次
@@ -293,7 +296,7 @@ impl ImeEngine {
         &self,
         ctx: &LmContext<'_>,
         lattice: &[Vec<LatticeEdge>],
-        best_suffix: &[f32],
+        best_suffix: &[Vec<f32>],
     ) -> Result<Vec<Candidate>, EngineError> {
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
@@ -324,10 +327,14 @@ impl ImeEngine {
             // 边终点必有完整补全:beam 已确认整串可解,且任何有出边的
             // 位置都能沿格走到串尾(边严格前进、终点不超串长),
             // 故 best_suffix[edge.end] 必为有限值。
+            // 补全只能用**剩下的**预算(codex 审查 D13):首边自己用掉的编辑数
+            // 必须先扣掉,否则「首边错一处 + 补全再错一处」就凑出超预算读法。
+            // `best_suffix.len() - 1` 就是这次 DP 的预算上界。
+            let remaining = (best_suffix.len() - 1).saturating_sub(edge.edit_count as usize);
             let score = dict_logp + logp * self.lm_weight
                 - edge.fuzzy_penalty
                 - edge.typo_penalty
-                + best_suffix[edge.end];
+                + best_suffix[remaining][edge.end];
             let cand = Candidate {
                 word: edge.word.clone(),
                 pinyin: edge.pinyin.clone(),

@@ -1448,3 +1448,47 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   与「只有光标动了」(`session/view.rs:74`)。
 - **门槛**:`just verify` **353 用例全绿**(283 engine + 6 ibus + 9 bin + 55 集成),
   clippy `-D warnings` 无输出。
+
+## ㉞ 容错解码的编辑预算真正落到「整条路径」(codex 审查 D13)(2026-10-03)
+
+审查第一批 D13(P2)。
+
+- **问题**:`MAX_TYPO_EDITS` 只卡**单次链枚举**(`engine/lattice.rs:506,592` 的
+  `typo_edits < MAX_TYPO_EDITS`)——一条「音节级 ≤1 编辑」弧落成 `LatticeEdge`
+  之后只剩 `typo_penalty` 罚分,后向 DP 与 beam 都拿不到「这条边用了几次编辑」,
+  于是**两个各错一处的词**能拼出一条两次编辑的读法,与常量文档里「整条路径
+  最多允许的编辑次数」的口径自相矛盾。触发面窄(要有两个 stall 各配一次编辑),
+  但属于「口径说不清就不算数」的漏洞。
+- **改法**:
+  - `engine/mod.rs` 的 `LatticeEdge` 新增 `edit_count: u8`;`collect_chain_edges`
+    的 3 处构造点带上它(音节级编辑弧 = 1、空词弧 = 1、精确/模糊边 = 0)。
+    口径是「这串里坏了几处」,不是「删掉几个字母」——后者会把一次多打两个
+    字母判成两次编辑,与 `MAX_TYPO_EDITS` 的语义不符。
+  - `backward_completion` 改成 `result[剩余预算][pos]` 两维递推
+    (`engine/lattice.rs`):边自身的分数(词频项 / LM 近似分 / 两种惩罚)先算
+    一遍再按预算合并,LM 调用次数不随预算翻倍;`result[r][pos]` 单调不减
+    (用不完的预算不强制花掉)。
+  - 候选补全扣掉首边已用预算(`engine/lookup.rs::lattice_candidates_scored`):
+    `remaining = (预算上界 - edge.edit_count)`。
+  - 前向 beam 的状态带 `used_edits`(`engine/mod.rs::BeamNode` + `engine/decode.rs`),
+    超预算的分支不再扩展。
+- **验证**(旧实现必红,已实测):
+  - 新 `engine/tests/typo_budget.rs` 4 条:两次编辑的人工格在预算 1 下不可达、
+    预算 2 可达;候选补全扣首边预算(预算 1 拿不到完整读法、预算 2 拿到);
+    零编辑读法在**每个**预算下都成立(含预算 0);真实容错格(`nihoa`)里
+    编辑次数确实落在边上(精确边 0、容错弧 1)。
+  - 反向验证:把三处机制临时退回改动前的形状(`edit_count` 不填、扣预算去掉、
+    DP 单维)⇒ 前 3 条用例**红**;还原后全绿。
+  - `just verify` **357 用例全绿**(287 engine + 6 ibus + 9 bin + 55 集成),
+    clippy `-D warnings` 无输出。
+  - 真实语料对拍:`regression_probe --format v1` 2322 行与
+    `/tmp/codex_batch1_nt.txt` **diff 0 行** ⇒ 这处口径漏洞在探针语料上
+    **没有可见影响**,照实记录(缺陷是静默的,靠结构而非现象抓到)。
+  - 延迟:`perf_probe --repeat 3 --prewarm` 稳态 p50 0.271ms / p95 1.508ms /
+    max 2.361ms、超线 0 个样本(与改动前 p95 1.582ms 同量级:多一行 DP 的
+    代价落在噪声内)。
+- **有意变更**:无(对拍逐字节不变)。**未测**:一条路径上同时出现
+  `edit_count` 边与模糊音边的组合(模糊边恒 0 编辑,结构上不叠加)。
+- **顺带修掉的缺陷**:后向 DP 第一版在「预算 0 + 零编辑边」时会读自己那一行
+  ——真实精确格全是零编辑边,会在生产查询里直接越界;改成「本行先入容器再填」,
+  并用 `zero_edit_readings_hold_at_every_budget_including_zero` 钉住。

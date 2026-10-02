@@ -1044,3 +1044,14 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
   (`lattice.rs:480-496`、`rank.rs:82-95`、`session/view.rs:74`)。
 - 规格:`docs/HANDOFF.md` ㉝;门槛 `just verify` 353 用例全绿。
 - 下一步(审查顺序):A1/A2 坐标与来源显式化 + D13,P2 剩余三项,然后 Q3/Q4/Q5 与第三批。
+
+## 十一、codex 审查第一批收尾:D13(容错的整条路径编辑预算)
+
+- 边新增 `edit_count`(口径=坏了几处),后向 DP 变 `result[剩余预算][pos]`,
+  候选补全扣首边预算,beam 状态带 `used_edits`;LM 调用次数不随预算翻倍。
+- 验证:`engine/tests/typo_budget.rs` 4 条(旧实现必红已实测)、全量 357 用例
+  全绿、`perf_probe` 稳态 p95 1.508ms、真实语料对拍 **0 行差异**(缺陷在探针
+  语料上无可见影响,照实记录)。
+- 规格:`docs/HANDOFF.md` ㉞。
+- 下一步(审查顺序):A1/A2 坐标与来源显式化、P2 剩余三项(候选借用 / 排序
+  装饰键所有权 / UI 更新区分内容与光标),随后 Q3/Q4/Q5 与第三批。

@@ -52,6 +52,7 @@ impl ImeEngine {
             state: self.lm.state_from_context(ctx),
             edge: None,
             parent: None,
+            used_edits: 0,
         });
         beams[0].push(0);
 
@@ -68,12 +69,18 @@ impl ImeEngine {
                 for (slot, edge) in lattice[pos].iter().enumerate() {
                     if edge.gap {
                         // 空词边:状态不变、无词频/LM 项,只扣编辑惩罚。
+                        // 空词弧本身就吃掉一次编辑预算(codex 审查 D13)。
+                        let used = arena[node_idx].used_edits + 1;
+                        if used > MAX_TYPO_EDITS {
+                            continue;
+                        }
                         let idx = arena.len();
                         arena.push(BeamNode {
                             score: arena[node_idx].score - edge.typo_penalty,
                             state: arena[node_idx].state.clone(),
                             edge: Some((pos, slot)),
                             parent: Some(node_idx),
+                            used_edits: used,
                         });
                         beams[edge.end].push(idx);
                         touched.push(edge.end);
@@ -86,6 +93,12 @@ impl ImeEngine {
                     } else {
                         0.0
                     };
+                    // 整条路径的容错编辑预算(codex 审查 D13):预算跟着 beam
+                    // 状态走,超预算的分支不再扩展。
+                    let used = arena[node_idx].used_edits + edge.edit_count;
+                    if used > MAX_TYPO_EDITS {
+                        continue;
+                    }
                     let idx = arena.len();
                     arena.push(BeamNode {
                         // 模糊惩罚是同量纲(log10)的加性扣分:精确边 0,
@@ -96,6 +109,7 @@ impl ImeEngine {
                         state: next_state,
                         edge: Some((pos, slot)),
                         parent: Some(node_idx),
+                        used_edits: used,
                     });
                     beams[edge.end].push(idx);
                     touched.push(edge.end);
