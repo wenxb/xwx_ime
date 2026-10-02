@@ -47,19 +47,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("--xml") => {
             // 允许 `--xml [路径] [--exec PATH]`：deb 打包时 exec 需指向
             // 安装后的二进制（/usr/bin/xwx_ime），而非构建期 current_exe。
-            let out_path = args.iter().find(|a| !a.starts_with("--") && *a != "--xml");
-            let exec = args
-                .windows(2)
-                .find(|w| w[0] == "--exec")
-                .map(|w| w[1].clone())
-                .or_else(|| {
-                    std::env::current_exe()
-                        .ok()
-                        .map(|p| p.display().to_string())
-                })
-                .unwrap_or_default();
-            let xml = ibus_proto::component_xml(&exec);
-            match out_path.map(String::as_str) {
+            //
+            // **必须顺序解析**：`--exec` 吃掉它的**值**，输出路径只能来自独立的
+            // 位置参数。旧实现用 `args.iter().find(|a| !a.starts_with("--"))` 找
+            // 输出路径，于是 `xwx_ime --xml --exec ~/.local/bin/xwx_ime` 会把
+            // `--exec` 的**值**当输出文件、用 XML 截断它（可复现，见
+            // `tests/cli.rs` 与 docs/HANDOFF.md 第 ㉕ 条）。
+            let mut out_path: Option<&str> = None;
+            let mut exec: Option<&str> = None;
+            let mut i = 1; // 跳过 `--xml`
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--exec" => {
+                        let v = args.get(i + 1).ok_or("--exec 缺少路径参数")?;
+                        if exec.replace(v.as_str()).is_some() {
+                            return Err("--exec 重复".into());
+                        }
+                        i += 2;
+                    }
+                    "-" => {
+                        if out_path.replace("-").is_some() {
+                            return Err("输出路径重复".into());
+                        }
+                        i += 1;
+                    }
+                    a if a.starts_with("--") => {
+                        return Err(format!("未知参数 {a}").into());
+                    }
+                    a => {
+                        if out_path.replace(a).is_some() {
+                            return Err("输出路径重复".into());
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            let exec = exec.map(str::to_string).or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .map(|p| p.display().to_string())
+            });
+            let xml = ibus_proto::component_xml(exec.as_deref().unwrap_or_default());
+            match out_path {
                 Some(path) if path != "-" => {
                     std::fs::write(path, &xml)?;
                     tracing::info!(path, "component XML 已写入");
@@ -74,7 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("用法:");
             println!("  xwx_ime            以 --ibus 模式启动引擎（连接 ibus-daemon）");
             println!("  xwx_ime --ibus     同上，显式指定");
-            println!("  xwx_ime --xml [文件] [--exec PATH]  输出 component XML");
+            println!("  xwx_ime --xml [文件|-] [--exec PATH]  输出 component XML");
+            println!("        （未知参数 / 缺值 / 输出路径重复一律报错并退出）");
             println!("        （默认 stdout；--exec 指定 XML 里的引擎路径,\n         deb 打包时用 /usr/bin/xwx_ime）");
             return Ok(());
         }
