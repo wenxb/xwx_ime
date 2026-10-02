@@ -26,7 +26,7 @@
 //!   `HOME` / `XDG_DATA_HOME` are redirected too, as a second line of defence);
 //! - `/usr/share/ibus/component/` — never read or written here;
 //! - the real `ibus-daemon` — we start our own private `dbus-daemon` and pass
-//!   its address via `IBUS_ADDRESS`, so `src/main.rs:284` `ibus_address()`
+//!   its address via `IBUS_ADDRESS`, so `src/main.rs:335` `ibus_address()`
 //!   short-circuits and `start_ibus_daemon()` is never reached;
 //! - `~/.local/share/fcitx5/rime` — never referenced.
 //!

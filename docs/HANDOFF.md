@@ -25,7 +25,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 - D-Bus 集成测试（根 `tests/`）——跑真实 `xwx_ime --ibus` 进程 +
   **私有 `dbus-daemon`**，覆盖英文模式透传、三个信号的内容、`FocusOut`、
   候选点击、翻页、按键透传返回值。做法：`IBUS_ADDRESS` 指向私有 bus
-  （`src/main.rs:284` 尊重该环境变量），`dbus-daemon --session
+  （`src/main.rs:335` 尊重该环境变量），`dbus-daemon --session
   --print-address --nofork` 起总线，引擎会占用
   `org.freedesktop.IBus.Engine.xwx`；
 - 实机验证（`docs/VERIFY.md` 的 37 条）——**仍未自动化**，

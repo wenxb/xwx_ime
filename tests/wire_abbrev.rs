@@ -138,7 +138,7 @@ fn mixed_abbreviation_lookup_reaches_the_wire() {
 /// Without `abbrev.bin` the abbreviation query must degrade to *nothing extra*
 /// — never to a wrong answer, never to a panic, never to a broken exact path.
 ///
-/// `src/main.rs:108-113` warns and keeps going. This is the documented
+/// `src/main.rs:104-110` warns and keeps going. This is the documented
 /// production state (the 69 MB side index is gitignored), and docs/VERIFY.md
 /// warns "全都不出候选 → 多半是 abbrev.bin 没装".
 ///
