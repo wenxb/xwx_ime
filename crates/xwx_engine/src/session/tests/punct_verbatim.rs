@@ -19,7 +19,7 @@ fn punct_commits_fullwidth_when_idle() {
 #[test]
 fn punct_commits_highlighted_candidate_then_fullwidth() {
     // 中文模式、拼音串非空(`nihao`):`,` 先按空格语义上屏高亮候选
-    // (首选整词「你好」,与 commit_at_commits_global_index 同一词典),
+    // (首选整词「你好」,与 commit_immediately_commits_global_index 同一词典),
     // 再追加全角逗号——用户得到「你好,」。
     let mut s = session_with_dict();
     for c in "nihao".chars() {

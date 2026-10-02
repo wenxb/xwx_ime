@@ -212,10 +212,10 @@ fn commit_text_carries_the_word_and_closes_the_window() {
         "上屏后必须收起候选窗。实际: {names:?}"
     );
     // Ordering: the commit comes before the hides (engine.rs:70-80).
-    let commit_at = names.iter().position(|m| *m == "CommitText").unwrap();
+    let commit_immediately = names.iter().position(|m| *m == "CommitText").unwrap();
     let hide_at = names.iter().position(|m| *m == "HidePreeditText").unwrap();
     assert!(
-        commit_at < hide_at,
+        commit_immediately < hide_at,
         "CommitText 必须先于 HidePreeditText 发出(先给应用文字,再收窗)"
     );
 }

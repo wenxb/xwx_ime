@@ -969,3 +969,19 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
   原文;无 `'` 输入对拍**逐字节不变**。
 - **未测**:`'` 与容错弧同时出现的交互没有专门用例。
 - **门槛**:`just verify` **343 用例全绿**(275 engine 单测 + 6 ibus + 9 bin + 53 集成)。
+
+### 五、codex 审查第一批收尾:A4(探针走真实会话路径)+ Q1(基线带身份)
+
+- **A4**:`InputSession::commit_at` → **`commit_immediately`**(文档写明它跳过确认段、
+  立即学习、立即返回文本,与 `handle` **不等价**);回归探针新增 **C 段**(12 条真实按键
+  脚本走 `handle`,逐键记 `SessionOutput`);新增两条用例分别钉「确认段零学习、结束时才
+  一次上屏 + 学习」与反面见证「立即提交接口在同一步就学习」。
+- **Q1**:探针**不做降级**——三个数据文件必须存在且真的加载成功(`LmStore::Wanxiang`
+  且 `num_units>0`、`nihao` 有真实候选、`zhongg` 有简拼候选),否则报错退出;输出必须
+  显式给路径或 `--stdout`(默认不再写 `/tmp`);`--format v2` 加 `bits=`/`covered=` 与
+  C 段,`--format v1` 保持逐字节兼容;写文件时另存 `<out>.id.txt`(输出 sha256/行数、
+  Git SHA、三个数据文件的 sha256)。基线进库 `tests/baselines/regression_v2.txt`。
+- **证据**:v1 输出 2322 行与老基线 diff **0 行**;`just verify` **345 用例全绿**,
+  clippy `-D warnings` 无输出。
+- **顺手记下的一条现场数据**:`womenjintianqubeij` 按一次空格只确认到「我们今天」
+  (covered=9),剩下 `ianqubeij` 只有回声候选——「混合简拼一次出整句」的缺口在此。

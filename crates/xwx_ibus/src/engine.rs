@@ -331,7 +331,7 @@ impl XwxEngineServer {
         state: u32,
     ) {
         let _ = (button, state);
-        // 走会话事件的统一出口(而不是直接 `commit_at`):点击与空格/数字
+        // 走会话事件的统一出口(而不是直接 `commit_immediately`):点击与空格/数字
         // 共用同一条分段上屏路径,剩余串继续组合的界面刷新也一样。
         self.handle_key(&ctxt, InputEvent::CandidateClicked(index as usize))
             .await;

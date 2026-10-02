@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if before.is_empty() {
                 break;
             }
-            let piece = s.commit_at(0);
+            let piece = s.commit_immediately(0);
             match piece {
                 Some(p) => {
                     println!("  空格#{step}: 上屏 {p:?}  (preedit {before:?} → {:?})", s.pinyin());

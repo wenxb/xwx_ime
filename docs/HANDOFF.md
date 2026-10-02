@@ -1220,3 +1220,66 @@ D6/D7/D8/D10/D11/D12**(D5、D9、D13 与 A4/Q1 待做)。每个修法都有「�
   `xi''an`/`xi'a`);`'` 与容错弧(打错 + 分隔符同时出现)的交互没有专门用例。
 - 真实词库上的 `'` 用例(`data/dict.bin`)本轮没加——本模块用内存词库,
   真实词库的等价覆盖在 `session/tests/prefix_mixed.rs` 那类测试里是另一套口径。
+
+## ㉘ codex 审查 A4 + Q1:探针走真实会话路径,基线带身份(2026-10-03)
+
+### A4 · `commit_at` 是第二套语义,探针没走真实会话路径
+
+- **接口改名**:`InputSession::commit_at` → `commit_immediately`,文档写明它
+  **不等价于真实交互**——它跳过确认段、立即学习、立即返回文本,而
+  `handle(CandidateClicked/Space)` 把选中的一段留在组合里,上屏与学习推迟到
+  整个组合结束。24 处调用点(测试/评测/探针)一并改名,`session/mod.rs` 与
+  `session/commit.rs` 的交叉引用同步。
+- **回归探针新增 C 段**(`--format v2` 起):12 条真实按键脚本走
+  `handle(Char/Space/Backspace/CandidateClicked/PageDown/DeleteCandidate/Enter)`,
+  逐键记录 `SessionOutput`(preedit / cursor / page / n / top3 / Commit),
+  收尾记 `final pinyin=/active=`。B 段原样保留(为了跟老基线逐字节对比),
+  标题里注明它走的是立即提交接口。
+- **两条新用例**(`session/tests/commit.rs`):
+  `confirming_a_segment_defers_commit_and_learning_until_the_combination_ends`
+  钉住「确认段 → 只 `Updated` + 零学习 → 退格回退,字母原样还回 + 零学习 →
+  整串结束 → 一次 `Commit` + 这时才学习」;
+  `immediate_commit_learns_at_once_unlike_the_real_interaction_path` 是反面
+  见证(同一输入、同一步用立即提交接口,立刻返回文本且立刻学习)。两条合起来
+  就是 A4 要的「不能声称等价」。
+
+### Q1 · 回归基线缺可追溯身份,且缺关键字段
+
+- **不做任何降级**:词库 / 副索引 / 万象模型三个文件必须存在且**真的加载成功**
+  (`LmStore::Wanxiang` 且 `num_units() > 0`、`nihao` 有非回声候选、`zhongg` 有
+  简拼候选),任一不成立就报错退出——引擎自己会「文件缺失就退回空库」
+  (`engine/api.rs` 的 `new_with_lm`),探针跟着降级的话,一份空库基线看着也是绿的。
+  坑:`LmStore::vocab_size()` 对万象变体返回 0(万象自己统计在
+  `WanxiangLM::num_units`),不能拿它判断「加载成功」。
+- **输出必须显式指定**(`--stdout` 或路径),默认不再写 `/tmp`;`--data DIR`
+  显式给数据目录。
+- **`--format v2`**(默认)候选行追加 `bits=`(`score.to_bits()`,浮点位模式级
+  对拍)与 `covered=`,并加 C 段;**`--format v1`** 保持逐字节兼容的历史格式,
+  用来跟老基线直接 diff。
+- **身份文件**:写文件时另存 `<out>.id.txt` —— `format`、输出 sha256/字节/行数、
+  `git_head`(生成基线时的 HEAD,通常就是这份基线所在提交的父提交)/`git_dirty`(排除基线文件自己)、三个数据文件的 `bytes` + `sha256`。基线进库:
+  `tests/baselines/regression_v2.txt` 与 `tests/baselines/regression_v2.id.txt`。
+
+### 证据
+
+- `--format v1` 输出 2322 行,与 `/tmp/codex_batch1_nt.txt` **diff 0 行**:
+  改名 + 探针重写没有改变任何可观测量,老基线继续有效。
+- `--format v2` 基线 2515 行(多出的 193 行 = 候选行的 `bits`/`covered` 与 C 段),
+  `out_sha256=d853a504…`(不含 `min_ms=` 计时行,跨进程可复现)、`dict.bin sha256=2d287495…`、`abbrev.bin sha256=ac4990e3…`、
+  `wanxiang-lts-zh-hans.gram sha256=051a55ab…`。
+- `just verify` **345 用例全绿**(277 engine 单测 + 6 ibus 单测 + 9 bin +
+  53 D-Bus 集成),clippy `-D warnings` 无输出。
+
+### C 段现场抄出来的一条真实行为(后续工作的输入)
+
+`womenjintianqubeij` 打完后按一次空格:
+
+```
+key Space -> Updated { preedit="我们今天ianqubeij" cursor=0 page=0/9 n=1 top3=["ianqubeij"] }
+final pinyin="ianqubeij" active=true
+```
+
+也就是**一次空格只确认一段**(「我们今天」覆盖 `womenjint`,混合读法只覆盖到
+那里),剩余 `ianqubeij` 连一个真实候选都没有(只有回声候选),要再按一次空格
+才上屏。这是「混合简拼串没法一次出」的现场记录,也是后续「简拼读法进格 +
+整句候选」提案要动的地方。

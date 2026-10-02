@@ -140,7 +140,7 @@ pub enum InputEvent {
     /// (`page_start + index`,与 `Select` 同一条映射);旧实现直接当全局
     /// 下标用,于是第 2 页点第 1 条会点上屏第 1 页第 1 条。
     ///
-    /// 走 `handle` 而不是直接调 [`InputSession::commit_at`],是为了让
+    /// 走 `handle` 而不是直接调 [`InputSession::commit_immediately`],是为了让
     /// 「点击选词」与「空格/数字选词」共用同一条分段上屏路径(同一个
     /// `SessionOutput` 契约):否则点击路径要么漏掉「剩余串继续组合」,
     /// 要么得在 IBus 层再实现一遍。

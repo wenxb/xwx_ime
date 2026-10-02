@@ -1,0 +1,2515 @@
+# xwx_ime 回归基线 v2(无用户层;词库+万象 LM)
+
+## A. lookup_candidates
+
+### nihao
+n=26 min_ms=0.327
+0|你好|ni hao|332885|-15.9666|bits=3246356287|covered=5|Exact|echo=false
+1|拟好|ni hao|3685|-17.9225|bits=3247399224|covered=5|Exact|echo=false
+2|你|ni|1422192|-29.9639|bits=3253712421|covered=2|Exact|echo=false
+3|尼|ni|272244|-30.6819|bits=3254088860|covered=2|Exact|echo=false
+4|泥|ni|120657|-31.0353|bits=3254274146|covered=2|Exact|echo=false
+5|逆|ni|73790|-31.2489|bits=3254386111|covered=2|Exact|echo=false
+6|拟|ni|50704|-31.4119|bits=3254471546|covered=2|Exact|echo=false
+7|腻|ni|42294|-31.4906|bits=3254512841|covered=2|Exact|echo=false
+8|倪|ni|32398|-31.6064|bits=3254573533|covered=2|Exact|echo=false
+9|霓|ni|25232|-31.7149|bits=3254630453|covered=2|Exact|echo=false
+10|匿|ni|17242|-31.8803|bits=3254717151|covered=2|Exact|echo=false
+11|妮|ni|15537|-31.9255|bits=3254740859|covered=2|Exact|echo=false
+12|溺|ni|14495|-31.9557|bits=3254756666|covered=2|Exact|echo=false
+13|昵|ni|11208|-32.0674|bits=3254797564|covered=2|Exact|echo=false
+14|睨|ni|7131|-32.2637|bits=3254849044|covered=2|Exact|echo=false
+15|旎|ni|3505|-32.5722|bits=3254929905|covered=2|Exact|echo=false
+16|怩|ni|2372|-32.7418|bits=3254974358|covered=2|Exact|echo=false
+17|猊|ni|2254|-32.7639|bits=3254980166|covered=2|Exact|echo=false
+18|鲵|ni|482|-33.4338|bits=3255155779|covered=2|Exact|echo=false
+19|伲|ni|211|-33.7926|bits=3255249827|covered=2|Exact|echo=false
+20|坭|ni|55|-34.3765|bits=3255402898|covered=2|Exact|echo=false
+21|铌|ni|17|-34.8864|bits=3255536568|covered=2|Exact|echo=false
+22|麑|ni|16|-34.9128|bits=3255543470|covered=2|Exact|echo=false
+23|薿|ni|11|-35.0755|bits=3255586128|covered=2|Exact|echo=false
+24|呢|ni|1|-36.1169|bits=3255859124|covered=2|Exact|echo=false
+25|鿭|ni|1|-36.1169|bits=3255859124|covered=2|Exact|echo=false
+
+### ni
+n=24 min_ms=0.094
+0|你|ni|1422192|-15.3359|bits=3245694988|covered=2|Exact|echo=false
+1|尼|ni|272244|-16.0539|bits=3246419581|covered=2|Exact|echo=false
+2|泥|ni|120657|-16.4074|bits=3246604867|covered=2|Exact|echo=false
+3|逆|ni|73790|-16.6209|bits=3246716832|covered=2|Exact|echo=false
+4|拟|ni|50704|-16.7839|bits=3246802267|covered=2|Exact|echo=false
+5|腻|ni|42294|-16.8626|bits=3246843562|covered=2|Exact|echo=false
+6|倪|ni|32398|-16.9784|bits=3246904254|covered=2|Exact|echo=false
+7|霓|ni|25232|-17.0870|bits=3246961174|covered=2|Exact|echo=false
+8|匿|ni|17242|-17.2523|bits=3247047872|covered=2|Exact|echo=false
+9|妮|ni|15537|-17.2975|bits=3247071580|covered=2|Exact|echo=false
+10|溺|ni|14495|-17.3277|bits=3247087387|covered=2|Exact|echo=false
+11|昵|ni|11208|-17.4394|bits=3247145945|covered=2|Exact|echo=false
+12|睨|ni|7131|-17.6358|bits=3247248904|covered=2|Exact|echo=false
+13|旎|ni|3505|-17.9442|bits=3247410627|covered=2|Exact|echo=false
+14|怩|ni|2372|-18.1138|bits=3247499532|covered=2|Exact|echo=false
+15|猊|ni|2254|-18.1360|bits=3247511150|covered=2|Exact|echo=false
+16|鲵|ni|482|-18.8059|bits=3247862375|covered=2|Exact|echo=false
+17|伲|ni|211|-19.1646|bits=3248050471|covered=2|Exact|echo=false
+18|坭|ni|55|-19.7485|bits=3248356613|covered=2|Exact|echo=false
+19|铌|ni|17|-20.2585|bits=3248623954|covered=2|Exact|echo=false
+20|麑|ni|16|-20.2848|bits=3248637758|covered=2|Exact|echo=false
+21|薿|ni|11|-20.4475|bits=3248723074|covered=2|Exact|echo=false
+22|呢|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+23|鿭|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+
+### xian
+n=100 min_ms=0.695
+0|先|xian|1662684|-15.2681|bits=3245623840|covered=4|Exact|echo=false
+1|现|xian|1161139|-15.4240|bits=3245787340|covered=4|Exact|echo=false
+2|显|xian|763327|-15.6062|bits=3245978363|covered=4|Exact|echo=false
+3|线|xian|539444|-15.7570|bits=3246136451|covered=4|Exact|echo=false
+4|险|xian|386142|-15.9022|bits=3246288704|covered=4|Exact|echo=false
+5|仙|xian|379429|-15.9098|bits=3246296690|covered=4|Exact|echo=false
+6|咸|xian|330660|-15.9695|bits=3246359341|covered=4|Exact|echo=false
+7|鲜|xian|273041|-16.0527|bits=3246418915|covered=4|Exact|echo=false
+8|限|xian|222821|-16.1410|bits=3246465195|covered=4|Exact|echo=false
+9|闲|xian|202953|-16.1815|bits=3246486460|covered=4|Exact|echo=false
+10|陷|xian|196684|-16.1951|bits=3246493604|covered=4|Exact|echo=false
+11|县|xian|192413|-16.2047|bits=3246498604|covered=4|Exact|echo=false
+12|献|xian|110306|-16.4463|bits=3246625290|covered=4|Exact|echo=false
+13|贤|xian|109707|-16.4487|bits=3246626530|covered=4|Exact|echo=false
+14|嫌|xian|75438|-16.6113|bits=3246711802|covered=4|Exact|echo=false
+15|纤|xian|72315|-16.6297|bits=3246721429|covered=4|Exact|echo=false
+16|羡|xian|60457|-16.7075|bits=3246762209|covered=4|Exact|echo=false
+17|西安|xi an|55003|-16.7485|bits=3246783736|covered=4|Exact|echo=false
+18|弦|xian|52599|-16.7679|bits=3246793912|covered=4|Exact|echo=false
+19|掀|xian|47524|-16.8120|bits=3246817015|covered=4|Exact|echo=false
+20|宪|xian|36534|-16.9262|bits=3246876897|covered=4|Exact|echo=false
+21|见|xian|34609|-16.9497|bits=3246889222|covered=4|Exact|echo=false
+22|西岸|xi an|33570|-16.9630|bits=3246896162|covered=4|Exact|echo=false
+23|衔|xian|27315|-17.0525|bits=3246943112|covered=4|Exact|echo=false
+24|娴|xian|21333|-17.1599|bits=3246999394|covered=4|Exact|echo=false
+25|涎|xian|11149|-17.4417|bits=3247147147|covered=4|Exact|echo=false
+26|馅|xian|9845|-17.4957|bits=3247175469|covered=4|Exact|echo=false
+27|舷|xian|7809|-17.5963|bits=3247228223|covered=4|Exact|echo=false
+28|腺|xian|6833|-17.6543|bits=3247258623|covered=4|Exact|echo=false
+29|锡安|xi an|3855|-17.9029|bits=3247388954|covered=4|Exact|echo=false
+30|暹|xian|2835|-18.0364|bits=3247458932|covered=4|Exact|echo=false
+31|苋|xian|2198|-18.1469|bits=3247516879|covered=4|Exact|echo=false
+32|冼|xian|2126|-18.1613|bits=3247524462|covered=4|Exact|echo=false
+33|洗|xian|2000|-18.1879|bits=3247538374|covered=4|Exact|echo=false
+34|藓|xian|1602|-18.2842|bits=3247588898|covered=4|Exact|echo=false
+35|锨|xian|1566|-18.2941|bits=3247594073|covered=4|Exact|echo=false
+36|霰|xian|1490|-18.3157|bits=3247605400|covered=4|Exact|echo=false
+37|跹|xian|1158|-18.4252|bits=3247662798|covered=4|Exact|echo=false
+38|忺|xian|775|-18.5996|bits=3247754238|covered=4|Exact|echo=false
+39|痫|xian|721|-18.6310|bits=3247770683|covered=4|Exact|echo=false
+40|祆|xian|499|-18.7908|bits=3247854482|covered=4|Exact|echo=false
+41|岘|xian|470|-18.8168|bits=3247868115|covered=4|Exact|echo=false
+42|酰|xian|351|-18.9436|bits=3247934590|covered=4|Exact|echo=false
+43|跣|xian|261|-19.0723|bits=3248002048|covered=4|Exact|echo=false
+44|燹|xian|254|-19.0841|bits=3248008239|covered=4|Exact|echo=false
+45|狝|xian|234|-19.1197|bits=3248026913|covered=4|Exact|echo=false
+46|蚬|xian|187|-19.2171|bits=3248077965|covered=4|Exact|echo=false
+47|猃|xian|110|-19.4475|bits=3248198786|covered=4|Exact|echo=false
+48|籼|xian|101|-19.4846|bits=3248218222|covered=4|Exact|echo=false
+49|鹇|xian|57|-19.7330|bits=3248348480|covered=4|Exact|echo=false
+50|筅|xian|50|-19.7899|bits=3248378314|covered=4|Exact|echo=false
+51|莶|xian|45|-19.8357|bits=3248402304|covered=4|Exact|echo=false
+52|氙|xian|30|-20.0118|bits=3248494627|covered=4|Exact|echo=false
+53|挦|xian|17|-20.2585|bits=3248623954|covered=4|Exact|echo=false
+54|崄|xian|15|-20.3128|bits=3248652454|covered=4|Exact|echo=false
+55|缐|xian|14|-20.3428|bits=3248668163|covered=4|Exact|echo=false
+56|孅|xian|6|-20.7108|bits=3248861088|covered=4|Exact|echo=false
+57|伭|xian|2|-21.1879|bits=3249111238|covered=4|Exact|echo=false
+58|禒|xian|1|-21.4889|bits=3249269064|covered=4|Exact|echo=false
+59|洗|xi|2290306|-30.0351|bits=3253749714|covered=2|Exact|echo=false
+60|西|xi|1778761|-30.1448|bits=3253807268|covered=2|Exact|echo=false
+61|喜|xi|1069981|-30.3656|bits=3253923000|covered=2|Exact|echo=false
+62|系|xi|942245|-30.4208|bits=3253951947|covered=2|Exact|echo=false
+63|息|xi|864425|-30.4582|bits=3253971574|covered=2|Exact|echo=false
+64|细|xi|618534|-30.6036|bits=3254047788|covered=2|Exact|echo=false
+65|希|xi|614576|-30.6064|bits=3254049248|covered=2|Exact|echo=false
+66|习|xi|487160|-30.7073|bits=3254102152|covered=2|Exact|echo=false
+67|吸|xi|431549|-30.7599|bits=3254129751|covered=2|Exact|echo=false
+68|戏|xi|347524|-30.8540|bits=3254179058|covered=2|Exact|echo=false
+69|惜|xi|271651|-30.9609|bits=3254235142|covered=2|Exact|echo=false
+70|席|xi|208395|-31.0761|bits=3254295500|covered=2|Exact|echo=false
+71|袭|xi|189129|-31.1182|bits=3254317588|covered=2|Exact|echo=false
+72|悉|xi|173018|-31.1569|bits=3254337862|covered=2|Exact|echo=false
+73|嘻|xi|149024|-31.2217|bits=3254371854|covered=2|Exact|echo=false
+74|析|xi|105460|-31.3719|bits=3254450586|covered=2|Exact|echo=false
+75|稀|xi|102120|-31.3859|bits=3254457914|covered=2|Exact|echo=false
+76|熙|xi|88330|-31.4489|bits=3254490944|covered=2|Exact|echo=false
+77|夕|xi|81778|-31.4823|bits=3254508494|covered=2|Exact|echo=false
+78|晰|xi|72136|-31.5368|bits=3254537058|covered=2|Exact|echo=false
+79|溪|xi|59612|-31.6196|bits=3254580480|covered=2|Exact|echo=false
+80|兮|xi|57566|-31.6348|bits=3254588432|covered=2|Exact|echo=false
+81|牺|xi|54587|-31.6579|bits=3254600530|covered=2|Exact|echo=false
+82|膝|xi|52944|-31.6711|bits=3254607490|covered=2|Exact|echo=false
+83|媳|xi|49077|-31.7041|bits=3254624758|covered=2|Exact|echo=false
+84|茜|xi|45676|-31.7353|bits=3254641112|covered=2|Exact|echo=false
+85|隙|xi|40876|-31.7835|bits=3254666392|covered=2|Exact|echo=false
+86|昔|xi|39983|-31.7931|bits=3254671422|covered=2|Exact|echo=false
+87|锡|xi|28576|-31.9390|bits=3254747902|covered=2|Exact|echo=false
+88|嬉|xi|26210|-31.9765|bits=3254767580|covered=2|Exact|echo=false
+89|熄|xi|26172|-31.9771|bits=3254767910|covered=2|Exact|echo=false
+90|犀|xi|22356|-32.0456|bits=3254791849|covered=2|Exact|echo=false
+91|曦|xi|19125|-32.1134|bits=3254809621|covered=2|Exact|echo=false
+92|禧|xi|15854|-32.1948|bits=3254830976|covered=2|Exact|echo=false
+93|皙|xi|14920|-32.2212|bits=3254837888|covered=2|Exact|echo=false
+94|玺|xi|12725|-32.2903|bits=3254856005|covered=2|Exact|echo=false
+95|下能|xia neng|12900|-17.3783|bits=3247113931|covered=4|Abbrev|echo=false
+96|吓你一跳|xia ni yi tiao|9999|-17.4890|bits=3247171935|covered=4|Abbrev|echo=false
+97|吓尿|xia niao|9999|-17.4890|bits=3247171935|covered=4|Abbrev|echo=false
+98|侠女|xia nv|8215|-17.5743|bits=3247216682|covered=4|Abbrev|echo=false
+99|下年度|xia nian du|7725|-17.6010|bits=3247230686|covered=4|Abbrev|echo=false
+
+### ky
+n=100 min_ms=0.394
+0|可以|ke yi|505814|-15.7849|bits=3246165764|covered=2|Abbrev|echo=false
+1|科研|ke yan|500293|-15.7897|bits=3246170762|covered=2|Abbrev|echo=false
+2|跨越|kua yue|497857|-15.7918|bits=3246172985|covered=2|Abbrev|echo=false
+3|可用|ke yong|404860|-15.8816|bits=3246267147|covered=2|Abbrev|echo=false
+4|考验|kao yan|254460|-16.0833|bits=3246434963|covered=2|Abbrev|echo=false
+5|开业|kai ye|253680|-16.0846|bits=3246435662|covered=2|Abbrev|echo=false
+6|考研|kao yan|221620|-16.1433|bits=3246466426|covered=2|Abbrev|echo=false
+7|口语|kou yu|170940|-16.2561|bits=3246525547|covered=2|Abbrev|echo=false
+8|客运|ke yun|145220|-16.3269|bits=3246562676|covered=2|Abbrev|echo=false
+9|刻意|ke yi|127330|-16.3840|bits=3246592610|covered=2|Abbrev|echo=false
+10|可与|ke yu|117220|-16.4199|bits=3246611447|covered=2|Abbrev|echo=false
+11|可由|ke you|102120|-16.4798|bits=3246642848|covered=2|Abbrev|echo=false
+12|快要|kuai yao|91410|-16.5279|bits=3246668074|covered=2|Abbrev|echo=false
+13|可有|ke you|89785|-16.5357|bits=3246672159|covered=2|Abbrev|echo=false
+14|抗议|kang yi|86940|-16.5497|bits=3246679490|covered=2|Abbrev|echo=false
+15|开源|kai yuan|75955|-16.6084|bits=3246710247|covered=2|Abbrev|echo=false
+16|扣押|kou ya|75625|-16.6102|bits=3246711238|covered=2|Abbrev|echo=false
+17|溃疡|kui yang|64845|-16.6770|bits=3246746255|covered=2|Abbrev|echo=false
+18|可言|ke yan|64350|-16.6804|bits=3246748000|covered=2|Abbrev|echo=false
+19|科员|ke yuan|63350|-16.6872|bits=3246751566|covered=2|Abbrev|echo=false
+20|可疑|ke yi|62775|-16.6911|bits=3246753642|covered=2|Abbrev|echo=false
+21|口译|kou yi|54670|-16.7512|bits=3246785119|covered=2|Abbrev|echo=false
+22|客源|ke yuan|52560|-16.7683|bits=3246794081|covered=2|Abbrev|echo=false
+23|可要|ke yao|51510|-16.7770|bits=3246798676|covered=2|Abbrev|echo=false
+24|空运|kong yun|50765|-16.7833|bits=3246801993|covered=2|Abbrev|echo=false
+25|抗原|kang yuan|50550|-16.7852|bits=3246802960|covered=2|Abbrev|echo=false
+26|凯越|kai yue|46135|-16.8249|bits=3246823769|covered=2|Abbrev|echo=false
+27|狂野|kuang ye|37365|-16.9164|bits=3246871776|covered=2|Abbrev|echo=false
+28|口音|kou yin|36700|-16.9242|bits=3246875864|covered=2|Abbrev|echo=false
+29|宽裕|kuan yu|36435|-16.9274|bits=3246877514|covered=2|Abbrev|echo=false
+30|可也|ke ye|30775|-17.0007|bits=3246915956|covered=2|Abbrev|echo=false
+31|苦于|ku yu|29840|-17.0141|bits=3246922981|covered=2|Abbrev|echo=false
+32|快运|kuai yun|27740|-17.0458|bits=3246939597|covered=2|Abbrev|echo=false
+33|刻有|ke you|27465|-17.0501|bits=3246941865|covered=2|Abbrev|echo=false
+34|可于|ke yu|26795|-17.0609|bits=3246947489|covered=2|Abbrev|echo=false
+35|烤鱼|kao yu|26183|-17.0709|bits=3246952750|covered=2|Abbrev|echo=false
+36|旷野|kuang ye|26080|-17.0726|bits=3246953647|covered=2|Abbrev|echo=false
+37|烤鸭|kao ya|24805|-17.0944|bits=3246965060|covered=2|Abbrev|echo=false
+38|烤烟|kao yan|23950|-17.1096|bits=3246973047|covered=2|Abbrev|echo=false
+39|课余|ke yu|23715|-17.1139|bits=3246975292|covered=2|Abbrev|echo=false
+40|科院|ke yuan|22490|-17.1369|bits=3246987368|covered=2|Abbrev|echo=false
+41|酷鱼|ku yu|21380|-17.1589|bits=3246998893|covered=2|Abbrev|echo=false
+42|可又|ke you|20405|-17.1792|bits=3247009521|covered=2|Abbrev|echo=false
+43|看样|kan yang|19725|-17.1939|bits=3247017238|covered=2|Abbrev|echo=false
+44|宽约|kuan yue|19030|-17.2095|bits=3247025406|covered=2|Abbrev|echo=false
+45|控油|kong you|18225|-17.2282|bits=3247035247|covered=2|Abbrev|echo=false
+46|快意|kuai yi|17090|-17.2562|bits=3247049888|covered=2|Abbrev|echo=false
+47|矿用|kuang yong|16695|-17.2663|bits=3247055213|covered=2|Abbrev|echo=false
+48|快于|kuai yu|16225|-17.2787|bits=3247061715|covered=2|Abbrev|echo=false
+49|抗炎|kang yan|15645|-17.2945|bits=3247070003|covered=2|Abbrev|echo=false
+50|勘验|kan yan|14615|-17.3241|bits=3247085510|covered=2|Abbrev|echo=false
+51|夸耀|kua yao|13040|-17.3736|bits=3247111474|covered=2|Abbrev|echo=false
+52|空有|kong you|12995|-17.3751|bits=3247112260|covered=2|Abbrev|echo=false
+53|抗压|kang ya|12595|-17.3887|bits=3247119380|covered=2|Abbrev|echo=false
+54|空余|kong yu|11700|-17.4207|bits=3247136163|covered=2|Abbrev|echo=false
+55|枯叶|ku ye|11275|-17.4368|bits=3247144588|covered=2|Abbrev|echo=false
+56|看呀|kan ya|10785|-17.4561|bits=3247154705|covered=2|Abbrev|echo=false
+57|凯悦|kai yue|10685|-17.4601|bits=3247156826|covered=2|Abbrev|echo=false
+58|阔叶|kuo ye|10235|-17.4788|bits=3247166623|covered=2|Abbrev|echo=false
+59|可予|ke yu|10210|-17.4799|bits=3247167180|covered=2|Abbrev|echo=false
+60|可因|ke yin|9999|-17.4890|bits=3247171935|covered=2|Abbrev|echo=false
+61|开眼|kai yan|9635|-17.5051|bits=3247180378|covered=2|Abbrev|echo=false
+62|矿业|kuang ye|9585|-17.5073|bits=3247181563|covered=2|Abbrev|echo=false
+63|抗御|kang yu|9500|-17.5112|bits=3247183591|covered=2|Abbrev|echo=false
+64|堪忧|kan you|9420|-17.5149|bits=3247185517|covered=2|Abbrev|echo=false
+65|开运|kai yun|9065|-17.5315|bits=3247194264|covered=2|Abbrev|echo=false
+66|空域|kong yu|8985|-17.5354|bits=3247196282|covered=2|Abbrev|echo=false
+67|刊用|kan yong|8510|-17.5590|bits=3247208649|covered=2|Abbrev|echo=false
+68|课业|ke ye|8220|-17.5740|bits=3247216544|covered=2|Abbrev|echo=false
+69|科苑|ke yuan|6915|-17.6491|bits=3247255907|covered=2|Abbrev|echo=false
+70|靠右|kao you|6670|-17.6648|bits=3247264121|covered=2|Abbrev|echo=false
+71|开药|kai yao|6560|-17.6720|bits=3247267907|covered=2|Abbrev|echo=false
+72|跨域|kua yu|6277|-17.6912|bits=3247277948|covered=2|Abbrev|echo=false
+73|快呀|kuai ya|6205|-17.6962|bits=3247280575|covered=2|Abbrev|echo=false
+74|堪舆|kan yu|6200|-17.6965|bits=3247280759|covered=2|Abbrev|echo=false
+75|刻印|ke yin|6015|-17.7097|bits=3247287656|covered=2|Abbrev|echo=false
+76|恐有|kong you|5900|-17.7181|bits=3247292052|covered=2|Abbrev|echo=false
+77|困于|kun yu|5895|-17.7184|bits=3247292245|covered=2|Abbrev|echo=false
+78|扩音|kuo yin|5885|-17.7192|bits=3247292631|covered=2|Abbrev|echo=false
+79|开阳|kai yang|5670|-17.7353|bits=3247301106|covered=2|Abbrev|echo=false
+80|刊印|kan yin|5580|-17.7423|bits=3247304749|covered=2|Abbrev|echo=false
+81|坑呀|keng ya|5555|-17.7442|bits=3247305771|covered=2|Abbrev|echo=false
+82|扣压|kou ya|5535|-17.7458|bits=3247306592|covered=2|Abbrev|echo=false
+83|控烟|kong yan|5505|-17.7481|bits=3247307830|covered=2|Abbrev|echo=false
+84|开演|kai yan|4850|-17.8032|bits=3247336674|covered=2|Abbrev|echo=false
+85|狂言|kuang yan|4795|-17.8081|bits=3247339271|covered=2|Abbrev|echo=false
+86|开营|kai ying|4715|-17.8154|bits=3247343102|covered=2|Abbrev|echo=false
+87|裤腰|ku yao|4615|-17.8247|bits=3247347983|covered=2|Abbrev|echo=false
+88|快印|kuai yin|4555|-17.8304|bits=3247350962|covered=2|Abbrev|echo=false
+89|刻于|ke yu|4100|-17.8761|bits=3247374925|covered=2|Abbrev|echo=false
+90|跨跃|kua yue|4070|-17.8793|bits=3247376597|covered=2|Abbrev|echo=false
+91|快有|kuai you|4055|-17.8809|bits=3247377438|covered=2|Abbrev|echo=false
+92|抗英|kang ying|4055|-17.8809|bits=3247377438|covered=2|Abbrev|echo=false
+93|苦役|ku yi|3810|-17.9080|bits=3247391628|covered=2|Abbrev|echo=false
+94|克用|ke yong|3705|-17.9201|bits=3247397991|covered=2|Abbrev|echo=false
+95|抗氧|kang yang|3690|-17.9219|bits=3247398915|covered=2|Abbrev|echo=false
+96|可沿|ke yan|3680|-17.9231|bits=3247399533|covered=2|Abbrev|echo=false
+97|科源|ke yuan|3555|-17.9381|bits=3247407402|covered=2|Abbrev|echo=false
+98|开颜|kai yan|3550|-17.9387|bits=3247407722|covered=2|Abbrev|echo=false
+99|啃咬|ken yao|3450|-17.9511|bits=3247414228|covered=2|Abbrev|echo=false
+
+### mei
+n=32 min_ms=0.158
+0|没|mei|7560391|-14.6104|bits=3244934156|covered=3|Exact|echo=false
+1|美|mei|1692264|-15.2604|bits=3245615810|covered=3|Exact|echo=false
+2|每|mei|1015025|-15.4824|bits=3245848585|covered=3|Exact|echo=false
+3|妹|mei|542424|-15.7546|bits=3246133942|covered=3|Exact|echo=false
+4|眉|mei|363007|-15.9290|bits=3246316839|covered=3|Exact|echo=false
+5|梅|mei|333631|-15.9656|bits=3246355268|covered=3|Exact|echo=false
+6|媚|mei|110163|-16.4469|bits=3246625585|covered=3|Exact|echo=false
+7|魅|mei|79400|-16.5891|bits=3246700147|covered=3|Exact|echo=false
+8|玫|mei|79367|-16.5893|bits=3246700242|covered=3|Exact|echo=false
+9|枚|mei|67198|-16.6616|bits=3246738139|covered=3|Exact|echo=false
+10|媒|mei|65752|-16.6710|bits=3246743092|covered=3|Exact|echo=false
+11|霉|mei|55470|-16.7448|bits=3246781811|covered=3|Exact|echo=false
+12|昧|mei|41576|-16.8701|bits=3246847460|covered=3|Exact|echo=false
+13|煤|mei|34203|-16.9548|bits=3246891909|covered=3|Exact|echo=false
+14|寐|mei|10214|-17.4797|bits=3247167091|covered=3|Exact|echo=false
+15|嵋|mei|7261|-17.6279|bits=3247244790|covered=3|Exact|echo=false
+16|莓|mei|6323|-17.6880|bits=3247276286|covered=3|Exact|echo=false
+17|湄|mei|5774|-17.7274|bits=3247296967|covered=3|Exact|echo=false
+18|袂|mei|4693|-17.8175|bits=3247344166|covered=3|Exact|echo=false
+19|楣|mei|4189|-17.8668|bits=3247370035|covered=3|Exact|echo=false
+20|酶|mei|1616|-18.2805|bits=3247586917|covered=3|Exact|echo=false
+21|镁|mei|1409|-18.3400|bits=3247618128|covered=3|Exact|echo=false
+22|郿|mei|497|-18.7926|bits=3247855397|covered=3|Exact|echo=false
+23|浼|mei|154|-19.3014|bits=3248122173|covered=3|Exact|echo=false
+24|鹛|mei|41|-19.8761|bits=3248423501|covered=3|Exact|echo=false
+25|镅|mei|19|-20.2102|bits=3248598629|covered=3|Exact|echo=false
+26|渼|mei|15|-20.3128|bits=3248652454|covered=3|Exact|echo=false
+27|媄|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+28|瑂|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+29|糜|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+30|脢|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+31|么|me|9727|-inf|bits=4286578688|covered=2|Exact|echo=false
+
+### meiy
+n=95 min_ms=0.648
+0|没有|mei you|504685|-15.7859|bits=3246166782|covered=4|Abbrev|echo=false
+1|美元|mei yuan|500504|-15.7895|bits=3246170570|covered=4|Abbrev|echo=false
+2|每月|mei yue|500303|-15.7897|bits=3246170753|covered=4|Abbrev|echo=false
+3|每页|mei ye|365410|-15.9261|bits=3246313834|covered=4|Abbrev|echo=false
+4|每一|mei yi|293260|-16.0217|bits=3246402649|covered=4|Abbrev|echo=false
+5|美颜|mei yan|94000|-16.5158|bits=3246661713|covered=4|Abbrev|echo=false
+6|没用|mei yong|74385|-16.6174|bits=3246715003|covered=4|Abbrev|echo=false
+7|美誉|mei yu|69610|-16.6462|bits=3246730110|covered=4|Abbrev|echo=false
+8|美艳|mei yan|26245|-17.0699|bits=3246952211|covered=4|Abbrev|echo=false
+9|美院|mei yuan|24085|-17.1072|bits=3246971767|covered=4|Abbrev|echo=false
+10|美育|mei yu|21345|-17.1596|bits=3246999266|covered=4|Abbrev|echo=false
+11|美英|mei ying|18305|-17.2263|bits=3247034250|covered=4|Abbrev|echo=false
+12|煤油|mei you|18175|-17.2294|bits=3247035873|covered=4|Abbrev|echo=false
+13|魅影|mei ying|14885|-17.3162|bits=3247081342|covered=4|Abbrev|echo=false
+14|美玉|mei yu|14390|-17.3308|bits=3247089043|covered=4|Abbrev|echo=false
+15|美语|mei yu|13105|-17.3715|bits=3247110341|covered=4|Abbrev|echo=false
+16|煤业|mei ye|10900|-17.4515|bits=3247152290|covered=4|Abbrev|echo=false
+17|媚眼|mei yan|10240|-17.4786|bits=3247166512|covered=4|Abbrev|echo=false
+18|眉宇|mei yu|10060|-17.4863|bits=3247170550|covered=4|Abbrev|echo=false
+19|眉眼|mei yan|9915|-17.4926|bits=3247173856|covered=4|Abbrev|echo=false
+20|没呀|mei ya|9680|-17.5030|bits=3247179318|covered=4|Abbrev|echo=false
+21|每样|mei yang|9015|-17.5339|bits=3247195523|covered=4|Abbrev|echo=false
+22|每夜|mei ye|7515|-17.6130|bits=3247236961|covered=4|Abbrev|echo=false
+23|梅雨|mei yu|6925|-17.6485|bits=3247255578|covered=4|Abbrev|echo=false
+24|美意|mei yi|6390|-17.6834|bits=3247273886|covered=4|Abbrev|echo=false
+25|没淹|mei yan|5555|-17.7442|bits=3247305771|covered=4|Abbrev|echo=false
+26|没要|mei yao|4670|-17.8196|bits=3247345285|covered=4|Abbrev|echo=false
+27|没盐|mei yan|4444|-17.8411|bits=3247356580|covered=4|Abbrev|echo=false
+28|霉运|mei yun|4340|-17.8514|bits=3247361972|covered=4|Abbrev|echo=false
+29|没影|mei ying|3890|-17.8990|bits=3247386896|covered=4|Abbrev|echo=false
+30|煤烟|mei yan|3875|-17.9006|bits=3247387776|covered=4|Abbrev|echo=false
+31|美云|mei yun|3740|-17.9160|bits=3247395850|covered=4|Abbrev|echo=false
+32|美音|mei yin|3525|-17.9417|bits=3247409331|covered=4|Abbrev|echo=false
+33|梅耶|mei ye|3430|-17.9536|bits=3247415552|covered=4|Abbrev|echo=false
+34|美言|mei yan|3400|-17.9574|bits=3247417552|covered=4|Abbrev|echo=false
+35|每有|mei you|3333|-17.9661|bits=3247422084|covered=4|Abbrev|echo=false
+36|没油|mei you|2915|-18.0243|bits=3247452596|covered=4|Abbrev|echo=false
+37|煤窑|mei yao|2035|-18.1803|bits=3247534424|covered=4|Abbrev|echo=false
+38|每于|mei yu|1885|-18.2136|bits=3247551858|covered=4|Abbrev|echo=false
+39|媚药|mei yao|1665|-18.2675|bits=3247580115|covered=4|Abbrev|echo=false
+40|没与|mei yu|1435|-18.3321|bits=3247613964|covered=4|Abbrev|echo=false
+41|没缘|mei yuan|1315|-18.3700|bits=3247633849|covered=4|Abbrev|echo=false
+42|没养|mei yang|1290|-18.3783|bits=3247638219|covered=4|Abbrev|echo=false
+43|没一|mei yi|1111|-18.4432|bits=3247672233|covered=4|Abbrev|echo=false
+44|美援|mei yuan|820|-18.5751|bits=3247741386|covered=4|Abbrev|echo=false
+45|没运|mei yun|800|-18.5858|bits=3247747009|covered=4|Abbrev|echo=false
+46|美腰|mei yao|755|-18.6110|bits=3247760191|covered=4|Abbrev|echo=false
+47|眉月|mei yue|340|-18.9574|bits=3247941840|covered=4|Abbrev|echo=false
+48|梅叶|mei ye|245|-19.0997|bits=3248016453|covered=4|Abbrev|echo=false
+49|没腰|mei yao|220|-19.1465|bits=3248040960|covered=4|Abbrev|echo=false
+50|梅园|mei yuan|132|-19.3683|bits=3248157273|covered=4|Abbrev|echo=false
+51|没样|mei yang|111|-19.4436|bits=3248196726|covered=4|Abbrev|echo=false
+52|美亚|mei ya|92|-19.5251|bits=3248239474|covered=4|Abbrev|echo=false
+53|没瘾|mei yin|55|-19.7485|bits=3248356613|covered=4|Abbrev|echo=false
+54|媒鸭|mei ya|46|-19.8261|bits=3248397300|covered=4|Abbrev|echo=false
+55|酶原|mei yuan|20|-20.1879|bits=3248586950|covered=4|Abbrev|echo=false
+56|霉雨|mei yu|9|-20.5347|bits=3248768766|covered=4|Abbrev|echo=false
+57|梅茵|mei yin|5|-20.7899|bits=3248902602|covered=4|Abbrev|echo=false
+58|没益|mei yi|2|-21.1879|bits=3249111238|covered=4|Abbrev|echo=false
+59|没阳|mei yang|2|-21.1879|bits=3249111238|covered=4|Abbrev|echo=false
+60|媚悦|mei yue|1|-21.4889|bits=3249269064|covered=4|Abbrev|echo=false
+61|梅姨|mei yi|1|-21.4889|bits=3249269064|covered=4|Abbrev|echo=false
+62|梅屿|mei yu|1|-21.4889|bits=3249269064|covered=4|Abbrev|echo=false
+63|梅鱼|mei yu|1|-21.4889|bits=3249269064|covered=4|Abbrev|echo=false
+64|没|mei|7560391|-14.6104|bits=3244934156|covered=3|Exact|echo=false
+65|美|mei|1692264|-15.2604|bits=3245615810|covered=3|Exact|echo=false
+66|每|mei|1015025|-15.4824|bits=3245848585|covered=3|Exact|echo=false
+67|妹|mei|542424|-15.7546|bits=3246133942|covered=3|Exact|echo=false
+68|眉|mei|363007|-15.9290|bits=3246316839|covered=3|Exact|echo=false
+69|梅|mei|333631|-15.9656|bits=3246355268|covered=3|Exact|echo=false
+70|媚|mei|110163|-16.4469|bits=3246625585|covered=3|Exact|echo=false
+71|魅|mei|79400|-16.5891|bits=3246700147|covered=3|Exact|echo=false
+72|玫|mei|79367|-16.5893|bits=3246700242|covered=3|Exact|echo=false
+73|枚|mei|67198|-16.6616|bits=3246738139|covered=3|Exact|echo=false
+74|媒|mei|65752|-16.6710|bits=3246743092|covered=3|Exact|echo=false
+75|霉|mei|55470|-16.7448|bits=3246781811|covered=3|Exact|echo=false
+76|昧|mei|41576|-16.8701|bits=3246847460|covered=3|Exact|echo=false
+77|煤|mei|34203|-16.9548|bits=3246891909|covered=3|Exact|echo=false
+78|寐|mei|10214|-17.4797|bits=3247167091|covered=3|Exact|echo=false
+79|嵋|mei|7261|-17.6279|bits=3247244790|covered=3|Exact|echo=false
+80|莓|mei|6323|-17.6880|bits=3247276286|covered=3|Exact|echo=false
+81|湄|mei|5774|-17.7274|bits=3247296967|covered=3|Exact|echo=false
+82|袂|mei|4693|-17.8175|bits=3247344166|covered=3|Exact|echo=false
+83|楣|mei|4189|-17.8668|bits=3247370035|covered=3|Exact|echo=false
+84|酶|mei|1616|-18.2805|bits=3247586917|covered=3|Exact|echo=false
+85|镁|mei|1409|-18.3400|bits=3247618128|covered=3|Exact|echo=false
+86|郿|mei|497|-18.7926|bits=3247855397|covered=3|Exact|echo=false
+87|浼|mei|154|-19.3014|bits=3248122173|covered=3|Exact|echo=false
+88|鹛|mei|41|-19.8761|bits=3248423501|covered=3|Exact|echo=false
+89|镅|mei|19|-20.2102|bits=3248598629|covered=3|Exact|echo=false
+90|渼|mei|15|-20.3128|bits=3248652454|covered=3|Exact|echo=false
+91|媄|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+92|瑂|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+93|糜|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+94|脢|mei|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+
+### zhongg
+n=55 min_ms=1.163
+0|中国|zhong guo|505879|-15.7849|bits=3246165706|covered=6|Abbrev|echo=false
+1|中共|zhong gong|338800|-15.9590|bits=3246348266|covered=6|Abbrev|echo=false
+2|忠告|zhong gao|62960|-16.6898|bits=3246752972|covered=6|Abbrev|echo=false
+3|中高|zhong gao|36245|-16.9297|bits=3246878705|covered=6|Abbrev|echo=false
+4|重工|zhong gong|25925|-17.0752|bits=3246955004|covered=6|Abbrev|echo=false
+5|中观|zhong guan|16440|-17.2730|bits=3247058717|covered=6|Abbrev|echo=false
+6|在宏观|zai hong guan|16220|-17.2789|bits=3247061785|covered=6|Abbrev|echo=false
+7|终归|zhong gui|13835|-17.3479|bits=3247097998|covered=6|Abbrev|echo=false
+8|终稿|zhong gao|12380|-17.3962|bits=3247123300|covered=6|Abbrev|echo=false
+9|中耕|zhong geng|12115|-17.4056|bits=3247128226|covered=6|Abbrev|echo=false
+10|中广|zhong guang|11085|-17.4442|bits=3247148458|covered=6|Abbrev|echo=false
+11|钟鼓|zhong gu|6820|-17.6551|bits=3247259057|covered=6|Abbrev|echo=false
+12|中盖|zhong gai|4256|-17.8599|bits=3247366422|covered=6|Abbrev|echo=false
+13|中跟|zhong gen|4015|-17.8852|bits=3247379695|covered=6|Abbrev|echo=false
+14|忠骨|zhong gu|3955|-17.8918|bits=3247383123|covered=6|Abbrev|echo=false
+15|种过|zhong guo|3855|-17.9029|bits=3247388954|covered=6|Abbrev|echo=false
+16|种鸽|zhong ge|3755|-17.9143|bits=3247394939|covered=6|Abbrev|echo=false
+17|中干|zhong gan|3685|-17.9225|bits=3247399224|covered=6|Abbrev|echo=false
+18|种瓜|zhong gua|3630|-17.9290|bits=3247402648|covered=6|Abbrev|echo=false
+19|种果|zhong guo|2670|-18.0624|bits=3247472585|covered=6|Abbrev|echo=false
+20|重轨|zhong gui|2145|-18.1575|bits=3247522437|covered=6|Abbrev|echo=false
+21|终告|zhong gao|1810|-18.2312|bits=3247561102|covered=6|Abbrev|echo=false
+22|中隔|zhong ge|1790|-18.2361|bits=3247563632|covered=6|Abbrev|echo=false
+23|中贵|zhong gui|1490|-18.3157|bits=3247605400|covered=6|Abbrev|echo=false
+24|众寡|zhong gua|1435|-18.3321|bits=3247613964|covered=6|Abbrev|echo=false
+25|中古|zhong gu|1357|-18.3563|bits=3247626690|covered=6|Abbrev|echo=false
+26|中钢|zhong gang|766|-18.6047|bits=3247756898|covered=6|Abbrev|echo=false
+27|中格|zhong ge|760|-18.6081|bits=3247758688|covered=6|Abbrev|echo=false
+28|中蛊|zhong gu|159|-19.2875|bits=3248114898|covered=6|Abbrev|echo=false
+29|张宏光|zhang hong guang|159|-19.2875|bits=3248114898|covered=6|Abbrev|echo=false
+30|在红馆|zai hong guan|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+31|中闺|zhong gui|65|-19.6760|bits=3248318576|covered=6|Abbrev|echo=false
+32|中冠|zhong guan|36|-19.9326|bits=3248453114|covered=6|Abbrev|echo=false
+33|中冓|zhong gou|25|-20.0910|bits=3248536141|covered=6|Abbrev|echo=false
+34|中膈|zhong ge|19|-20.2102|bits=3248598629|covered=6|Abbrev|echo=false
+35|中轨|zhong gui|2|-21.1879|bits=3249111238|covered=6|Abbrev|echo=false
+36|终古|zhong gu|2|-21.1879|bits=3249111238|covered=6|Abbrev|echo=false
+37|中|zhong|7680869|-14.6035|bits=3244926956|covered=5|Exact|echo=false
+38|种|zhong|2653924|-15.0650|bits=3245410897|covered=5|Exact|echo=false
+39|重|zhong|1900814|-15.2100|bits=3245562887|covered=5|Exact|echo=false
+40|终|zhong|928837|-15.5210|bits=3245888994|covered=5|Exact|echo=false
+41|众|zhong|796661|-15.5876|bits=3245958898|covered=5|Exact|echo=false
+42|钟|zhong|439739|-15.8457|bits=3246229514|covered=5|Exact|echo=false
+43|忠|zhong|180043|-16.2335|bits=3246513734|covered=5|Exact|echo=false
+44|仲|zhong|83817|-16.5656|bits=3246687820|covered=5|Exact|echo=false
+45|衷|zhong|52515|-16.7686|bits=3246794276|covered=5|Exact|echo=false
+46|肿|zhong|39306|-16.8944|bits=3246860244|covered=5|Exact|echo=false
+47|冢|zhong|6812|-17.6556|bits=3247259324|covered=5|Exact|echo=false
+48|踵|zhong|6451|-17.6793|bits=3247271722|covered=5|Exact|echo=false
+49|盅|zhong|6047|-17.7074|bits=3247286448|covered=5|Exact|echo=false
+50|锺|zhong|2435|-18.1024|bits=3247493563|covered=5|Exact|echo=false
+51|舯|zhong|103|-19.4761|bits=3248213758|covered=5|Exact|echo=false
+52|螽|zhong|97|-19.5021|bits=3248227424|covered=5|Exact|echo=false
+53|柊|zhong|36|-19.9326|bits=3248453114|covered=5|Exact|echo=false
+54|茽|zhong|1|-21.4889|bits=3249269064|covered=5|Exact|echo=false
+
+### zhongguo
+n=26 min_ms=0.722
+0|中国|zhong guo|505879|-15.7849|bits=3246165706|covered=8|Exact|echo=false
+1|种过|zhong guo|3855|-17.9029|bits=3247388954|covered=8|Exact|echo=false
+2|种果|zhong guo|2670|-18.0624|bits=3247472585|covered=8|Exact|echo=false
+3|中|zhong|7680869|-29.2287|bits=3253326920|covered=5|Exact|echo=false
+4|种|zhong|2653924|-29.6902|bits=3253568890|covered=5|Exact|echo=false
+5|重|zhong|1900814|-29.8351|bits=3253644886|covered=5|Exact|echo=false
+6|终|zhong|928837|-30.1461|bits=3253807939|covered=5|Exact|echo=false
+7|众|zhong|796661|-30.2128|bits=3253842891|covered=5|Exact|echo=false
+8|钟|zhong|439739|-30.4709|bits=3253978199|covered=5|Exact|echo=false
+9|忠|zhong|180043|-30.8587|bits=3254181528|covered=5|Exact|echo=false
+10|仲|zhong|83817|-31.1907|bits=3254355614|covered=5|Exact|echo=false
+11|衷|zhong|52515|-31.3938|bits=3254462070|covered=5|Exact|echo=false
+12|肿|zhong|39306|-31.5196|bits=3254528038|covered=5|Exact|echo=false
+13|钟鼓|zhong gu|6820|-32.5922|bits=3254935139|covered=7|Exact|echo=false
+14|冢|zhong|6812|-32.2808|bits=3254853511|covered=5|Exact|echo=false
+15|踵|zhong|6451|-32.3044|bits=3254859710|covered=5|Exact|echo=false
+16|盅|zhong|6047|-32.3325|bits=3254867073|covered=5|Exact|echo=false
+17|忠骨|zhong gu|3955|-32.8288|bits=3254997172|covered=7|Exact|echo=false
+18|锺|zhong|2435|-32.7276|bits=3254970630|covered=5|Exact|echo=false
+19|中古|zhong gu|1357|-33.2934|bits=3255118955|covered=7|Exact|echo=false
+20|中蛊|zhong gu|159|-34.2246|bits=3255363059|covered=7|Exact|echo=false
+21|舯|zhong|103|-34.1012|bits=3255330728|covered=5|Exact|echo=false
+22|螽|zhong|97|-34.1273|bits=3255337561|covered=5|Exact|echo=false
+23|柊|zhong|36|-34.5578|bits=3255450406|covered=5|Exact|echo=false
+24|终古|zhong gu|2|-36.1249|bits=3255861229|covered=7|Exact|echo=false
+25|茽|zhong|1|-36.1141|bits=3255858381|covered=5|Exact|echo=false
+
+### zhongguor
+n=24 min_ms=1.638
+0|中国人|zhong guo ren|451625|-15.8341|bits=3246217368|covered=9|Abbrev|echo=false
+1|中国日|zhong guo ri|3205|-17.9831|bits=3247431000|covered=9|Abbrev|echo=false
+2|中国热|zhong guo re|2750|-18.0496|bits=3247465863|covered=9|Abbrev|echo=false
+3|中国|zhong guo|505879|-15.7849|bits=3246165706|covered=8|Exact|echo=false
+4|种过|zhong guo|3855|-17.9029|bits=3247388954|covered=8|Exact|echo=false
+5|种果|zhong guo|2670|-18.0624|bits=3247472585|covered=8|Exact|echo=false
+6|中|zhong|7680869|-14.6035|bits=3244926956|covered=5|Exact|echo=false
+7|种|zhong|2653924|-15.0650|bits=3245410897|covered=5|Exact|echo=false
+8|重|zhong|1900814|-15.2100|bits=3245562887|covered=5|Exact|echo=false
+9|终|zhong|928837|-15.5210|bits=3245888994|covered=5|Exact|echo=false
+10|众|zhong|796661|-15.5876|bits=3245958898|covered=5|Exact|echo=false
+11|钟|zhong|439739|-15.8457|bits=3246229514|covered=5|Exact|echo=false
+12|忠|zhong|180043|-16.2335|bits=3246513734|covered=5|Exact|echo=false
+13|仲|zhong|83817|-16.5656|bits=3246687820|covered=5|Exact|echo=false
+14|衷|zhong|52515|-16.7686|bits=3246794276|covered=5|Exact|echo=false
+15|肿|zhong|39306|-16.8944|bits=3246860244|covered=5|Exact|echo=false
+16|冢|zhong|6812|-17.6556|bits=3247259324|covered=5|Exact|echo=false
+17|踵|zhong|6451|-17.6793|bits=3247271722|covered=5|Exact|echo=false
+18|盅|zhong|6047|-17.7074|bits=3247286448|covered=5|Exact|echo=false
+19|锺|zhong|2435|-18.1024|bits=3247493563|covered=5|Exact|echo=false
+20|舯|zhong|103|-19.4761|bits=3248213758|covered=5|Exact|echo=false
+21|螽|zhong|97|-19.5021|bits=3248227424|covered=5|Exact|echo=false
+22|柊|zhong|36|-19.9326|bits=3248453114|covered=5|Exact|echo=false
+23|茽|zhong|1|-21.4889|bits=3249269064|covered=5|Exact|echo=false
+
+### women
+n=22 min_ms=0.263
+0|我们|wo men|509405|-15.7818|bits=3246162542|covered=5|Exact|echo=false
+1|我|wo|29569261|-29.4759|bits=3253456545|covered=2|Exact|echo=false
+2|握|wo|340839|-31.4142|bits=3254472768|covered=2|Exact|echo=false
+3|窝|wo|98104|-31.9550|bits=3254756336|covered=2|Exact|echo=false
+4|卧|wo|96870|-31.9605|bits=3254759218|covered=2|Exact|echo=false
+5|沃|wo|49337|-32.2536|bits=3254846374|covered=2|Exact|echo=false
+6|喔|wo|29429|-32.4780|bits=3254905198|covered=2|Exact|echo=false
+7|倭|wo|24818|-32.5520|bits=3254924598|covered=2|Exact|echo=false
+8|涡|wo|22478|-32.5950|bits=3254935874|covered=2|Exact|echo=false
+9|龌|wo|7451|-33.0745|bits=3255061582|covered=2|Exact|echo=false
+10|蜗|wo|4726|-33.2722|bits=3255113414|covered=2|Exact|echo=false
+11|渥|wo|4566|-33.2872|bits=3255117335|covered=2|Exact|echo=false
+12|斡|wo|3740|-33.3739|bits=3255140054|covered=2|Exact|echo=false
+13|幄|wo|2644|-33.5245|bits=3255179536|covered=2|Exact|echo=false
+14|挝|wo|2048|-33.6354|bits=3255208616|covered=2|Exact|echo=false
+15|莴|wo|601|-34.1679|bits=3255348196|covered=2|Exact|echo=false
+16|硪|wo|109|-34.9093|bits=3255542562|covered=2|Exact|echo=false
+17|肟|wo|78|-35.0546|bits=3255580660|covered=2|Exact|echo=false
+18|偓|wo|37|-35.3785|bits=3255665566|covered=2|Exact|echo=false
+19|涴|wo|23|-35.5850|bits=3255719692|covered=2|Exact|echo=false
+20|踒|wo|2|-36.6457|bits=3255997748|covered=2|Exact|echo=false
+21|我么|wo me|14230|-inf|bits=4286578688|covered=4|Exact|echo=false
+
+### nimen
+n=25 min_ms=0.238
+0|你们|ni men|501135|-15.7890|bits=3246169996|covered=5|Exact|echo=false
+1|你|ni|1422192|-30.7938|bits=3254147495|covered=2|Exact|echo=false
+2|尼|ni|272244|-31.5118|bits=3254523934|covered=2|Exact|echo=false
+3|泥|ni|120657|-31.8652|bits=3254709220|covered=2|Exact|echo=false
+4|逆|ni|73790|-32.0787|bits=3254800544|covered=2|Exact|echo=false
+5|拟|ni|50704|-32.2417|bits=3254843262|covered=2|Exact|echo=false
+6|腻|ni|42294|-32.3205|bits=3254863910|covered=2|Exact|echo=false
+7|倪|ni|32398|-32.4362|bits=3254894256|covered=2|Exact|echo=false
+8|霓|ni|25232|-32.5448|bits=3254922716|covered=2|Exact|echo=false
+9|匿|ni|17242|-32.7101|bits=3254966064|covered=2|Exact|echo=false
+10|妮|ni|15537|-32.7554|bits=3254977918|covered=2|Exact|echo=false
+11|溺|ni|14495|-32.7855|bits=3254985822|covered=2|Exact|echo=false
+12|昵|ni|11208|-32.8972|bits=3255015101|covered=2|Exact|echo=false
+13|睨|ni|7131|-33.0936|bits=3255066580|covered=2|Exact|echo=false
+14|旎|ni|3505|-33.4020|bits=3255147442|covered=2|Exact|echo=false
+15|怩|ni|2372|-33.5716|bits=3255191894|covered=2|Exact|echo=false
+16|猊|ni|2254|-33.5938|bits=3255197704|covered=2|Exact|echo=false
+17|鲵|ni|482|-34.2637|bits=3255373316|covered=2|Exact|echo=false
+18|伲|ni|211|-34.6225|bits=3255467364|covered=2|Exact|echo=false
+19|坭|ni|55|-35.2064|bits=3255620435|covered=2|Exact|echo=false
+20|铌|ni|17|-35.7163|bits=3255754106|covered=2|Exact|echo=false
+21|麑|ni|16|-35.7426|bits=3255761008|covered=2|Exact|echo=false
+22|薿|ni|11|-35.9053|bits=3255803666|covered=2|Exact|echo=false
+23|呢|ni|1|-36.9467|bits=3256076660|covered=2|Exact|echo=false
+24|鿭|ni|1|-36.9467|bits=3256076660|covered=2|Exact|echo=false
+
+### nhao
+n=14 min_ms=1.090
+0|您好|nin hao|373220|-15.9169|bits=3246304204|covered=4|Abbrev|echo=false
+1|你好|ni hao|332885|-15.9666|bits=3246356287|covered=4|Abbrev|echo=false
+2|能耗|neng hao|105505|-16.4656|bits=3246635422|covered=4|Abbrev|echo=false
+3|那好|na hao|33395|-16.9652|bits=3246897352|covered=4|Abbrev|echo=false
+4|年号|nian hao|18320|-17.2260|bits=3247034064|covered=4|Abbrev|echo=false
+5|内耗|nei hao|9990|-17.4893|bits=3247172140|covered=4|Abbrev|echo=false
+6|弄好|nong hao|9210|-17.5246|bits=3247190650|covered=4|Abbrev|echo=false
+7|哪好|na hao|6666|-17.6650|bits=3247264258|covered=4|Abbrev|echo=false
+8|宁浩|ning hao|6020|-17.7093|bits=3247287467|covered=4|Abbrev|echo=false
+9|拿好|na hao|5410|-17.7557|bits=3247311794|covered=4|Abbrev|echo=false
+10|拿号|na hao|4444|-17.8411|bits=3247356580|covered=4|Abbrev|echo=false
+11|拟好|ni hao|3685|-17.9225|bits=3247399224|covered=4|Abbrev|echo=false
+12|念好|nian hao|2245|-18.1377|bits=3247512062|covered=4|Abbrev|echo=false
+13|侬好|nong hao|455|-18.8309|bits=3247875500|covered=4|Abbrev|echo=false
+
+### feicde
+n=36 min_ms=0.595
+0|非常地|fei chang de|9999|-17.4890|bits=3247171935|covered=6|Abbrev|echo=false
+1|非常的|fei chang de|1000|-18.4889|bits=3247696200|covered=6|Abbrev|echo=false
+2|费城的|fei cheng de|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+3|飞驰的|fei chi de|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+4|飞|fei|1593771|-15.2865|bits=3245643117|covered=3|Exact|echo=false
+5|非|fei|1219442|-15.4027|bits=3245765030|covered=3|Exact|echo=false
+6|费|fei|449492|-15.8362|bits=3246219524|covered=3|Exact|echo=false
+7|菲|fei|252624|-16.0864|bits=3246436612|covered=3|Exact|echo=false
+8|废|fei|148745|-16.3165|bits=3246557214|covered=3|Exact|echo=false
+9|妃|fei|94415|-16.5139|bits=3246660710|covered=3|Exact|echo=false
+10|肥|fei|93039|-16.5202|bits=3246664053|covered=3|Exact|echo=false
+11|啡|fei|74499|-16.6168|bits=3246714654|covered=3|Exact|echo=false
+12|匪|fei|72837|-16.6266|bits=3246719791|covered=3|Exact|echo=false
+13|沸|fei|42184|-16.8638|bits=3246844155|covered=3|Exact|echo=false
+14|肺|fei|38759|-16.9005|bits=3246863436|covered=3|Exact|echo=false
+15|绯|fei|23150|-17.1244|bits=3246980782|covered=3|Exact|echo=false
+16|斐|fei|15019|-17.3123|bits=3247079301|covered=3|Exact|echo=false
+17|霏|fei|11940|-17.4119|bits=3247131540|covered=3|Exact|echo=false
+18|翡|fei|10243|-17.4785|bits=3247166445|covered=3|Exact|echo=false
+19|扉|fei|9977|-17.4899|bits=3247172436|covered=3|Exact|echo=false
+20|吠|fei|6242|-17.6936|bits=3247279222|covered=3|Exact|echo=false
+21|诽|fei|3969|-17.8902|bits=3247382319|covered=3|Exact|echo=false
+22|蜚|fei|2915|-18.0243|bits=3247452596|covered=3|Exact|echo=false
+23|狒|fei|2002|-18.1874|bits=3247538146|covered=3|Exact|echo=false
+24|腓|fei|1737|-18.2491|bits=3247570476|covered=3|Exact|echo=false
+25|悱|fei|1249|-18.3923|bits=3247645574|covered=3|Exact|echo=false
+26|淝|fei|843|-18.5631|bits=3247735088|covered=3|Exact|echo=false
+27|芾|fei|624|-18.6937|bits=3247803582|covered=3|Exact|echo=false
+28|痱|fei|434|-18.8514|bits=3247886260|covered=3|Exact|echo=false
+29|榧|fei|224|-19.1387|bits=3248036857|covered=3|Exact|echo=false
+30|鲱|fei|213|-19.1605|bits=3248048322|covered=3|Exact|echo=false
+31|篚|fei|29|-20.0265|bits=3248502346|covered=3|Exact|echo=false
+32|朏|fei|26|-20.0739|bits=3248527210|covered=3|Exact|echo=false
+33|棐|fei|15|-20.3128|bits=3248652454|covered=3|Exact|echo=false
+34|镄|fei|15|-20.3128|bits=3248652454|covered=3|Exact|echo=false
+35|剕|fei|9|-20.5347|bits=3248768766|covered=3|Exact|echo=false
+
+### sh
+n=100 min_ms=2.197
+0|是|shi|31422712|-13.9917|bits=3244285402|covered=2|Exact|echo=false
+1|说|shuo|12000460|-14.4097|bits=3244723755|covered=2|Exact|echo=false
+2|上|shang|11918291|-14.4127|bits=3244726884|covered=2|Exact|echo=false
+3|时|shi|8207119|-14.5747|bits=3244896778|covered=2|Exact|echo=false
+4|神|shen|5509843|-14.7478|bits=3245078236|covered=2|Exact|echo=false
+5|深|shen|5460800|-14.7517|bits=3245082307|covered=2|Exact|echo=false
+6|手|shou|5076179|-14.7834|bits=3245115567|covered=2|Exact|echo=false
+7|生|sheng|4966773|-14.7928|bits=3245125489|covered=2|Exact|echo=false
+8|事|shi|4729336|-14.8141|bits=3245147797|covered=2|Exact|echo=false
+9|声|sheng|3671271|-14.9241|bits=3245263123|covered=2|Exact|echo=false
+10|晒|shai|3043700|-15.0055|bits=3245348492|covered=2|Exact|echo=false
+11|实|shi|2616492|-15.0712|bits=3245417366|covered=2|Exact|echo=false
+12|十|shi|2567177|-15.0795|bits=3245426031|covered=2|Exact|echo=false
+13|少|shao|1940099|-15.2011|bits=3245553571|covered=2|Exact|echo=false
+14|水|shui|1817943|-15.2293|bits=3245583186|covered=2|Exact|echo=false
+15|师|shi|1581750|-15.2898|bits=3245646565|covered=2|Exact|echo=false
+16|山|shan|1526952|-15.3051|bits=3245662621|covered=2|Exact|echo=false
+17|使|shi|1415240|-15.3381|bits=3245697219|covered=2|Exact|echo=false
+18|受|shou|1388441|-15.3464|bits=3245705925|covered=2|Exact|echo=false
+19|屎|shi|1359880|-15.3554|bits=3245715391|covered=2|Exact|echo=false
+20|世|shi|1305454|-15.3731|bits=3245733992|covered=2|Exact|echo=false
+21|始|shi|1239671|-15.3956|bits=3245757537|covered=2|Exact|echo=false
+22|失|shi|1182384|-15.4161|bits=3245779083|covered=2|Exact|echo=false
+23|士|shi|1175727|-15.4186|bits=3245781654|covered=2|Exact|echo=false
+24|删|shan|1112335|-15.4427|bits=3245806895|covered=2|Exact|echo=false
+25|湿|shi|1106830|-15.4448|bits=3245809154|covered=2|Exact|echo=false
+26|书|shu|1083351|-15.4541|bits=3245818918|covered=2|Exact|echo=false
+27|谁|shei|1064240|-15.4619|bits=3245827023|covered=2|Exact|echo=false
+28|双|shuang|1011629|-15.4839|bits=3245850111|covered=2|Exact|echo=false
+29|数|shu|994719|-15.4912|bits=3245857788|covered=2|Exact|echo=false
+30|啥|sha|976190|-15.4994|bits=3245866350|covered=2|Exact|echo=false
+31|伤|shang|968363|-15.5029|bits=3245870016|covered=2|Exact|echo=false
+32|石|shi|885579|-15.5417|bits=3245910712|covered=2|Exact|echo=false
+33|识|shi|826907|-15.5715|bits=3245941929|covered=2|Exact|echo=false
+34|收|shou|807363|-15.5818|bits=3245952822|covered=2|Exact|echo=false
+35|筛|shai|788300|-15.5922|bits=3245963703|covered=2|Exact|echo=false
+36|视|shi|787375|-15.5927|bits=3245964238|covered=2|Exact|echo=false
+37|势|shi|756507|-15.6101|bits=3245982450|covered=2|Exact|echo=false
+38|市|shi|712352|-15.6362|bits=3246009837|covered=2|Exact|echo=false
+39|睡|shui|616243|-15.6992|bits=3246075837|covered=2|Exact|echo=false
+40|室|shi|614287|-15.7005|bits=3246077285|covered=2|Exact|echo=false
+41|式|shi|600521|-15.7104|bits=3246087606|covered=2|Exact|echo=false
+42|首|shou|588887|-15.7189|bits=3246096515|covered=2|Exact|echo=false
+43|身|shen|581990|-15.7240|bits=3246101880|covered=2|Exact|echo=false
+44|术|shu|579874|-15.7256|bits=3246103539|covered=2|Exact|echo=false
+45|甚|shen|576087|-15.7284|bits=3246106522|covered=2|Exact|echo=false
+46|闪|shan|551016|-15.7477|bits=3246126785|covered=2|Exact|echo=false
+47|商|shang|514550|-15.7775|bits=3246157966|covered=2|Exact|echo=false
+48|示|shi|492951|-15.7961|bits=3246177495|covered=2|Exact|echo=false
+49|试|shi|489076|-15.7995|bits=3246181088|covered=2|Exact|echo=false
+50|什|shen|482836|-15.8051|bits=3246186936|covered=2|Exact|echo=false
+51|树|shu|474612|-15.8126|bits=3246194760|covered=2|Exact|echo=false
+52|守|shou|470593|-15.8163|bits=3246198632|covered=2|Exact|echo=false
+53|顺|shun|454929|-15.8310|bits=3246214048|covered=2|Exact|echo=false
+54|圣|sheng|413460|-15.8725|bits=3246257575|covered=2|Exact|echo=false
+55|胜|sheng|411127|-15.8749|bits=3246260152|covered=2|Exact|echo=false
+56|史|shi|409099|-15.8771|bits=3246262404|covered=2|Exact|echo=false
+57|属|shu|394530|-15.8928|bits=3246278917|covered=2|Exact|echo=false
+58|射|she|386983|-15.9012|bits=3246287712|covered=2|Exact|echo=false
+59|熟|shou|379833|-15.9093|bits=3246296205|covered=2|Exact|echo=false
+60|伸|shen|378380|-15.9110|bits=3246297950|covered=2|Exact|echo=false
+61|设|she|369436|-15.9214|bits=3246308844|covered=2|Exact|echo=false
+62|食|shi|353226|-15.9409|bits=3246329278|covered=2|Exact|echo=false
+63|兽|shou|315293|-15.9902|bits=3246381012|covered=2|Exact|echo=false
+64|尚|shang|311735|-15.9951|bits=3246386180|covered=2|Exact|echo=false
+65|升|sheng|307512|-16.0010|bits=3246391844|covered=2|Exact|echo=false
+66|叔|shu|306516|-16.0025|bits=3246392582|covered=2|Exact|echo=false
+67|善|shan|305341|-16.0041|bits=3246393457|covered=2|Exact|echo=false
+68|束|shu|277980|-16.0449|bits=3246414833|covered=2|Exact|echo=false
+69|舍|she|276743|-16.0468|bits=3246415848|covered=2|Exact|echo=false
+70|舒|shu|255489|-16.0815|bits=3246434044|covered=2|Exact|echo=false
+71|傻|sha|248211|-16.0941|bits=3246440624|covered=2|Exact|echo=false
+72|省|sheng|235937|-16.1161|bits=3246452172|covered=2|Exact|echo=false
+73|烧|shao|235818|-16.1163|bits=3246452286|covered=2|Exact|echo=false
+74|瞬|shun|230645|-16.1260|bits=3246457337|covered=2|Exact|echo=false
+75|沈|shen|218519|-16.1494|bits=3246469634|covered=2|Exact|echo=false
+76|稍|shao|214761|-16.1570|bits=3246473584|covered=2|Exact|echo=false
+77|剩|sheng|214523|-16.1574|bits=3246473836|covered=2|Exact|echo=false
+78|帅|shuai|207990|-16.1709|bits=3246480878|covered=2|Exact|echo=false
+79|盛|sheng|202048|-16.1835|bits=3246487478|covered=2|Exact|echo=false
+80|绍|shao|183310|-16.2257|bits=3246509639|covered=2|Exact|echo=false
+81|输|shu|180207|-16.2331|bits=3246513526|covered=2|Exact|echo=false
+82|赏|shang|170954|-16.2560|bits=3246525528|covered=2|Exact|echo=false
+83|顺便|shun bian|164865|-16.2718|bits=3246533786|covered=2|Exact|echo=false
+84|述|shu|164756|-16.2721|bits=3246533937|covered=2|Exact|echo=false
+85|蛇|she|160445|-16.2836|bits=3246539974|covered=2|Exact|echo=false
+86|授|shou|134240|-16.3610|bits=3246580577|covered=2|Exact|echo=false
+87|手按|shou an|129965|-16.3751|bits=3246587946|covered=2|Exact|echo=false
+88|瘦|shou|127216|-16.3844|bits=3246592814|covered=2|Exact|echo=false
+89|爽|shuang|126265|-16.3876|bits=3246594523|covered=2|Exact|echo=false
+90|舌|she|115405|-16.4267|bits=3246615000|covered=2|Exact|echo=false
+91|殊|shu|112194|-16.4389|bits=3246621426|covered=2|Exact|echo=false
+92|审|shen|110344|-16.4462|bits=3246625212|covered=2|Exact|echo=false
+93|杀|sha|109588|-16.4491|bits=3246626777|covered=2|Exact|echo=false
+94|刹|sha|109543|-16.4493|bits=3246626870|covered=2|Exact|echo=false
+95|衫|shan|77529|-16.5994|bits=3246705577|covered=2|Exact|echo=false
+96|煞|sha|70229|-16.6424|bits=3246728094|covered=2|Exact|echo=false
+97|纱|sha|63048|-16.6892|bits=3246752654|covered=2|Exact|echo=false
+98|珊|shan|62734|-16.6914|bits=3246753791|covered=2|Exact|echo=false
+99|晌|shang|51129|-16.7802|bits=3246800366|covered=2|Exact|echo=false
+
+### zh
+n=100 min_ms=2.285
+0|这|zhe|17648808|-14.2422|bits=3244548100|covered=2|Exact|echo=false
+1|中|zhong|7680869|-14.6035|bits=3244926956|covered=2|Exact|echo=false
+2|只|zhi|5050153|-14.7856|bits=3245117908|covered=2|Exact|echo=false
+3|知|zhi|4397165|-14.8457|bits=3245180961|covered=2|Exact|echo=false
+4|真|zhen|3314815|-14.9684|bits=3245309635|covered=2|Exact|echo=false
+5|长|zhang|3100060|-14.9975|bits=3245340137|covered=2|Exact|echo=false
+6|正|zheng|2933903|-15.0215|bits=3245365224|covered=2|Exact|echo=false
+7|种|zhong|2653924|-15.0650|bits=3245410897|covered=2|Exact|echo=false
+8|住|zhu|2114870|-15.1636|bits=3245514292|covered=2|Exact|echo=false
+9|张|zhang|1977218|-15.1929|bits=3245544940|covered=2|Exact|echo=false
+10|直|zhi|1902380|-15.2096|bits=3245562512|covered=2|Exact|echo=false
+11|重|zhong|1900814|-15.2100|bits=3245562887|covered=2|Exact|echo=false
+12|着|zhe|1616546|-15.2803|bits=3245636656|covered=2|Exact|echo=false
+13|者|zhe|1581047|-15.2900|bits=3245646768|covered=2|Exact|echo=false
+14|找|zhao|1476145|-15.3198|bits=3245678032|covered=2|Exact|echo=false
+15|转|zhuan|1276312|-15.3829|bits=3245744272|covered=2|Exact|echo=false
+16|至|zhi|1199059|-15.4101|bits=3245772706|covered=2|Exact|echo=false
+17|之|zhi|1173763|-15.4193|bits=3245782416|covered=2|Exact|echo=false
+18|主|zhu|1156315|-15.4258|bits=3245789236|covered=2|Exact|echo=false
+19|指|zhi|1099010|-15.4479|bits=3245812383|covered=2|Exact|echo=false
+20|站|zhan|994038|-15.4915|bits=3245858099|covered=2|Exact|echo=false
+21|周|zhou|972776|-15.5009|bits=3245867946|covered=2|Exact|echo=false
+22|终|zhong|928837|-15.5210|bits=3245888994|covered=2|Exact|echo=false
+23|战|zhan|924225|-15.5231|bits=3245891261|covered=2|Exact|echo=false
+24|值|zhi|920306|-15.5250|bits=3245893196|covered=2|Exact|echo=false
+25|整|zheng|911668|-15.5291|bits=3245897490|covered=2|Exact|echo=false
+26|制|zhi|870792|-15.5490|bits=3245918380|covered=2|Exact|echo=false
+27|阵|zhen|857774|-15.5555|bits=3245925240|covered=2|Exact|echo=false
+28|准|zhun|805527|-15.5828|bits=3245953858|covered=2|Exact|echo=false
+29|众|zhong|796661|-15.5876|bits=3245958898|covered=2|Exact|echo=false
+30|章|zhang|697369|-15.6454|bits=3246019518|covered=2|Exact|echo=false
+31|装|zhuang|695241|-15.6468|bits=3246020909|covered=2|Exact|echo=false
+32|照|zhao|692673|-15.6484|bits=3246022594|covered=2|Exact|echo=false
+33|政|zheng|633183|-15.6874|bits=3246063488|covered=2|Exact|echo=false
+34|招|zhao|593719|-15.7153|bits=3246092794|covered=2|Exact|echo=false
+35|注|zhu|583182|-15.7231|bits=3246100948|covered=2|Exact|echo=false
+36|展|zhan|570379|-15.7327|bits=3246111058|covered=2|Exact|echo=false
+37|争|zheng|569448|-15.7335|bits=3246111801|covered=2|Exact|echo=false
+38|支|zhi|532396|-15.7627|bits=3246142440|covered=2|Exact|echo=false
+39|掌|zhang|510260|-15.7811|bits=3246161779|covered=2|Exact|echo=false
+40|赵|zhao|507405|-15.7836|bits=3246164334|covered=2|Exact|echo=false
+41|追|zhui|502402|-15.7879|bits=3246168846|covered=2|Exact|echo=false
+42|准备|zhun bei|500923|-15.7891|bits=3246170189|covered=2|Exact|echo=false
+43|志|zhi|485065|-15.8031|bits=3246184839|covered=2|Exact|echo=false
+44|止|zhi|472691|-15.8143|bits=3246196606|covered=2|Exact|echo=false
+45|证|zheng|452885|-15.8329|bits=3246216099|covered=2|Exact|echo=false
+46|治|zhi|450800|-15.8349|bits=3246218200|covered=2|Exact|echo=false
+47|钟|zhong|439739|-15.8457|bits=3246229514|covered=2|Exact|echo=false
+48|助|zhu|401900|-15.8848|bits=3246270488|covered=2|Exact|echo=false
+49|质|zhi|398905|-15.8880|bits=3246273895|covered=2|Exact|echo=false
+50|置|zhi|379704|-15.9095|bits=3246296360|covered=2|Exact|echo=false
+51|致|zhi|370734|-15.9198|bits=3246307247|covered=2|Exact|echo=false
+52|州|zhou|362849|-15.9292|bits=3246317037|covered=2|Exact|echo=false
+53|专|zhuan|360222|-15.9323|bits=3246320346|covered=2|Exact|echo=false
+54|状|zhuang|351779|-15.9426|bits=3246331146|covered=2|Exact|echo=false
+55|桌|zhuo|346095|-15.9497|bits=3246338565|covered=2|Exact|echo=false
+56|震|zhen|338757|-15.9590|bits=3246348324|covered=2|Exact|echo=false
+57|著|zhu|329248|-15.9714|bits=3246361290|covered=2|Exact|echo=false
+58|职|zhi|326699|-15.9748|bits=3246364829|covered=2|Exact|echo=false
+59|智|zhi|310406|-15.9970|bits=3246388126|covered=2|Exact|echo=false
+60|朱|zhu|302713|-16.0079|bits=3246395425|covered=2|Exact|echo=false
+61|纸|zhi|273013|-16.0527|bits=3246418938|covered=2|Exact|echo=false
+62|珠|zhu|271642|-16.0549|bits=3246420085|covered=2|Exact|echo=false
+63|庄|zhuang|264912|-16.0658|bits=3246425797|covered=2|Exact|echo=false
+64|镇|zhen|264517|-16.0665|bits=3246426137|covered=2|Exact|echo=false
+65|折|zhe|248570|-16.0935|bits=3246440295|covered=2|Exact|echo=false
+66|占|zhan|246282|-16.0975|bits=3246442401|covered=2|Exact|echo=false
+67|丈|zhang|238063|-16.1122|bits=3246450129|covered=2|Exact|echo=false
+68|撞|zhuang|230714|-16.1258|bits=3246457269|covered=2|Exact|echo=false
+69|织|zhi|218959|-16.1485|bits=3246469176|covered=2|Exact|echo=false
+70|诸|zhu|214093|-16.1583|bits=3246474293|covered=2|Exact|echo=false
+71|征|zheng|208067|-16.1707|bits=3246480794|covered=2|Exact|echo=false
+72|扎|zha|204372|-16.1785|bits=3246484874|covered=2|Exact|echo=false
+73|郑|zheng|193156|-16.2030|bits=3246497726|covered=2|Exact|echo=false
+74|执|zhi|191171|-16.2075|bits=3246500078|covered=2|Exact|echo=false
+75|逐|zhu|190582|-16.2088|bits=3246500780|covered=2|Exact|echo=false
+76|睁|zheng|186982|-16.2171|bits=3246505123|covered=2|Exact|echo=false
+77|皱|zhou|186309|-16.2187|bits=3246505944|covered=2|Exact|echo=false
+78|珍|zhen|183710|-16.2248|bits=3246509142|covered=2|Exact|echo=false
+79|炸|zha|183079|-16.2263|bits=3246509926|covered=2|Exact|echo=false
+80|忠|zhong|180043|-16.2335|bits=3246513734|covered=2|Exact|echo=false
+81|壮|zhuang|169349|-16.2601|bits=3246527676|covered=2|Exact|echo=false
+82|竹|zhu|168423|-16.2625|bits=3246528924|covered=2|Exact|echo=false
+83|猪|zhu|155635|-16.2968|bits=3246546904|covered=2|Exact|echo=false
+84|挣|zheng|155359|-16.2976|bits=3246547309|covered=2|Exact|echo=false
+85|帐|zhang|148792|-16.3163|bits=3246557143|covered=2|Exact|echo=false
+86|洲|zhou|147589|-16.3199|bits=3246558991|covered=2|Exact|echo=false
+87|针|zhen|140264|-16.3420|bits=3246570582|covered=2|Exact|echo=false
+88|哲|zhe|128653|-16.3795|bits=3246590256|covered=2|Exact|echo=false
+89|召|zhao|128448|-16.3802|bits=3246590620|covered=2|Exact|echo=false
+90|振|zhen|124002|-16.3955|bits=3246598640|covered=2|Exact|echo=false
+91|枝|zhi|121572|-16.4041|bits=3246603147|covered=2|Exact|echo=false
+92|罩|zhao|120318|-16.4086|bits=3246605508|covered=2|Exact|echo=false
+93|卓|zhuo|118671|-16.4146|bits=3246608646|covered=2|Exact|echo=false
+94|祝|zhu|118176|-16.4164|bits=3246609598|covered=2|Exact|echo=false
+95|着|zhao|96993|-16.5022|bits=3246654576|covered=2|Exact|echo=false
+96|眨|zha|96795|-16.5031|bits=3246655041|covered=2|Exact|echo=false
+97|遮|zhe|76029|-16.6079|bits=3246710025|covered=2|Exact|echo=false
+98|爪|zhao|74674|-16.6157|bits=3246714120|covered=2|Exact|echo=false
+99|障|zhang|67983|-16.6565|bits=3246735494|covered=2|Exact|echo=false
+
+### zho
+n=45 min_ms=1.872
+0|中|zhong|7680869|-14.6035|bits=3244926956|covered=3|Exact|echo=false
+1|种|zhong|2653924|-15.0650|bits=3245410897|covered=3|Exact|echo=false
+2|重|zhong|1900814|-15.2100|bits=3245562887|covered=3|Exact|echo=false
+3|周|zhou|972776|-15.5009|bits=3245867946|covered=3|Exact|echo=false
+4|终|zhong|928837|-15.5210|bits=3245888994|covered=3|Exact|echo=false
+5|众|zhong|796661|-15.5876|bits=3245958898|covered=3|Exact|echo=false
+6|钟|zhong|439739|-15.8457|bits=3246229514|covered=3|Exact|echo=false
+7|州|zhou|362849|-15.9292|bits=3246317037|covered=3|Exact|echo=false
+8|皱|zhou|186309|-16.2187|bits=3246505944|covered=3|Exact|echo=false
+9|忠|zhong|180043|-16.2335|bits=3246513734|covered=3|Exact|echo=false
+10|洲|zhou|147589|-16.3199|bits=3246558991|covered=3|Exact|echo=false
+11|咒|zhou|111198|-16.4428|bits=3246623456|covered=3|Exact|echo=false
+12|仲|zhong|83817|-16.5656|bits=3246687820|covered=3|Exact|echo=false
+13|宙|zhou|62098|-16.6958|bits=3246756111|covered=3|Exact|echo=false
+14|舟|zhou|55739|-16.7427|bits=3246780710|covered=3|Exact|echo=false
+15|衷|zhong|52515|-16.7686|bits=3246794276|covered=3|Exact|echo=false
+16|骤|zhou|44774|-16.8379|bits=3246830587|covered=3|Exact|echo=false
+17|肿|zhong|39306|-16.8944|bits=3246860244|covered=3|Exact|echo=false
+18|粥|zhou|23792|-17.1125|bits=3246974554|covered=3|Exact|echo=false
+19|肘|zhou|19724|-17.1939|bits=3247017250|covered=3|Exact|echo=false
+20|轴|zhou|18321|-17.2260|bits=3247034051|covered=3|Exact|echo=false
+21|昼|zhou|17728|-17.2402|bits=3247041543|covered=3|Exact|echo=false
+22|帚|zhou|6894|-17.6504|bits=3247256600|covered=3|Exact|echo=false
+23|冢|zhong|6812|-17.6556|bits=3247259324|covered=3|Exact|echo=false
+24|胄|zhou|6703|-17.6626|bits=3247262997|covered=3|Exact|echo=false
+25|踵|zhong|6451|-17.6793|bits=3247271722|covered=3|Exact|echo=false
+26|盅|zhong|6047|-17.7074|bits=3247286448|covered=3|Exact|echo=false
+27|纣|zhou|5710|-17.7323|bits=3247299505|covered=3|Exact|echo=false
+28|绉|zhou|3377|-17.9604|bits=3247419098|covered=3|Exact|echo=false
+29|诌|zhou|3056|-18.0038|bits=3247441840|covered=3|Exact|echo=false
+30|锺|zhong|2435|-18.1024|bits=3247493563|covered=3|Exact|echo=false
+31|妯|zhou|713|-18.6358|bits=3247773224|covered=3|Exact|echo=false
+32|啁|zhou|607|-18.7057|bits=3247809872|covered=3|Exact|echo=false
+33|碡|zhou|167|-19.2662|bits=3248103720|covered=3|Exact|echo=false
+34|舯|zhong|103|-19.4761|bits=3248213758|covered=3|Exact|echo=false
+35|钟阿姨|zhong a yi|100|-19.4889|bits=3248220488|covered=3|Exact|echo=false
+36|螽|zhong|97|-19.5021|bits=3248227424|covered=3|Exact|echo=false
+37|籀|zhou|77|-19.6024|bits=3248280000|covered=3|Exact|echo=false
+38|酎|zhou|61|-19.7036|bits=3248333037|covered=3|Exact|echo=false
+39|柊|zhong|36|-19.9326|bits=3248453114|covered=3|Exact|echo=false
+40|辀|zhou|23|-20.1272|bits=3248555126|covered=3|Exact|echo=false
+41|钟阿城|zhong a cheng|10|-20.4889|bits=3248744776|covered=3|Exact|echo=false
+42|赒|zhou|9|-20.5347|bits=3248768766|covered=3|Exact|echo=false
+43|茽|zhong|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+44|zho|zho|0|-1000.0000|bits=3296329728|covered=3|Exact|echo=true
+
+### niha
+n=28 min_ms=0.154
+0|你还|ni hai|363690|-15.9282|bits=3246315982|covered=4|Exact|echo=false
+1|你好|ni hao|332885|-15.9666|bits=3246356287|covered=4|Exact|echo=false
+2|拟好|ni hao|3685|-17.9225|bits=3247399224|covered=4|Exact|echo=false
+3|泥蚶|ni han|128|-19.3817|bits=3248164279|covered=4|Exact|echo=false
+4|你|ni|1422192|-30.8806|bits=3254193020|covered=2|Exact|echo=false
+5|尼|ni|272244|-31.5986|bits=3254569458|covered=2|Exact|echo=false
+6|泥|ni|120657|-31.9520|bits=3254754744|covered=2|Exact|echo=false
+7|逆|ni|73790|-32.1656|bits=3254823307|covered=2|Exact|echo=false
+8|拟|ni|50704|-32.3285|bits=3254866024|covered=2|Exact|echo=false
+9|腻|ni|42294|-32.4073|bits=3254886672|covered=2|Exact|echo=false
+10|倪|ni|32398|-32.5230|bits=3254917018|covered=2|Exact|echo=false
+11|霓|ni|25232|-32.6316|bits=3254945478|covered=2|Exact|echo=false
+12|匿|ni|17242|-32.7970|bits=3254988827|covered=2|Exact|echo=false
+13|妮|ni|15537|-32.8422|bits=3255000681|covered=2|Exact|echo=false
+14|溺|ni|14495|-32.8723|bits=3255008584|covered=2|Exact|echo=false
+15|昵|ni|11208|-32.9840|bits=3255037863|covered=2|Exact|echo=false
+16|睨|ni|7131|-33.1804|bits=3255089343|covered=2|Exact|echo=false
+17|旎|ni|3505|-33.4889|bits=3255170204|covered=2|Exact|echo=false
+18|怩|ni|2372|-33.6585|bits=3255214657|covered=2|Exact|echo=false
+19|猊|ni|2254|-33.6806|bits=3255220466|covered=2|Exact|echo=false
+20|鲵|ni|482|-34.3505|bits=3255396078|covered=2|Exact|echo=false
+21|伲|ni|211|-34.7093|bits=3255490126|covered=2|Exact|echo=false
+22|坭|ni|55|-35.2932|bits=3255643197|covered=2|Exact|echo=false
+23|铌|ni|17|-35.8031|bits=3255776868|covered=2|Exact|echo=false
+24|麑|ni|16|-35.8294|bits=3255783770|covered=2|Exact|echo=false
+25|薿|ni|11|-35.9922|bits=3255826428|covered=2|Exact|echo=false
+26|呢|ni|1|-37.0336|bits=3256099423|covered=2|Exact|echo=false
+27|鿭|ni|1|-37.0336|bits=3256099423|covered=2|Exact|echo=false
+
+### beijin
+n=49 min_ms=0.962
+0|北京|bei jing|1119506|-15.4399|bits=3245803968|covered=6|Exact|echo=false
+1|背景|bei jing|500302|-15.7897|bits=3246170754|covered=6|Exact|echo=false
+2|被禁|bei jin|13150|-17.3700|bits=3247109561|covered=6|Exact|echo=false
+3|北进|bei jin|5650|-17.7369|bits=3247301910|covered=6|Exact|echo=false
+4|北境|bei jing|2222|-18.1422|bits=3247514406|covered=6|Exact|echo=false
+5|倍镜|bei jing|1111|-18.4432|bits=3247672233|covered=6|Exact|echo=false
+6|被|bei|2998064|-30.0686|bits=3253767288|covered=3|Exact|echo=false
+7|备|bei|823555|-30.6297|bits=3254061492|covered=3|Exact|echo=false
+8|北|bei|718033|-30.6893|bits=3254092712|covered=3|Exact|echo=false
+9|背|bei|642470|-30.7376|bits=3254118031|covered=3|Exact|echo=false
+10|呗|bei|317817|-31.0433|bits=3254278294|covered=3|Exact|echo=false
+11|杯|bei|301690|-31.0659|bits=3254290150|covered=3|Exact|echo=false
+12|辈|bei|281934|-31.0953|bits=3254305572|covered=3|Exact|echo=false
+13|悲|bei|238519|-31.1679|bits=3254343648|covered=3|Exact|echo=false
+14|贝|bei|211741|-31.2196|bits=3254370762|covered=3|Exact|echo=false
+15|倍|bei|124204|-31.4513|bits=3254492224|covered=3|Exact|echo=false
+16|卑|bei|82925|-31.6267|bits=3254584210|covered=3|Exact|echo=false
+17|惫|bei|40277|-31.9404|bits=3254748642|covered=3|Exact|echo=false
+18|碑|bei|34260|-32.0106|bits=3254782694|covered=3|Exact|echo=false
+19|狈|bei|33949|-32.0146|bits=3254783732|covered=3|Exact|echo=false
+20|蓓|bei|12618|-32.4444|bits=3254896411|covered=3|Exact|echo=false
+21|悖|bei|5666|-32.7922|bits=3254987562|covered=3|Exact|echo=false
+22|孛|bei|3274|-33.0303|bits=3255050004|covered=3|Exact|echo=false
+23|焙|bei|1206|-33.4641|bits=3255163705|covered=3|Exact|echo=false
+24|邶|bei|1064|-33.5185|bits=3255177967|covered=3|Exact|echo=false
+25|陂|bei|947|-33.5691|bits=3255191229|covered=3|Exact|echo=false
+26|钡|bei|386|-33.9588|bits=3255293403|covered=3|Exact|echo=false
+27|褙|bei|243|-34.1598|bits=3255346089|covered=3|Exact|echo=false
+28|碚|bei|151|-34.3665|bits=3255400256|covered=3|Exact|echo=false
+29|鞴|bei|71|-34.6942|bits=3255486165|covered=3|Exact|echo=false
+30|鐾|bei|47|-34.8733|bits=3255533131|covered=3|Exact|echo=false
+31|鹎|bei|22|-35.2030|bits=3255619553|covered=3|Exact|echo=false
+32|棓|bei|6|-35.7673|bits=3255767473|covered=3|Exact|echo=false
+33|糒|bei|6|-35.7673|bits=3255767473|covered=3|Exact|echo=false
+34|琲|bei|4|-35.9434|bits=3255813635|covered=3|Exact|echo=false
+35|椑|bei|2|-36.2444|bits=3255892548|covered=3|Exact|echo=false
+36|臂|bei|1|-36.5454|bits=3255971461|covered=3|Exact|echo=false
+37|鞁|bei|1|-36.5454|bits=3255971461|covered=3|Exact|echo=false
+38|被激怒|bei ji nu|4480|-17.8376|bits=3247354743|covered=6|Abbrev|echo=false
+39|北极鲶鱼|bei ji nian yu|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+40|被激怒了|bei ji nu le|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+41|被纪念|bei ji nian|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+42|北极|bei ji|47755|-inf|bits=4286578688|covered=5|Exact|echo=false
+43|悲寂|bei ji|15111|-inf|bits=4286578688|covered=5|Exact|echo=false
+44|背脊|bei ji|3435|-inf|bits=4286578688|covered=5|Exact|echo=false
+45|背肌|bei ji|2435|-inf|bits=4286578688|covered=5|Exact|echo=false
+46|被挤|bei ji|888|-inf|bits=4286578688|covered=5|Exact|echo=false
+47|碑记|bei ji|699|-inf|bits=4286578688|covered=5|Exact|echo=false
+48|贝基|bei ji|2|-inf|bits=4286578688|covered=5|Exact|echo=false
+
+### meiyo
+n=37 min_ms=0.265
+0|没有|mei you|504685|-15.7859|bits=3246166782|covered=5|Exact|echo=false
+1|没用|mei yong|74385|-16.6174|bits=3246715003|covered=5|Exact|echo=false
+2|煤油|mei you|18175|-17.2294|bits=3247035873|covered=5|Exact|echo=false
+3|每有|mei you|3333|-17.9661|bits=3247422084|covered=5|Exact|echo=false
+4|没油|mei you|2915|-18.0243|bits=3247452596|covered=5|Exact|echo=false
+5|没|mei|7560391|-31.3280|bits=3254427605|covered=3|Exact|echo=false
+6|美|mei|1692264|-31.9781|bits=3254768432|covered=3|Exact|echo=false
+7|每|mei|1015025|-32.2001|bits=3254832362|covered=3|Exact|echo=false
+8|妹|mei|542424|-32.4722|bits=3254903701|covered=3|Exact|echo=false
+9|眉|mei|363007|-32.6467|bits=3254949425|covered=3|Exact|echo=false
+10|梅|mei|333631|-32.6833|bits=3254959032|covered=3|Exact|echo=false
+11|媚|mei|110163|-33.1646|bits=3255085184|covered=3|Exact|echo=false
+12|魅|mei|79400|-33.3068|bits=3255122465|covered=3|Exact|echo=false
+13|玫|mei|79367|-33.3069|bits=3255122512|covered=3|Exact|echo=false
+14|枚|mei|67198|-33.3792|bits=3255141461|covered=3|Exact|echo=false
+15|媒|mei|65752|-33.3887|bits=3255143938|covered=3|Exact|echo=false
+16|霉|mei|55470|-33.4625|bits=3255163297|covered=3|Exact|echo=false
+17|昧|mei|41576|-33.5877|bits=3255196122|covered=3|Exact|echo=false
+18|煤|mei|34203|-33.6725|bits=3255218346|covered=3|Exact|echo=false
+19|寐|mei|10214|-34.1974|bits=3255355937|covered=3|Exact|echo=false
+20|嵋|mei|7261|-34.3456|bits=3255394786|covered=3|Exact|echo=false
+21|莓|mei|6323|-34.4057|bits=3255410534|covered=3|Exact|echo=false
+22|湄|mei|5774|-34.4451|bits=3255420875|covered=3|Exact|echo=false
+23|袂|mei|4693|-34.5351|bits=3255444474|covered=3|Exact|echo=false
+24|楣|mei|4189|-34.5845|bits=3255457409|covered=3|Exact|echo=false
+25|酶|mei|1616|-34.9981|bits=3255565850|covered=3|Exact|echo=false
+26|镁|mei|1409|-35.0577|bits=3255581456|covered=3|Exact|echo=false
+27|郿|mei|497|-35.5102|bits=3255700090|covered=3|Exact|echo=false
+28|浼|mei|154|-36.0191|bits=3255833478|covered=3|Exact|echo=false
+29|鹛|mei|41|-36.5938|bits=3255984142|covered=3|Exact|echo=false
+30|镅|mei|19|-36.9278|bits=3256071706|covered=3|Exact|echo=false
+31|渼|mei|15|-37.0305|bits=3256098618|covered=3|Exact|echo=false
+32|媄|mei|1|-38.2066|bits=3256406924|covered=3|Exact|echo=false
+33|瑂|mei|1|-38.2066|bits=3256406924|covered=3|Exact|echo=false
+34|糜|mei|1|-38.2066|bits=3256406924|covered=3|Exact|echo=false
+35|脢|mei|1|-38.2066|bits=3256406924|covered=3|Exact|echo=false
+36|么|me|9727|-inf|bits=4286578688|covered=2|Exact|echo=false
+
+### xianzai
+n=100 min_ms=0.837
+0|现在|xian zai|503182|-15.7872|bits=3246168140|covered=7|Exact|echo=false
+1|先在|xian zai|85355|-16.5577|bits=3246683680|covered=7|Exact|echo=false
+2|陷在|xian zai|11535|-17.4269|bits=3247139397|covered=7|Exact|echo=false
+3|贤哉|xian zai|100|-19.4889|bits=3248220488|covered=7|Exact|echo=false
+4|先|xian|1662684|-29.4738|bits=3253455444|covered=4|Exact|echo=false
+5|现|xian|1161139|-29.6297|bits=3253537194|covered=4|Exact|echo=false
+6|显|xian|763327|-29.8119|bits=3253632706|covered=4|Exact|echo=false
+7|线|xian|539444|-29.9627|bits=3253711750|covered=4|Exact|echo=false
+8|险|xian|386142|-30.1079|bits=3253787876|covered=4|Exact|echo=false
+9|仙|xian|379429|-30.1155|bits=3253791869|covered=4|Exact|echo=false
+10|咸|xian|330660|-30.1752|bits=3253823194|covered=4|Exact|echo=false
+11|鲜|xian|273041|-30.2584|bits=3253866791|covered=4|Exact|echo=false
+12|限|xian|222821|-30.3466|bits=3253913071|covered=4|Exact|echo=false
+13|闲|xian|202953|-30.3872|bits=3253934336|covered=4|Exact|echo=false
+14|陷|xian|196684|-30.4008|bits=3253941480|covered=4|Exact|echo=false
+15|县|xian|192413|-30.4104|bits=3253946480|covered=4|Exact|echo=false
+16|献|xian|110306|-30.6520|bits=3254073166|covered=4|Exact|echo=false
+17|贤|xian|109707|-30.6544|bits=3254074406|covered=4|Exact|echo=false
+18|嫌|xian|75438|-30.8170|bits=3254159678|covered=4|Exact|echo=false
+19|纤|xian|72315|-30.8354|bits=3254169305|covered=4|Exact|echo=false
+20|羡|xian|60457|-30.9132|bits=3254210085|covered=4|Exact|echo=false
+21|西安|xi an|55003|-30.9542|bits=3254231612|covered=4|Exact|echo=false
+22|弦|xian|52599|-30.9736|bits=3254241788|covered=4|Exact|echo=false
+23|掀|xian|47524|-31.0177|bits=3254264891|covered=4|Exact|echo=false
+24|宪|xian|36534|-31.1319|bits=3254324773|covered=4|Exact|echo=false
+25|见|xian|34609|-31.1554|bits=3254337098|covered=4|Exact|echo=false
+26|西岸|xi an|33570|-31.1687|bits=3254344038|covered=4|Exact|echo=false
+27|衔|xian|27315|-31.2582|bits=3254390988|covered=4|Exact|echo=false
+28|娴|xian|21333|-31.3656|bits=3254447270|covered=4|Exact|echo=false
+29|涎|xian|11149|-31.6474|bits=3254595023|covered=4|Exact|echo=false
+30|馅|xian|9845|-31.7014|bits=3254623345|covered=4|Exact|echo=false
+31|舷|xian|7809|-31.8020|bits=3254676099|covered=4|Exact|echo=false
+32|腺|xian|6833|-31.8600|bits=3254706499|covered=4|Exact|echo=false
+33|锡安|xi an|3855|-32.1086|bits=3254808367|covered=4|Exact|echo=false
+34|暹|xian|2835|-32.2421|bits=3254843356|covered=4|Exact|echo=false
+35|苋|xian|2198|-32.3526|bits=3254872330|covered=4|Exact|echo=false
+36|冼|xian|2126|-32.3670|bits=3254876121|covered=4|Exact|echo=false
+37|洗|xian|2000|-32.3936|bits=3254883077|covered=4|Exact|echo=false
+38|藓|xian|1602|-32.4899|bits=3254908339|covered=4|Exact|echo=false
+39|锨|xian|1566|-32.4998|bits=3254910926|covered=4|Exact|echo=false
+40|霰|xian|1490|-32.5214|bits=3254916590|covered=4|Exact|echo=false
+41|洗|xi|2290306|-32.2090|bits=3254834692|covered=2|Exact|echo=false
+42|跹|xian|1158|-32.6309|bits=3254945289|covered=4|Exact|echo=false
+43|西|xi|1778761|-32.3188|bits=3254863470|covered=2|Exact|echo=false
+44|忺|xian|775|-32.8053|bits=3254991009|covered=4|Exact|echo=false
+45|痫|xian|721|-32.8367|bits=3254999232|covered=4|Exact|echo=false
+46|喜|xi|1069981|-32.5395|bits=3254921336|covered=2|Exact|echo=false
+47|系|xi|942245|-32.5947|bits=3254935809|covered=2|Exact|echo=false
+48|祆|xian|499|-32.9965|bits=3255041131|covered=4|Exact|echo=false
+49|岘|xian|470|-33.0225|bits=3255047948|covered=4|Exact|echo=false
+50|息|xi|864425|-32.6322|bits=3254945623|covered=2|Exact|echo=false
+51|酰|xian|351|-33.1493|bits=3255081185|covered=4|Exact|echo=false
+52|细|xi|618534|-32.7775|bits=3254983730|covered=2|Exact|echo=false
+53|希|xi|614576|-32.7803|bits=3254984460|covered=2|Exact|echo=false
+54|跣|xian|261|-33.2780|bits=3255114914|covered=4|Exact|echo=false
+55|习|xi|487160|-32.8812|bits=3255010912|covered=2|Exact|echo=false
+56|燹|xian|254|-33.2898|bits=3255118010|covered=4|Exact|echo=false
+57|狝|xian|234|-33.3254|bits=3255127346|covered=4|Exact|echo=false
+58|吸|xi|431549|-32.9339|bits=3255024711|covered=2|Exact|echo=false
+59|蚬|xian|187|-33.4228|bits=3255152872|covered=4|Exact|echo=false
+60|戏|xi|347524|-33.0279|bits=3255049364|covered=2|Exact|echo=false
+61|惜|xi|271651|-33.1349|bits=3255077407|covered=2|Exact|echo=false
+62|席|xi|208395|-33.2500|bits=3255107586|covered=2|Exact|echo=false
+63|猃|xian|110|-33.6532|bits=3255213283|covered=4|Exact|echo=false
+64|籼|xian|101|-33.6903|bits=3255223001|covered=4|Exact|echo=false
+65|袭|xi|189129|-33.2921|bits=3255118630|covered=2|Exact|echo=false
+66|悉|xi|173018|-33.3308|bits=3255128766|covered=2|Exact|echo=false
+67|嘻|xi|149024|-33.3956|bits=3255145762|covered=2|Exact|echo=false
+68|鹇|xian|57|-33.9387|bits=3255288130|covered=4|Exact|echo=false
+69|析|xi|105460|-33.5458|bits=3255185128|covered=2|Exact|echo=false
+70|稀|xi|102120|-33.5598|bits=3255188792|covered=2|Exact|echo=false
+71|筅|xian|50|-33.9956|bits=3255303047|covered=4|Exact|echo=false
+72|熙|xi|88330|-33.6228|bits=3255205308|covered=2|Exact|echo=false
+73|莶|xian|45|-34.0414|bits=3255315042|covered=4|Exact|echo=false
+74|夕|xi|81778|-33.6563|bits=3255214082|covered=2|Exact|echo=false
+75|晰|xi|72136|-33.7107|bits=3255228365|covered=2|Exact|echo=false
+76|溪|xi|59612|-33.7936|bits=3255250076|covered=2|Exact|echo=false
+77|兮|xi|57566|-33.8087|bits=3255254052|covered=2|Exact|echo=false
+78|氙|xian|30|-34.2175|bits=3255361204|covered=4|Exact|echo=false
+79|牺|xi|54587|-33.8318|bits=3255260101|covered=2|Exact|echo=false
+80|膝|xi|52944|-33.8451|bits=3255263580|covered=2|Exact|echo=false
+81|媳|xi|49077|-33.8780|bits=3255272215|covered=2|Exact|echo=false
+82|茜|xi|45676|-33.9092|bits=3255280392|covered=2|Exact|echo=false
+83|隙|xi|40876|-33.9574|bits=3255293032|covered=2|Exact|echo=false
+84|昔|xi|39983|-33.9670|bits=3255295546|covered=2|Exact|echo=false
+85|挦|xian|17|-34.4642|bits=3255425867|covered=4|Exact|echo=false
+86|锡|xi|28576|-34.1129|bits=3255333786|covered=2|Exact|echo=false
+87|崄|xian|15|-34.5185|bits=3255440117|covered=4|Exact|echo=false
+88|缐|xian|14|-34.5485|bits=3255447972|covered=4|Exact|echo=false
+89|嬉|xi|26210|-34.1504|bits=3255343626|covered=2|Exact|echo=false
+90|熄|xi|26172|-34.1511|bits=3255343791|covered=2|Exact|echo=false
+91|犀|xi|22356|-34.2195|bits=3255361733|covered=2|Exact|echo=false
+92|曦|xi|19125|-34.2873|bits=3255379504|covered=2|Exact|echo=false
+93|禧|xi|15854|-34.3688|bits=3255400860|covered=2|Exact|echo=false
+94|皙|xi|14920|-34.3951|bits=3255407772|covered=2|Exact|echo=false
+95|玺|xi|12725|-34.4642|bits=3255425889|covered=2|Exact|echo=false
+96|孅|xian|6|-34.9165|bits=3255544434|covered=4|Exact|echo=false
+97|汐|xi|10645|-34.5417|bits=3255446208|covered=2|Exact|echo=false
+98|蹊|xi|10230|-34.5590|bits=3255450736|covered=2|Exact|echo=false
+99|蜥|xi|9410|-34.5953|bits=3255460248|covered=2|Exact|echo=false
+
+### jintian
+n=100 min_ms=1.001
+0|今天|jin tian|501272|-15.7888|bits=3246169872|covered=7|Exact|echo=false
+1|金田|jin tian|3|-21.0118|bits=3249018915|covered=7|Exact|echo=false
+2|进|jin|2706350|-29.7131|bits=3253580900|covered=3|Exact|echo=false
+3|今|jin|1337566|-30.0191|bits=3253741368|covered=3|Exact|echo=false
+4|金|jin|1291889|-30.0342|bits=3253749280|covered=3|Exact|echo=false
+5|紧|jin|1099517|-30.1043|bits=3253785992|covered=3|Exact|echo=false
+6|近|jin|925463|-30.1791|bits=3253825231|covered=3|Exact|echo=false
+7|尽|jin|805564|-30.2394|bits=3253856824|covered=3|Exact|echo=false
+8|仅|jin|466676|-30.4764|bits=3253981124|covered=3|Exact|echo=false
+9|禁|jin|393943|-30.5500|bits=3254019703|covered=3|Exact|echo=false
+10|劲|jin|327635|-30.6301|bits=3254061668|covered=3|Exact|echo=false
+11|锦|jin|88660|-31.1977|bits=3254359288|covered=3|Exact|echo=false
+12|巾|jin|87648|-31.2027|bits=3254361902|covered=3|Exact|echo=false
+13|筋|jin|71688|-31.2900|bits=3254407670|covered=3|Exact|echo=false
+14|津|jin|69527|-31.3033|bits=3254414638|covered=3|Exact|echo=false
+15|晋|jin|67736|-31.3146|bits=3254420580|covered=3|Exact|echo=false
+16|斤|jin|64823|-31.3337|bits=3254430590|covered=3|Exact|echo=false
+17|谨|jin|62778|-31.3477|bits=3254437888|covered=3|Exact|echo=false
+18|浸|jin|52615|-31.4244|bits=3254478100|covered=3|Exact|echo=false
+19|襟|jin|25730|-31.7350|bits=3254640982|covered=3|Exact|echo=false
+20|矜|jin|18885|-31.8693|bits=3254711404|covered=3|Exact|echo=false
+21|瑾|jin|14682|-31.9787|bits=3254768726|covered=3|Exact|echo=false
+22|烬|jin|11199|-32.0963|bits=3254805145|covered=3|Exact|echo=false
+23|靳|jin|10010|-32.1450|bits=3254817923|covered=3|Exact|echo=false
+24|噤|jin|6575|-32.3276|bits=3254865774|covered=3|Exact|echo=false
+25|浸提|jin ti|2950|-32.9251|bits=3255022424|covered=5|Exact|echo=false
+26|近体|jin ti|2860|-32.9386|bits=3255025951|covered=5|Exact|echo=false
+27|觐|jin|2749|-32.7063|bits=3254965054|covered=3|Exact|echo=false
+28|妗|jin|2231|-32.7970|bits=3254988824|covered=3|Exact|echo=false
+29|缙|jin|1688|-32.9181|bits=3255020577|covered=3|Exact|echo=false
+30|堇|jin|1169|-33.0777|bits=3255062404|covered=3|Exact|echo=false
+31|槿|jin|1097|-33.1053|bits=3255069641|covered=3|Exact|echo=false
+32|衿|jin|1059|-33.1206|bits=3255073655|covered=3|Exact|echo=false
+33|荩|jin|737|-33.2780|bits=3255114923|covered=3|Exact|echo=false
+34|馑|jin|480|-33.4642|bits=3255163742|covered=3|Exact|echo=false
+35|卺|jin|307|-33.6583|bits=3255214624|covered=3|Exact|echo=false
+36|瑨|jin|170|-33.9150|bits=3255281914|covered=3|Exact|echo=false
+37|廑|jin|52|-34.4295|bits=3255416773|covered=3|Exact|echo=false
+38|琎|jin|46|-34.4827|bits=3255430731|covered=3|Exact|echo=false
+39|赆|jin|41|-34.5327|bits=3255443831|covered=3|Exact|echo=false
+40|溍|jin|29|-34.6831|bits=3255483254|covered=3|Exact|echo=false
+41|祲|jin|7|-35.3004|bits=3255645076|covered=3|Exact|echo=false
+42|浕|jin|3|-35.6683|bits=3255741538|covered=3|Exact|echo=false
+43|墐|jin|2|-35.8444|bits=3255787700|covered=3|Exact|echo=false
+44|殣|jin|1|-36.1455|bits=3255866613|covered=3|Exact|echo=false
+45|珒|jin|1|-36.1455|bits=3255866613|covered=3|Exact|echo=false
+46|级|ji|5992040|-inf|bits=4286578688|covered=2|Exact|echo=false
+47|集|ji|5157620|-inf|bits=4286578688|covered=2|Exact|echo=false
+48|几|ji|2760667|-inf|bits=4286578688|covered=2|Exact|echo=false
+49|及|ji|1839825|-inf|bits=4286578688|covered=2|Exact|echo=false
+50|机|ji|1672100|-inf|bits=4286578688|covered=2|Exact|echo=false
+51|记|ji|1094800|-inf|bits=4286578688|covered=2|Exact|echo=false
+52|季|ji|1028550|-inf|bits=4286578688|covered=2|Exact|echo=false
+53|击|ji|1010628|-inf|bits=4286578688|covered=2|Exact|echo=false
+54|急|ji|1009907|-inf|bits=4286578688|covered=2|Exact|echo=false
+55|鸡|ji|1004249|-inf|bits=4286578688|covered=2|Exact|echo=false
+56|挤|ji|1003500|-inf|bits=4286578688|covered=2|Exact|echo=false
+57|系|ji|942245|-inf|bits=4286578688|covered=2|Exact|echo=false
+58|即|ji|900101|-inf|bits=4286578688|covered=2|Exact|echo=false
+59|既|ji|853256|-inf|bits=4286578688|covered=2|Exact|echo=false
+60|极|ji|832554|-inf|bits=4286578688|covered=2|Exact|echo=false
+61|计|ji|747431|-inf|bits=4286578688|covered=2|Exact|echo=false
+62|激|ji|535171|-inf|bits=4286578688|covered=2|Exact|echo=false
+63|继|ji|503302|-inf|bits=4286578688|covered=2|Exact|echo=false
+64|基|ji|499224|-inf|bits=4286578688|covered=2|Exact|echo=false
+65|寄|ji|487256|-inf|bits=4286578688|covered=2|Exact|echo=false
+66|忌|ji|461352|-inf|bits=4286578688|covered=2|Exact|echo=false
+67|己|ji|456925|-inf|bits=4286578688|covered=2|Exact|echo=false
+68|际|ji|352008|-inf|bits=4286578688|covered=2|Exact|echo=false
+69|纪|ji|335852|-inf|bits=4286578688|covered=2|Exact|echo=false
+70|技|ji|326479|-inf|bits=4286578688|covered=2|Exact|echo=false
+71|济|ji|255044|-inf|bits=4286578688|covered=2|Exact|echo=false
+72|迹|ji|234061|-inf|bits=4286578688|covered=2|Exact|echo=false
+73|吉|ji|210857|-inf|bits=4286578688|covered=2|Exact|echo=false
+74|积|ji|188812|-inf|bits=4286578688|covered=2|Exact|echo=false
+75|寂|ji|144616|-inf|bits=4286578688|covered=2|Exact|echo=false
+76|疾|ji|120121|-inf|bits=4286578688|covered=2|Exact|echo=false
+77|姬|ji|101929|-inf|bits=4286578688|covered=2|Exact|echo=false
+78|绩|ji|99008|-inf|bits=4286578688|covered=2|Exact|echo=false
+79|祭|ji|89101|-inf|bits=4286578688|covered=2|Exact|echo=false
+80|肌|ji|85083|-inf|bits=4286578688|covered=2|Exact|echo=false
+81|辑|ji|71050|-inf|bits=4286578688|covered=2|Exact|echo=false
+82|籍|ji|66610|-inf|bits=4286578688|covered=2|Exact|echo=false
+83|圾|ji|45932|-inf|bits=4286578688|covered=2|Exact|echo=false
+84|妓|ji|45162|-inf|bits=4286578688|covered=2|Exact|echo=false
+85|嫉|ji|38200|-inf|bits=4286578688|covered=2|Exact|echo=false
+86|饥|ji|36390|-inf|bits=4286578688|covered=2|Exact|echo=false
+87|剂|ji|31371|-inf|bits=4286578688|covered=2|Exact|echo=false
+88|奇|ji|30000|-inf|bits=4286578688|covered=2|Exact|echo=false
+89|给|ji|29393|-inf|bits=4286578688|covered=2|Exact|echo=false
+90|脊|ji|28041|-inf|bits=4286578688|covered=2|Exact|echo=false
+91|稽|ji|25200|-inf|bits=4286578688|covered=2|Exact|echo=false
+92|叽|ji|24178|-inf|bits=4286578688|covered=2|Exact|echo=false
+93|唧|ji|22052|-inf|bits=4286578688|covered=2|Exact|echo=false
+94|讥|ji|21392|-inf|bits=4286578688|covered=2|Exact|echo=false
+95|藉|ji|20781|-inf|bits=4286578688|covered=2|Exact|echo=false
+96|冀|ji|18988|-inf|bits=4286578688|covered=2|Exact|echo=false
+97|戟|ji|18632|-inf|bits=4286578688|covered=2|Exact|echo=false
+98|棘|ji|18152|-inf|bits=4286578688|covered=2|Exact|echo=false
+99|缉|ji|17853|-inf|bits=4286578688|covered=2|Exact|echo=false
+
+### gongyuan
+n=34 min_ms=1.026
+0|公园|gong yuan|488385|-15.8001|bits=3246181732|covered=8|Exact|echo=false
+1|公元|gong yuan|213810|-16.1589|bits=3246474594|covered=8|Exact|echo=false
+2|贡院|gong yuan|4300|-17.8554|bits=3247364080|covered=8|Exact|echo=false
+3|宫苑|gong yuan|264|-19.0673|bits=3247999446|covered=8|Exact|echo=false
+4|宫院|gong yuan|128|-19.3817|bits=3248164279|covered=8|Exact|echo=false
+5|共圆|gong yuan|1|-21.4889|bits=3249269064|covered=8|Exact|echo=false
+6|公寓|gong yu|317645|-30.8930|bits=3254199528|covered=6|Exact|echo=false
+7|公|gong|2055138|-30.4967|bits=3253991726|covered=4|Exact|echo=false
+8|工|gong|1242237|-30.7153|bits=3254106354|covered=4|Exact|echo=false
+9|功|gong|945623|-30.8338|bits=3254168475|covered=4|Exact|echo=false
+10|攻|gong|665395|-30.9864|bits=3254248501|covered=4|Exact|echo=false
+11|宫|gong|431590|-31.1744|bits=3254347072|covered=4|Exact|echo=false
+12|共|gong|393083|-31.2150|bits=3254368351|covered=4|Exact|echo=false
+13|供|gong|188899|-31.5333|bits=3254535208|covered=4|Exact|echo=false
+14|恭|gong|127784|-31.7030|bits=3254624208|covered=4|Exact|echo=false
+15|弓|gong|120521|-31.7284|bits=3254637532|covered=4|Exact|echo=false
+16|贡|gong|48905|-32.1202|bits=3254811402|covered=4|Exact|echo=false
+17|躬|gong|43678|-32.1692|bits=3254824271|covered=4|Exact|echo=false
+18|拱|gong|43077|-32.1753|bits=3254825848|covered=4|Exact|echo=false
+19|龚|gong|21246|-32.4822|bits=3254906318|covered=4|Exact|echo=false
+20|共浴|gong yu|2700|-32.9636|bits=3255032505|covered=6|Exact|echo=false
+21|共育|gong yu|2222|-33.0482|bits=3255054688|covered=6|Exact|echo=false
+22|巩|gong|14361|-32.6523|bits=3254950907|covered=4|Exact|echo=false
+23|蚣|gong|5167|-33.0963|bits=3255067285|covered=4|Exact|echo=false
+24|公鱼|gong yu|555|-33.6507|bits=3255212617|covered=6|Exact|echo=false
+25|觥|gong|1596|-33.6065|bits=3255201032|covered=4|Exact|echo=false
+26|汞|gong|1292|-33.6982|bits=3255225089|covered=4|Exact|echo=false
+27|肱|gong|1208|-33.7274|bits=3255232743|covered=4|Exact|echo=false
+28|珙|gong|990|-33.8139|bits=3255255400|covered=4|Exact|echo=false
+29|共语|gong yu|110|-34.3536|bits=3255396878|covered=6|Exact|echo=false
+30|工余|gong yu|25|-34.9970|bits=3255565555|covered=6|Exact|echo=false
+31|工于|gong yu|2|-36.0939|bits=3255853104|covered=6|Exact|echo=false
+32|宫羽|gong yu|1|-36.3950|bits=3255932017|covered=6|Exact|echo=false
+33|硔|gong|1|-36.8095|bits=3256040688|covered=4|Exact|echo=false
+
+### zzzz
+n=68 min_ms=1.142
+0|重中之重|zhong zhong zhi zhong|64420|-16.6799|bits=3246747752|covered=4|Abbrev|echo=false
+1|尊重作者|zun zhong zuo zhe|24195|-17.1052|bits=3246970729|covered=4|Abbrev|echo=false
+2|走着走着|zou zhe zou zhe|12890|-17.3787|bits=3247114108|covered=4|Abbrev|echo=false
+3|种子制作|zhong zi zhi zuo|9795|-17.4979|bits=3247176628|covered=4|Abbrev|echo=false
+4|真真正正|zhen zhen zheng zheng|7765|-17.5988|bits=3247229510|covered=4|Abbrev|echo=false
+5|正在组织|zheng zai zu zhi|5575|-17.7427|bits=3247304953|covered=4|Abbrev|echo=false
+6|政治组织|zheng zhi zu zhi|5305|-17.7642|bits=3247316256|covered=4|Abbrev|echo=false
+7|在制作中|zai zhi zuo zhong|2720|-18.0543|bits=3247468361|covered=4|Abbrev|echo=false
+8|专制政治|zhuan zhi zheng zhi|1665|-18.2675|bits=3247580115|covered=4|Abbrev|echo=false
+9|自作主张|zi zuo zhu zhang|1350|-18.3586|bits=3247627868|covered=4|Abbrev|echo=false
+10|浊者自浊|zhuo zhe zi zhuo|885|-18.5420|bits=3247724017|covered=4|Abbrev|echo=false
+11|正在增长|zheng zai zeng zhang|765|-18.6052|bits=3247757195|covered=4|Abbrev|echo=false
+12|种种种种|zhong zhong zhong zhong|525|-18.7687|bits=3247842917|covered=4|Abbrev|echo=false
+13|自自在在|zi zi zai zai|390|-18.8978|bits=3247910600|covered=4|Abbrev|echo=false
+14|战至终章|zhan zhi zhong zhang|195|-19.1989|bits=3248068426|covered=4|Abbrev|echo=false
+15|自主制造|zi zhu zhi zao|129|-19.3783|bits=3248162507|covered=4|Abbrev|echo=false
+16|整治整治|zheng zhi zheng zhi|116|-19.4244|bits=3248186694|covered=4|Abbrev|echo=false
+17|中职中专|zhong zhi zhong zhuan|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+18|中证转债|zhong zheng zhuan zhai|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+19|作者抓住|zuo zhe zhua zhu|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+20|做张做智|zuo zhang zuo zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+21|做张做致|zuo zhang zuo zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+22|制止战争|zhi zhi zhan zheng|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+23|制造战争|zhi zao zhan zheng|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+24|吱吱吱吱|zhi zhi zhi zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+25|吱吱喳喳|zhi zhi zha zha|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+26|啧啧啧啧|ze ze ze ze|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+27|嗞嗞嗞嗞|zi zi zi zi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+28|执着专注|zhi zhuo zhuan zhu|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+29|抓在掌中|zhua zai zhang zhong|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+30|捉贼捉赃|zhuo zei zhuo zang|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+31|政治主张|zheng zhi zhu zhang|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+32|政治作战|zheng zhi zuo zhan|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+33|政治职责|zheng zhi zhi ze|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+34|斟酌斟酌|zhen zhuo zhen zhuo|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+35|早诊早治|zao zhen zao zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+36|智造重镇|zhi zao zhong zhen|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+37|最最最最|zui zui zui zui|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+38|最终之战|zui zhong zhi zhan|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+39|最终战争|zui zhong zhan zheng|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+40|最终组装|zui zhong zu zhuang|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+41|正在制作|zheng zai zhi zuo|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+42|沾沾自足|zhan zhan zi zu|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+43|猪猪猪猪|zhu zhu zhu zhu|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+44|种子种植|zhong zi zhong zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+45|种族战争|zhong zu zhan zheng|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+46|纸质杂志|zhi zhi za zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+47|纸质证照|zhi zhi zheng zhao|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+48|组织政治|zu zhi zheng zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+49|组织组织|zu zhi zu zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+50|自主制作|zi zhu zhi zuo|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+51|自主组织|zi zhu zu zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+52|自尊自重|zi zun zi zhong|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+53|自斟自酌|zi zhen zi zhuo|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+54|自治组织|zi zhi zu zhi|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+55|装置制造|zhuang zhi zhi zao|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+56|资质证照|zi zhi zheng zhao|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+57|走走转转|zou zou zhuan zhuan|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+58|郑州郑州|zheng zhou zheng zhou|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+59|重中之中|zhong zhong zhi zhong|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+60|阻止战争|zu zhi zhan zheng|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+61|做着做着|zuo zhe zuo zhe|72|-19.6316|bits=3248295287|covered=4|Abbrev|echo=false
+62|周周正正|zhou zhou zheng zheng|25|-20.0910|bits=3248536141|covered=4|Abbrev|echo=false
+63|知足知止|zhi zu zhi zhi|25|-20.0910|bits=3248536141|covered=4|Abbrev|echo=false
+64|辗辗转转|zhan zhan zhuan zhuan|5|-20.7899|bits=3248902602|covered=4|Abbrev|echo=false
+65|捉贼捉脏|zhuo zei zhuo zang|4|-20.8868|bits=3248953412|covered=4|Abbrev|echo=false
+66|真赃真贼|zhen zang zhen zei|2|-21.1879|bits=3249111238|covered=4|Abbrev|echo=false
+67|臻臻至至|zhen zhen zhi zhi|1|-21.4889|bits=3249269064|covered=4|Abbrev|echo=false
+
+### zhzhzhzh
+n=1 min_ms=1.107
+0|zhzhzhzh|zhzhzhzh|0|0.0000|bits=0|covered=8|Exact|echo=true
+
+### aaaaaaaa
+n=12 min_ms=0.832
+0|啊啊啊啊啊啊啊啊|a a a a a a a a|100|-19.4889|bits=3248220488|covered=8|Exact|echo=false
+1|啊啊啊啊啊啊啊|a a a a a a a|100|-34.2482|bits=3255369246|covered=7|Exact|echo=false
+2|啊|a|5366043|-34.2482|bits=3255369246|covered=1|Exact|echo=false
+3|啊啊啊啊|a a a a|9820|-34.9936|bits=3255564656|covered=4|Exact|echo=false
+4|阿|a|867275|-35.0397|bits=3255576732|covered=1|Exact|echo=false
+5|啊啊啊啊啊啊|a a a a a a|100|-36.5406|bits=3255970200|covered=6|Exact|echo=false
+6|吖|a|160000|-35.7737|bits=3255769155|covered=1|Exact|echo=false
+7|啊啊啊啊啊|a a a a a|100|-36.9857|bits=3256086876|covered=5|Exact|echo=false
+8|啊啊|a a|27365|-36.5406|bits=3255970200|covered=2|Exact|echo=false
+9|啊啊啊|a a a|9820|-36.9857|bits=3256086876|covered=3|Exact|echo=false
+10|锕|a|144|-38.8195|bits=3256567582|covered=1|Exact|echo=false
+11|腌|a|1|-40.9778|bits=3257133384|covered=1|Exact|echo=false
+
+### wsm
+n=80 min_ms=0.476
+0|为什么|wei shen me|500907|-15.7892|bits=3246170204|covered=3|Abbrev|echo=false
+1|为生命|wei sheng ming|12305|-17.3988|bits=3247124684|covered=3|Abbrev|echo=false
+2|玩什么|wan shen me|9605|-17.5064|bits=3247181088|covered=3|Abbrev|echo=false
+3|无生命|wu sheng ming|4455|-17.8401|bits=3247356017|covered=3|Abbrev|echo=false
+4|乌纱帽|wu sha mao|4330|-17.8524|bits=3247362497|covered=3|Abbrev|echo=false
+5|网上买|wang shang mai|3630|-17.9290|bits=3247402648|covered=3|Abbrev|echo=false
+6|五十名|wu shi ming|3135|-17.9927|bits=3247436029|covered=3|Abbrev|echo=false
+7|威斯敏|wei si min|2555|-18.0815|bits=3247482610|covered=3|Abbrev|echo=false
+8|卫生棉|wei sheng mian|2540|-18.0841|bits=3247483951|covered=3|Abbrev|echo=false
+9|未说明|wei shuo ming|2480|-18.0945|bits=3247489394|covered=3|Abbrev|echo=false
+10|无石棉|wu shi mian|2035|-18.1803|bits=3247534424|covered=3|Abbrev|echo=false
+11|网速慢|wang su man|2030|-18.1814|bits=3247534984|covered=3|Abbrev|echo=false
+12|未声明|wei sheng ming|1870|-18.2171|bits=3247553677|covered=3|Abbrev|echo=false
+13|我是猫|wo shi mao|1795|-18.2348|bits=3247562997|covered=3|Abbrev|echo=false
+14|往上面|wang shang mian|1635|-18.2754|bits=3247584255|covered=3|Abbrev|echo=false
+15|网上卖|wang shang mai|1180|-18.4170|bits=3247658513|covered=3|Abbrev|echo=false
+16|我说嘛|wo shuo ma|630|-18.6896|bits=3247801404|covered=3|Abbrev|echo=false
+17|为射门|wei she men|267|-19.0624|bits=3247996873|covered=3|Abbrev|echo=false
+18|吴施蒙|wu shi meng|190|-19.2102|bits=3248074341|covered=3|Abbrev|echo=false
+19|巫师帽|wu shi mao|187|-19.2171|bits=3248077965|covered=3|Abbrev|echo=false
+20|五十秒|wu shi miao|155|-19.2986|bits=3248120700|covered=3|Abbrev|echo=false
+21|万神庙|wan shen miao|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+22|为市民|wei shi min|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+23|乌斯曼|wu si man|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+24|乌萨马|wu sa ma|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+25|五十亩|wu shi mu|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+26|五十米|wu shi mi|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+27|五色梅|wu se mei|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+28|伪私募|wei si mu|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+29|卧室门|wo shi men|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+30|卫士们|wei shi men|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+31|吴世敏|wu shi min|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+32|吴少敏|wu shao min|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+33|吴山明|wu shan ming|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+34|吴淑敏|wu shu min|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+35|吴胜明|wu sheng ming|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+36|吾斯曼|wu si man|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+37|喂什么|wei shen me|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+38|外甥们|wai sheng men|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+39|外饰面|wai shi mian|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+40|尾兽们|wei shou men|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+41|巫师们|wu shi men|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+42|微商们|wei shang men|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+43|我属马|wo shu ma|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+44|我师母|wo shi mu|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+45|我是谜|wo shi mi|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+46|挖什么|wa shen me|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+47|无上魔|wu shang mo|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+48|无事忙|wu shi mang|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+49|无什么|wu shen me|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+50|无生灭|wu sheng mie|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+51|无色盲|wu se mang|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+52|未实名|wei shi ming|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+53|武士们|wu shi men|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+54|王世明|wang shi ming|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+55|王世民|wang shi min|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+56|王孙满|wang sun man|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+57|王少明|wang shao ming|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+58|王思敏|wang si min|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+59|王斯敏|wang si min|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+60|玩数码|wan shu ma|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+61|玩神秘|wan shen mi|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+62|玩神马|wan shen ma|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+63|纹什么|wen shen me|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+64|纹身妹|wen shen mei|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+65|网上面|wang shang mian|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+66|翁失马|weng shi ma|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+67|舞狮帽|wu shi mao|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+68|问什么|wen shen me|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+69|闻什么|wen shen me|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+70|魏圣美|wei sheng mei|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+71|魏斯曼|wei si man|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+72|王时敏|wang shi min|49|-19.7987|bits=3248382914|covered=3|Abbrev|echo=false
+73|乌斯满|wu si man|29|-20.0265|bits=3248502346|covered=3|Abbrev|echo=false
+74|武士敏|wu shi min|10|-20.4889|bits=3248744776|covered=3|Abbrev|echo=false
+75|吴思敏|wu si min|7|-20.6438|bits=3248825990|covered=3|Abbrev|echo=false
+76|尾身茂|wei shen mao|7|-20.6438|bits=3248825990|covered=3|Abbrev|echo=false
+77|我什么|wo shen me|7|-20.6438|bits=3248825990|covered=3|Abbrev|echo=false
+78|王世懋|wang shi mao|7|-20.6438|bits=3248825990|covered=3|Abbrev|echo=false
+79|王世茂|wang shi mao|1|-21.4889|bits=3249269064|covered=3|Abbrev|echo=false
+
+### zgr
+n=45 min_ms=0.737
+0|中国人|zhong guo ren|451625|-15.8341|bits=3246217368|covered=3|Abbrev|echo=false
+1|这个人|zhe ge ren|167480|-16.2649|bits=3246530203|covered=3|Abbrev|echo=false
+2|整个人|zheng ge ren|67030|-16.6626|bits=3246738709|covered=3|Abbrev|echo=false
+3|在个人|zai ge ren|34730|-16.9482|bits=3246888427|covered=3|Abbrev|echo=false
+4|张国荣|zhang guo rong|29630|-17.0172|bits=3246924589|covered=3|Abbrev|echo=false
+5|撰稿人|zhuan gao ren|15430|-17.3005|bits=3247073154|covered=3|Abbrev|echo=false
+6|找个人|zhao ge ren|8570|-17.5559|bits=3247207050|covered=3|Abbrev|echo=false
+7|中国日|zhong guo ri|3205|-17.9831|bits=3247431000|covered=3|Abbrev|echo=false
+8|中国热|zhong guo re|2750|-18.0496|bits=3247465863|covered=3|Abbrev|echo=false
+9|再感染|zai gan ran|1725|-18.2521|bits=3247572054|covered=3|Abbrev|echo=false
+10|最感人|zui gan ren|1545|-18.3000|bits=3247597147|covered=3|Abbrev|echo=false
+11|主管人|zhu guan ren|1350|-18.3586|bits=3247627868|covered=3|Abbrev|echo=false
+12|捉个人|zhuo ge ren|995|-18.4911|bits=3247697342|covered=3|Abbrev|echo=false
+13|周广仁|zhou guang ren|155|-19.2986|bits=3248120700|covered=3|Abbrev|echo=false
+14|祖国人|zu guo ren|138|-19.3490|bits=3248147151|covered=3|Abbrev|echo=false
+15|最光荣|zui guang rong|136|-19.3554|bits=3248150475|covered=3|Abbrev|echo=false
+16|着个人|zhuo ge ren|114|-19.4320|bits=3248190654|covered=3|Abbrev|echo=false
+17|争光荣|zheng guang rong|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+18|做个人|zuo ge ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+19|做古人|zuo gu ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+20|做工人|zuo gong ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+21|张光荣|zhang guang rong|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+22|找工人|zhao gong ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+23|招工人|zhao gong ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+24|掌管人|zhang guan ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+25|整个容|zheng ge rong|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+26|整过容|zheng guo rong|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+27|最高人|zui gao ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+28|最高日|zui gao ri|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+29|照顾人|zhao gu ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+30|真感人|zhen gan ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+31|站个人|zhan ge ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+32|自个人|zi ge ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+33|自贡人|zi gong ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+34|赵光荣|zhao guang rong|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+35|赵国人|zhao guo ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+36|赵桂荣|zhao gui rong|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+37|邹国如|zou guo ru|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+38|郑国人|zheng guo ren|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+39|郑国荣|zheng guo rong|100|-19.4889|bits=3248220488|covered=3|Abbrev|echo=false
+40|赵国荣|zhao guo rong|78|-19.5968|bits=3248277062|covered=3|Abbrev|echo=false
+41|张广瑞|zhang guang rui|76|-19.6081|bits=3248282976|covered=3|Abbrev|echo=false
+42|宰羔肉|zai gao rou|3|-21.0118|bits=3249018915|covered=3|Abbrev|echo=false
+43|紫盖肉|zi gai rou|3|-21.0118|bits=3249018915|covered=3|Abbrev|echo=false
+44|张贵人|zhang gui ren|2|-21.1879|bits=3249111238|covered=3|Abbrev|echo=false
+
+### nih
+n=43 min_ms=0.226
+0|你会|ni hui|449705|-15.8360|bits=3246219308|covered=3|Abbrev|echo=false
+1|你回|ni hui|408105|-15.8781|bits=3246263512|covered=3|Abbrev|echo=false
+2|你还|ni hai|363690|-15.9282|bits=3246315982|covered=3|Abbrev|echo=false
+3|你好|ni hao|332885|-15.9666|bits=3246356287|covered=3|Abbrev|echo=false
+4|你和|ni he|154995|-16.2986|bits=3246547843|covered=3|Abbrev|echo=false
+5|你很|ni hen|91770|-16.5262|bits=3246667180|covered=3|Abbrev|echo=false
+6|霓虹|ni hong|17565|-17.2443|bits=3247043646|covered=3|Abbrev|echo=false
+7|你喝|ni he|15695|-17.2931|bits=3247069277|covered=3|Abbrev|echo=false
+8|拟合|ni he|9225|-17.5239|bits=3247190280|covered=3|Abbrev|echo=false
+9|你花|ni hua|8888|-17.5401|bits=3247198754|covered=3|Abbrev|echo=false
+10|你画|ni hua|5555|-17.7442|bits=3247305771|covered=3|Abbrev|echo=false
+11|拟好|ni hao|3685|-17.9225|bits=3247399224|covered=3|Abbrev|echo=false
+12|你狠|ni hen|1720|-18.2534|bits=3247572715|covered=3|Abbrev|echo=false
+13|腻滑|ni hua|685|-18.6532|bits=3247782346|covered=3|Abbrev|echo=false
+14|拟核|ni he|445|-18.8405|bits=3247880561|covered=3|Abbrev|echo=false
+15|泥蚶|ni han|128|-19.3817|bits=3248164279|covered=3|Abbrev|echo=false
+16|泥河|ni he|127|-19.3851|bits=3248166065|covered=3|Abbrev|echo=false
+17|霓凰|ni huang|12|-20.4097|bits=3248703262|covered=3|Abbrev|echo=false
+18|倪鸿|ni hong|1|-21.4889|bits=3249269064|covered=3|Abbrev|echo=false
+19|你|ni|1422192|-15.3359|bits=3245694988|covered=2|Exact|echo=false
+20|尼|ni|272244|-16.0539|bits=3246419581|covered=2|Exact|echo=false
+21|泥|ni|120657|-16.4074|bits=3246604867|covered=2|Exact|echo=false
+22|逆|ni|73790|-16.6209|bits=3246716832|covered=2|Exact|echo=false
+23|拟|ni|50704|-16.7839|bits=3246802267|covered=2|Exact|echo=false
+24|腻|ni|42294|-16.8626|bits=3246843562|covered=2|Exact|echo=false
+25|倪|ni|32398|-16.9784|bits=3246904254|covered=2|Exact|echo=false
+26|霓|ni|25232|-17.0870|bits=3246961174|covered=2|Exact|echo=false
+27|匿|ni|17242|-17.2523|bits=3247047872|covered=2|Exact|echo=false
+28|妮|ni|15537|-17.2975|bits=3247071580|covered=2|Exact|echo=false
+29|溺|ni|14495|-17.3277|bits=3247087387|covered=2|Exact|echo=false
+30|昵|ni|11208|-17.4394|bits=3247145945|covered=2|Exact|echo=false
+31|睨|ni|7131|-17.6358|bits=3247248904|covered=2|Exact|echo=false
+32|旎|ni|3505|-17.9442|bits=3247410627|covered=2|Exact|echo=false
+33|怩|ni|2372|-18.1138|bits=3247499532|covered=2|Exact|echo=false
+34|猊|ni|2254|-18.1360|bits=3247511150|covered=2|Exact|echo=false
+35|鲵|ni|482|-18.8059|bits=3247862375|covered=2|Exact|echo=false
+36|伲|ni|211|-19.1646|bits=3248050471|covered=2|Exact|echo=false
+37|坭|ni|55|-19.7485|bits=3248356613|covered=2|Exact|echo=false
+38|铌|ni|17|-20.2585|bits=3248623954|covered=2|Exact|echo=false
+39|麑|ni|16|-20.2848|bits=3248637758|covered=2|Exact|echo=false
+40|薿|ni|11|-20.4475|bits=3248723074|covered=2|Exact|echo=false
+41|呢|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+42|鿭|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+
+### nihaoq
+n=28 min_ms=0.608
+0|你好奇|ni hao qi|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+1|你好强|ni hao qiang|100|-19.4889|bits=3248220488|covered=6|Abbrev|echo=false
+2|你好|ni hao|332885|-15.9666|bits=3246356287|covered=5|Exact|echo=false
+3|拟好|ni hao|3685|-17.9225|bits=3247399224|covered=5|Exact|echo=false
+4|你|ni|1422192|-15.3359|bits=3245694988|covered=2|Exact|echo=false
+5|尼|ni|272244|-16.0539|bits=3246419581|covered=2|Exact|echo=false
+6|泥|ni|120657|-16.4074|bits=3246604867|covered=2|Exact|echo=false
+7|逆|ni|73790|-16.6209|bits=3246716832|covered=2|Exact|echo=false
+8|拟|ni|50704|-16.7839|bits=3246802267|covered=2|Exact|echo=false
+9|腻|ni|42294|-16.8626|bits=3246843562|covered=2|Exact|echo=false
+10|倪|ni|32398|-16.9784|bits=3246904254|covered=2|Exact|echo=false
+11|霓|ni|25232|-17.0870|bits=3246961174|covered=2|Exact|echo=false
+12|匿|ni|17242|-17.2523|bits=3247047872|covered=2|Exact|echo=false
+13|妮|ni|15537|-17.2975|bits=3247071580|covered=2|Exact|echo=false
+14|溺|ni|14495|-17.3277|bits=3247087387|covered=2|Exact|echo=false
+15|昵|ni|11208|-17.4394|bits=3247145945|covered=2|Exact|echo=false
+16|睨|ni|7131|-17.6358|bits=3247248904|covered=2|Exact|echo=false
+17|旎|ni|3505|-17.9442|bits=3247410627|covered=2|Exact|echo=false
+18|怩|ni|2372|-18.1138|bits=3247499532|covered=2|Exact|echo=false
+19|猊|ni|2254|-18.1360|bits=3247511150|covered=2|Exact|echo=false
+20|鲵|ni|482|-18.8059|bits=3247862375|covered=2|Exact|echo=false
+21|伲|ni|211|-19.1646|bits=3248050471|covered=2|Exact|echo=false
+22|坭|ni|55|-19.7485|bits=3248356613|covered=2|Exact|echo=false
+23|铌|ni|17|-20.2585|bits=3248623954|covered=2|Exact|echo=false
+24|麑|ni|16|-20.2848|bits=3248637758|covered=2|Exact|echo=false
+25|薿|ni|11|-20.4475|bits=3248723074|covered=2|Exact|echo=false
+26|呢|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+27|鿭|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+
+### qnihao
+n=54 min_ms=0.650
+0|你好|ni hao|332885|-18.3646|bits=3247631003|covered=6|Fuzzy|echo=false
+1|秦昊|qin hao|9999|-19.0118|bits=3247970362|covered=6|Fuzzy|echo=false
+2|拟好|ni hao|3685|-20.3204|bits=3248656435|covered=6|Fuzzy|echo=false
+3|亲|qin|1388321|-31.4973|bits=3254516337|covered=3|Fuzzy|echo=false
+4|秦|qin|381190|-32.0586|bits=3254795274|covered=3|Fuzzy|echo=false
+5|琴|qin|161113|-32.4326|bits=3254893319|covered=3|Fuzzy|echo=false
+6|侵|qin|103019|-32.6269|bits=3254944231|covered=3|Fuzzy|echo=false
+7|勤|qin|89958|-32.6857|bits=3254959665|covered=3|Fuzzy|echo=false
+8|寝|qin|70179|-32.7936|bits=3254987933|covered=3|Fuzzy|echo=false
+9|擒|qin|39189|-33.0466|bits=3255054266|covered=3|Fuzzy|echo=false
+10|钦|qin|36673|-33.0754|bits=3255061821|covered=3|Fuzzy|echo=false
+11|芹|qin|28424|-33.1861|bits=3255090830|covered=3|Fuzzy|echo=false
+12|沁|qin|26604|-33.2148|bits=3255098364|covered=3|Fuzzy|echo=false
+13|禽|qin|20600|-33.3259|bits=3255127482|covered=3|Fuzzy|echo=false
+14|覃|qin|5474|-33.9015|bits=3255278363|covered=3|Fuzzy|echo=false
+15|噙|qin|4495|-33.9870|bits=3255300796|covered=3|Fuzzy|echo=false
+16|衾|qin|1359|-34.5066|bits=3255436982|covered=3|Fuzzy|echo=false
+17|揿|qin|737|-34.7723|bits=3255506648|covered=3|Fuzzy|echo=false
+18|芩|qin|542|-34.9058|bits=3255541636|covered=3|Fuzzy|echo=false
+19|溱|qin|301|-35.1612|bits=3255608596|covered=3|Fuzzy|echo=false
+20|吣|qin|121|-35.5570|bits=3255712348|covered=3|Fuzzy|echo=false
+21|嗪|qin|81|-35.7313|bits=3255758039|covered=3|Fuzzy|echo=false
+22|锓|qin|74|-35.7705|bits=3255768329|covered=3|Fuzzy|echo=false
+23|檎|qin|67|-35.8137|bits=3255779642|covered=3|Fuzzy|echo=false
+24|骎|qin|47|-35.9677|bits=3255820007|covered=3|Fuzzy|echo=false
+25|慬|qin|12|-36.5606|bits=3255975436|covered=3|Fuzzy|echo=false
+26|嵚|qin|8|-36.7367|bits=3256021598|covered=3|Fuzzy|echo=false
+27|梣|qin|3|-37.1627|bits=3256133262|covered=3|Fuzzy|echo=false
+28|螓|qin|1|-37.6398|bits=3256258337|covered=3|Fuzzy|echo=false
+29|欠拟合|qian ni he|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+30|你|ni|1422192|-32.3619|bits=3254874768|covered=3|Fuzzy|echo=false
+31|尼|ni|272244|-33.0799|bits=3255062988|covered=3|Fuzzy|echo=false
+32|泥|ni|120657|-33.4333|bits=3255155630|covered=3|Fuzzy|echo=false
+33|逆|ni|73790|-33.6468|bits=3255211613|covered=3|Fuzzy|echo=false
+34|拟|ni|50704|-33.8098|bits=3255254330|covered=3|Fuzzy|echo=false
+35|腻|ni|42294|-33.8886|bits=3255274978|covered=3|Fuzzy|echo=false
+36|倪|ni|32398|-34.0043|bits=3255305324|covered=3|Fuzzy|echo=false
+37|霓|ni|25232|-34.1129|bits=3255333784|covered=3|Fuzzy|echo=false
+38|匿|ni|17242|-34.2782|bits=3255377133|covered=3|Fuzzy|echo=false
+39|妮|ni|15537|-34.3235|bits=3255388987|covered=3|Fuzzy|echo=false
+40|溺|ni|14495|-34.3536|bits=3255396890|covered=3|Fuzzy|echo=false
+41|昵|ni|11208|-34.4653|bits=3255426170|covered=3|Fuzzy|echo=false
+42|睨|ni|7131|-34.6617|bits=3255477649|covered=3|Fuzzy|echo=false
+43|旎|ni|3505|-34.9701|bits=3255558510|covered=3|Fuzzy|echo=false
+44|怩|ni|2372|-35.1397|bits=3255602963|covered=3|Fuzzy|echo=false
+45|猊|ni|2254|-35.1619|bits=3255608772|covered=3|Fuzzy|echo=false
+46|鲵|ni|482|-35.8318|bits=3255784384|covered=3|Fuzzy|echo=false
+47|伲|ni|211|-36.1906|bits=3255878432|covered=3|Fuzzy|echo=false
+48|坭|ni|55|-36.7745|bits=3256031504|covered=3|Fuzzy|echo=false
+49|铌|ni|17|-37.2844|bits=3256165174|covered=3|Fuzzy|echo=false
+50|麑|ni|16|-37.3107|bits=3256172076|covered=3|Fuzzy|echo=false
+51|薿|ni|11|-37.4734|bits=3256214734|covered=3|Fuzzy|echo=false
+52|呢|ni|1|-38.5148|bits=3256487729|covered=3|Fuzzy|echo=false
+53|鿭|ni|1|-38.5148|bits=3256487729|covered=3|Fuzzy|echo=false
+
+### niqhao
+n=58 min_ms=0.567
+0|你好|ni hao|332885|-18.3646|bits=3247631003|covered=6|Fuzzy|echo=false
+1|倪超|ni chao|82|-20.2741|bits=3248632136|covered=6|Fuzzy|echo=false
+2|拟好|ni hao|3685|-20.3204|bits=3248656435|covered=6|Fuzzy|echo=false
+3|尼奥|ni ao|18050|-22.0283|bits=3249551866|covered=6|Fuzzy|echo=false
+4|你查|ni cha|9999|-33.1250|bits=3255074809|covered=5|Fuzzy|echo=false
+5|捏|nie|81503|-33.2057|bits=3255095977|covered=3|Fuzzy|echo=false
+6|你差|ni cha|7777|-33.2341|bits=3255103420|covered=5|Fuzzy|echo=false
+7|逆差|ni cha|5450|-33.3885|bits=3255143899|covered=5|Fuzzy|echo=false
+8|聂|nie|36076|-33.5597|bits=3255188764|covered=3|Fuzzy|echo=false
+9|孽|nie|25919|-33.7033|bits=3255226408|covered=3|Fuzzy|echo=false
+10|涅|nie|16639|-33.8958|bits=3255276868|covered=3|Fuzzy|echo=false
+11|蹑|nie|12942|-34.0049|bits=3255305475|covered=3|Fuzzy|echo=false
+12|嗫|nie|6049|-34.3352|bits=3255392066|covered=3|Fuzzy|echo=false
+13|啮|nie|1810|-34.8592|bits=3255529430|covered=3|Fuzzy|echo=false
+14|臬|nie|1210|-35.0341|bits=3255575278|covered=3|Fuzzy|echo=false
+15|镊|nie|836|-35.1947|bits=3255617372|covered=3|Fuzzy|echo=false
+16|镍|nie|485|-35.4312|bits=3255679360|covered=3|Fuzzy|echo=false
+17|你啊|ni a|517550|-35.5079|bits=3255699475|covered=5|Fuzzy|echo=false
+18|蘖|nie|235|-35.7458|bits=3255761850|covered=3|Fuzzy|echo=false
+19|颞|nie|167|-35.8942|bits=3255800740|covered=3|Fuzzy|echo=false
+20|糵|nie|92|-36.1531|bits=3255868616|covered=3|Fuzzy|echo=false
+21|陧|nie|54|-36.3845|bits=3255929275|covered=3|Fuzzy|echo=false
+22|尼察|ni cha|2|-36.8239|bits=3256044460|covered=5|Fuzzy|echo=false
+23|乜|nie|1|-38.1169|bits=3256383412|covered=3|Fuzzy|echo=false
+24|嵲|nie|1|-38.1169|bits=3256383412|covered=3|Fuzzy|echo=false
+25|菍|nie|1|-38.1169|bits=3256383412|covered=3|Fuzzy|echo=false
+26|你去|ni qu|161730|-16.2801|bits=3246538158|covered=3|Abbrev|echo=false
+27|你却|ni que|62820|-16.6908|bits=3246753479|covered=3|Abbrev|echo=false
+28|泥鳅|ni qiu|21745|-17.1515|bits=3246995038|covered=3|Abbrev|echo=false
+29|你瞧|ni qiao|19380|-17.2016|bits=3247021256|covered=3|Abbrev|echo=false
+30|你请|ni qing|9625|-17.5055|bits=3247180615|covered=3|Abbrev|echo=false
+31|你强|ni qiang|5810|-17.7247|bits=3247295552|covered=3|Abbrev|echo=false
+32|泥墙|ni qiang|3465|-17.9492|bits=3247413240|covered=3|Abbrev|echo=false
+33|拟请|ni qing|1770|-18.2409|bits=3247566191|covered=3|Abbrev|echo=false
+34|你|ni|1422192|-15.3359|bits=3245694988|covered=2|Exact|echo=false
+35|尼|ni|272244|-16.0539|bits=3246419581|covered=2|Exact|echo=false
+36|泥|ni|120657|-16.4074|bits=3246604867|covered=2|Exact|echo=false
+37|逆|ni|73790|-16.6209|bits=3246716832|covered=2|Exact|echo=false
+38|拟|ni|50704|-16.7839|bits=3246802267|covered=2|Exact|echo=false
+39|腻|ni|42294|-16.8626|bits=3246843562|covered=2|Exact|echo=false
+40|倪|ni|32398|-16.9784|bits=3246904254|covered=2|Exact|echo=false
+41|霓|ni|25232|-17.0870|bits=3246961174|covered=2|Exact|echo=false
+42|匿|ni|17242|-17.2523|bits=3247047872|covered=2|Exact|echo=false
+43|妮|ni|15537|-17.2975|bits=3247071580|covered=2|Exact|echo=false
+44|溺|ni|14495|-17.3277|bits=3247087387|covered=2|Exact|echo=false
+45|昵|ni|11208|-17.4394|bits=3247145945|covered=2|Exact|echo=false
+46|睨|ni|7131|-17.6358|bits=3247248904|covered=2|Exact|echo=false
+47|旎|ni|3505|-17.9442|bits=3247410627|covered=2|Exact|echo=false
+48|怩|ni|2372|-18.1138|bits=3247499532|covered=2|Exact|echo=false
+49|猊|ni|2254|-18.1360|bits=3247511150|covered=2|Exact|echo=false
+50|鲵|ni|482|-18.8059|bits=3247862375|covered=2|Exact|echo=false
+51|伲|ni|211|-19.1646|bits=3248050471|covered=2|Exact|echo=false
+52|坭|ni|55|-19.7485|bits=3248356613|covered=2|Exact|echo=false
+53|铌|ni|17|-20.2585|bits=3248623954|covered=2|Exact|echo=false
+54|麑|ni|16|-20.2848|bits=3248637758|covered=2|Exact|echo=false
+55|薿|ni|11|-20.4475|bits=3248723074|covered=2|Exact|echo=false
+56|呢|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+57|鿭|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+
+### nihoa
+n=57 min_ms=0.446
+0|拟好|ni hao|3685|-19.4453|bits=3248197651|covered=5|Fuzzy|echo=false
+1|你啊|ni a|517550|-20.5708|bits=3248787730|covered=5|Fuzzy|echo=false
+2|鸟|niao|178842|-32.9957|bits=3255040918|covered=4|Fuzzy|echo=false
+3|尿|niao|42861|-33.6161|bits=3255203554|covered=4|Fuzzy|echo=false
+4|袅|niao|16381|-34.0338|bits=3255313058|covered=4|Fuzzy|echo=false
+5|你哦|ni o|14765|-34.4769|bits=3255429200|covered=4|Fuzzy|echo=false
+6|茑|niao|395|-35.6516|bits=3255737140|covered=4|Fuzzy|echo=false
+7|脲|niao|14|-37.1020|bits=3256117371|covered=4|Fuzzy|echo=false
+8|捏|nie|81503|-48.2740|bits=3259046046|covered=3|Fuzzy|echo=false
+9|聂|nie|36076|-48.6280|bits=3259138832|covered=3|Fuzzy|echo=false
+10|孽|nie|25919|-48.7716|bits=3259176476|covered=3|Fuzzy|echo=false
+11|涅|nie|16639|-48.9641|bits=3259226937|covered=3|Fuzzy|echo=false
+12|蹑|nie|12942|-49.0732|bits=3259255544|covered=3|Fuzzy|echo=false
+13|嗫|nie|6049|-49.4035|bits=3259342134|covered=3|Fuzzy|echo=false
+14|啮|nie|1810|-49.9275|bits=3259479499|covered=3|Fuzzy|echo=false
+15|臬|nie|1210|-50.1024|bits=3259525346|covered=3|Fuzzy|echo=false
+16|镊|nie|836|-50.2630|bits=3259567441|covered=3|Fuzzy|echo=false
+17|镍|nie|485|-50.4995|bits=3259629429|covered=3|Fuzzy|echo=false
+18|蘖|nie|235|-50.8141|bits=3259711919|covered=3|Fuzzy|echo=false
+19|颞|nie|167|-50.9625|bits=3259750808|covered=3|Fuzzy|echo=false
+20|糵|nie|92|-51.2214|bits=3259818685|covered=3|Fuzzy|echo=false
+21|陧|nie|54|-51.4528|bits=3259879344|covered=3|Fuzzy|echo=false
+22|乜|nie|1|-53.1852|bits=3260333480|covered=3|Fuzzy|echo=false
+23|嵲|nie|1|-53.1852|bits=3260333480|covered=3|Fuzzy|echo=false
+24|菍|nie|1|-53.1852|bits=3260333480|covered=3|Fuzzy|echo=false
+25|你会|ni hui|449705|-15.8360|bits=3246219308|covered=3|Abbrev|echo=false
+26|你回|ni hui|408105|-15.8781|bits=3246263512|covered=3|Abbrev|echo=false
+27|你还|ni hai|363690|-15.9282|bits=3246315982|covered=3|Abbrev|echo=false
+28|你好|ni hao|332885|-15.9666|bits=3246356287|covered=3|Abbrev|echo=false
+29|你和|ni he|154995|-16.2986|bits=3246547843|covered=3|Abbrev|echo=false
+30|你很|ni hen|91770|-16.5262|bits=3246667180|covered=3|Abbrev|echo=false
+31|霓虹|ni hong|17565|-17.2443|bits=3247043646|covered=3|Abbrev|echo=false
+32|你喝|ni he|15695|-17.2931|bits=3247069277|covered=3|Abbrev|echo=false
+33|你|ni|1422192|-15.3359|bits=3245694988|covered=2|Exact|echo=false
+34|尼|ni|272244|-16.0539|bits=3246419581|covered=2|Exact|echo=false
+35|泥|ni|120657|-16.4074|bits=3246604867|covered=2|Exact|echo=false
+36|逆|ni|73790|-16.6209|bits=3246716832|covered=2|Exact|echo=false
+37|拟|ni|50704|-16.7839|bits=3246802267|covered=2|Exact|echo=false
+38|腻|ni|42294|-16.8626|bits=3246843562|covered=2|Exact|echo=false
+39|倪|ni|32398|-16.9784|bits=3246904254|covered=2|Exact|echo=false
+40|霓|ni|25232|-17.0870|bits=3246961174|covered=2|Exact|echo=false
+41|匿|ni|17242|-17.2523|bits=3247047872|covered=2|Exact|echo=false
+42|妮|ni|15537|-17.2975|bits=3247071580|covered=2|Exact|echo=false
+43|溺|ni|14495|-17.3277|bits=3247087387|covered=2|Exact|echo=false
+44|昵|ni|11208|-17.4394|bits=3247145945|covered=2|Exact|echo=false
+45|睨|ni|7131|-17.6358|bits=3247248904|covered=2|Exact|echo=false
+46|旎|ni|3505|-17.9442|bits=3247410627|covered=2|Exact|echo=false
+47|怩|ni|2372|-18.1138|bits=3247499532|covered=2|Exact|echo=false
+48|猊|ni|2254|-18.1360|bits=3247511150|covered=2|Exact|echo=false
+49|鲵|ni|482|-18.8059|bits=3247862375|covered=2|Exact|echo=false
+50|伲|ni|211|-19.1646|bits=3248050471|covered=2|Exact|echo=false
+51|坭|ni|55|-19.7485|bits=3248356613|covered=2|Exact|echo=false
+52|铌|ni|17|-20.2585|bits=3248623954|covered=2|Exact|echo=false
+53|麑|ni|16|-20.2848|bits=3248637758|covered=2|Exact|echo=false
+54|薿|ni|11|-20.4475|bits=3248723074|covered=2|Exact|echo=false
+55|呢|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+56|鿭|ni|1|-21.4889|bits=3249269064|covered=2|Exact|echo=false
+
+### nhao
+n=14 min_ms=1.090
+0|您好|nin hao|373220|-15.9169|bits=3246304204|covered=4|Abbrev|echo=false
+1|你好|ni hao|332885|-15.9666|bits=3246356287|covered=4|Abbrev|echo=false
+2|能耗|neng hao|105505|-16.4656|bits=3246635422|covered=4|Abbrev|echo=false
+3|那好|na hao|33395|-16.9652|bits=3246897352|covered=4|Abbrev|echo=false
+4|年号|nian hao|18320|-17.2260|bits=3247034064|covered=4|Abbrev|echo=false
+5|内耗|nei hao|9990|-17.4893|bits=3247172140|covered=4|Abbrev|echo=false
+6|弄好|nong hao|9210|-17.5246|bits=3247190650|covered=4|Abbrev|echo=false
+7|哪好|na hao|6666|-17.6650|bits=3247264258|covered=4|Abbrev|echo=false
+8|宁浩|ning hao|6020|-17.7093|bits=3247287467|covered=4|Abbrev|echo=false
+9|拿好|na hao|5410|-17.7557|bits=3247311794|covered=4|Abbrev|echo=false
+10|拿号|na hao|4444|-17.8411|bits=3247356580|covered=4|Abbrev|echo=false
+11|拟好|ni hao|3685|-17.9225|bits=3247399224|covered=4|Abbrev|echo=false
+12|念好|nian hao|2245|-18.1377|bits=3247512062|covered=4|Abbrev|echo=false
+13|侬好|nong hao|455|-18.8309|bits=3247875500|covered=4|Abbrev|echo=false
+
+### nihaoo
+n=26 min_ms=0.402
+0|你好|ni hao|332885|-30.9037|bits=3254205108|covered=5|Exact|echo=false
+1|拟好|ni hao|3685|-32.8595|bits=3255005222|covered=5|Exact|echo=false
+2|你|ni|1422192|-32.6324|bits=3254945691|covered=2|Exact|echo=false
+3|尼|ni|272244|-33.3504|bits=3255133910|covered=2|Exact|echo=false
+4|泥|ni|120657|-33.7038|bits=3255226554|covered=2|Exact|echo=false
+5|逆|ni|73790|-33.9174|bits=3255282536|covered=2|Exact|echo=false
+6|拟|ni|50704|-34.0803|bits=3255325254|covered=2|Exact|echo=false
+7|腻|ni|42294|-34.1591|bits=3255345901|covered=2|Exact|echo=false
+8|倪|ni|32398|-34.2749|bits=3255376247|covered=2|Exact|echo=false
+9|霓|ni|25232|-34.3834|bits=3255404707|covered=2|Exact|echo=false
+10|匿|ni|17242|-34.5488|bits=3255448056|covered=2|Exact|echo=false
+11|妮|ni|15537|-34.5940|bits=3255459910|covered=2|Exact|echo=false
+12|溺|ni|14495|-34.6242|bits=3255467814|covered=2|Exact|echo=false
+13|昵|ni|11208|-34.7359|bits=3255497092|covered=2|Exact|echo=false
+14|睨|ni|7131|-34.9322|bits=3255548572|covered=2|Exact|echo=false
+15|旎|ni|3505|-35.2407|bits=3255629434|covered=2|Exact|echo=false
+16|怩|ni|2372|-35.4103|bits=3255673886|covered=2|Exact|echo=false
+17|猊|ni|2254|-35.4324|bits=3255679695|covered=2|Exact|echo=false
+18|鲵|ni|482|-36.1023|bits=3255855308|covered=2|Exact|echo=false
+19|伲|ni|211|-36.4611|bits=3255949356|covered=2|Exact|echo=false
+20|坭|ni|55|-37.0450|bits=3256102426|covered=2|Exact|echo=false
+21|铌|ni|17|-37.5549|bits=3256236097|covered=2|Exact|echo=false
+22|麑|ni|16|-37.5813|bits=3256242999|covered=2|Exact|echo=false
+23|薿|ni|11|-37.7440|bits=3256285657|covered=2|Exact|echo=false
+24|呢|ni|1|-38.7854|bits=3256558652|covered=2|Exact|echo=false
+25|鿭|ni|1|-38.7854|bits=3256558652|covered=2|Exact|echo=false
+
+### shenem
+n=62 min_ms=1.562
+0|什么|shen me|502468|-17.3107|bits=3247078468|covered=6|Fuzzy|echo=false
+1|深二模|shen er mo|157|-19.2930|bits=3248117780|covered=6|Abbrev|echo=false
+2|神|shen|5509843|-14.7478|bits=3245078236|covered=4|Exact|echo=false
+3|深|shen|5460800|-14.7517|bits=3245082307|covered=4|Exact|echo=false
+4|身|shen|581990|-15.7240|bits=3246101880|covered=4|Exact|echo=false
+5|甚|shen|576087|-15.7284|bits=3246106522|covered=4|Exact|echo=false
+6|什|shen|482836|-15.8051|bits=3246186936|covered=4|Exact|echo=false
+7|伸|shen|378380|-15.9110|bits=3246297950|covered=4|Exact|echo=false
+8|沈|shen|218519|-16.1494|bits=3246469634|covered=4|Exact|echo=false
+9|审|shen|110344|-16.4462|bits=3246625212|covered=4|Exact|echo=false
+10|申|shen|78049|-16.5965|bits=3246704054|covered=4|Exact|echo=false
+11|慎|shen|64154|-16.6817|bits=3246748694|covered=4|Exact|echo=false
+12|呻|shen|35841|-16.9345|bits=3246881257|covered=4|Exact|echo=false
+13|渗|shen|35558|-16.9380|bits=3246883062|covered=4|Exact|echo=false
+14|婶|shen|34226|-16.9546|bits=3246891756|covered=4|Exact|echo=false
+15|绅|shen|21513|-17.1562|bits=3246997481|covered=4|Exact|echo=false
+16|肾|shen|10212|-17.4798|bits=3247167136|covered=4|Exact|echo=false
+17|参|shen|10000|-17.4889|bits=3247171912|covered=4|Exact|echo=false
+18|莘|shen|6743|-17.6601|bits=3247261642|covered=4|Exact|echo=false
+19|珅|shen|5345|-17.7610|bits=3247314546|covered=4|Exact|echo=false
+20|蜃|shen|4184|-17.8673|bits=3247370307|covered=4|Exact|echo=false
+21|哂|shen|2972|-18.0159|bits=3247448186|covered=4|Exact|echo=false
+22|谌|shen|1820|-18.2288|bits=3247559848|covered=4|Exact|echo=false
+23|娠|shen|1417|-18.3375|bits=3247616839|covered=4|Exact|echo=false
+24|燊|shen|733|-18.6238|bits=3247766924|covered=4|Exact|echo=false
+25|瘆|shen|478|-18.8095|bits=3247864272|covered=4|Exact|echo=false
+26|椹|shen|459|-18.8271|bits=3247873508|covered=4|Exact|echo=false
+27|葚|shen|431|-18.8544|bits=3247887839|covered=4|Exact|echo=false
+28|砷|shen|404|-18.8825|bits=3247902570|covered=4|Exact|echo=false
+29|糁|shen|308|-19.0004|bits=3247964347|covered=4|Exact|echo=false
+30|棽|shen|300|-19.0118|bits=3247970339|covered=4|Exact|echo=false
+31|诜|shen|171|-19.2559|bits=3248098331|covered=4|Exact|echo=false
+32|甡|shen|110|-19.4475|bits=3248198786|covered=4|Exact|echo=false
+33|谂|shen|100|-19.4889|bits=3248220488|covered=4|Exact|echo=false
+34|矧|shen|82|-19.5751|bits=3248265674|covered=4|Exact|echo=false
+35|胂|shen|59|-19.7181|bits=3248340628|covered=4|Exact|echo=false
+36|侁|shen|18|-20.2336|bits=3248610940|covered=4|Exact|echo=false
+37|瞫|shen|12|-20.4097|bits=3248703262|covered=4|Exact|echo=false
+38|鲹|shen|2|-21.1879|bits=3249111238|covered=4|Exact|echo=false
+39|屾|shen|1|-21.4889|bits=3249269064|covered=4|Exact|echo=false
+40|射|she|386983|-15.9012|bits=3246287712|covered=3|Exact|echo=false
+41|设|she|369436|-15.9214|bits=3246308844|covered=3|Exact|echo=false
+42|舍|she|276743|-16.0468|bits=3246415848|covered=3|Exact|echo=false
+43|蛇|she|160445|-16.2836|bits=3246539974|covered=3|Exact|echo=false
+44|舌|she|115405|-16.4267|bits=3246615000|covered=3|Exact|echo=false
+45|涉|she|80705|-16.5820|bits=3246696435|covered=3|Exact|echo=false
+46|摄|she|80547|-16.5829|bits=3246696881|covered=3|Exact|echo=false
+47|社|she|76704|-16.6041|bits=3246708013|covered=3|Exact|echo=false
+48|奢|she|32985|-16.9706|bits=3246900165|covered=3|Exact|echo=false
+49|慑|she|20266|-17.1821|bits=3247011077|covered=3|Exact|echo=false
+50|赦|she|16333|-17.2758|bits=3247060204|covered=3|Exact|echo=false
+51|折|she|10000|-17.4889|bits=3247171912|covered=3|Exact|echo=false
+52|佘|she|7584|-17.6090|bits=3247234880|covered=3|Exact|echo=false
+53|麝|she|2895|-18.0273|bits=3247454163|covered=3|Exact|echo=false
+54|赊|she|2108|-18.1650|bits=3247526398|covered=3|Exact|echo=false
+55|畲|she|890|-18.5395|bits=3247722734|covered=3|Exact|echo=false
+56|猞|she|775|-18.5996|bits=3247754238|covered=3|Exact|echo=false
+57|歙|she|679|-18.6570|bits=3247784349|covered=3|Exact|echo=false
+58|阇|she|412|-18.8740|bits=3247898105|covered=3|Exact|echo=false
+59|滠|she|74|-19.6197|bits=3248289048|covered=3|Exact|echo=false
+60|厍|she|54|-19.7565|bits=3248360791|covered=3|Exact|echo=false
+61|拾|she|1|-21.4889|bits=3249269064|covered=3|Exact|echo=false
+
+### shanghaai
+n=72 min_ms=0.667
+0|上|shang|11918291|-45.2654|bits=3258257361|covered=5|Exact|echo=false
+1|伤|shang|968363|-46.3556|bits=3258543144|covered=5|Exact|echo=false
+2|商|shang|514550|-46.6302|bits=3258615132|covered=5|Exact|echo=false
+3|尚|shang|311735|-46.8479|bits=3258672185|covered=5|Exact|echo=false
+4|赏|shang|170954|-47.1088|bits=3258740580|covered=5|Exact|echo=false
+5|晌|shang|51129|-47.6330|bits=3258877999|covered=5|Exact|echo=false
+6|裳|shang|39939|-47.7403|bits=3258906120|covered=5|Exact|echo=false
+7|殇|shang|4925|-48.6493|bits=3259144406|covered=5|Exact|echo=false
+8|觞|shang|1255|-49.2430|bits=3259300057|covered=5|Exact|echo=false
+9|熵|shang|481|-49.6595|bits=3259409240|covered=5|Exact|echo=false
+10|墒|shang|413|-49.7257|bits=3259426592|covered=5|Exact|echo=false
+11|绱|shang|147|-50.1743|bits=3259544199|covered=5|Exact|echo=false
+12|垧|shang|122|-50.2553|bits=3259565422|covered=5|Exact|echo=false
+13|山|shan|1526952|-inf|bits=4286578688|covered=4|Exact|echo=false
+14|删|shan|1112335|-inf|bits=4286578688|covered=4|Exact|echo=false
+15|闪|shan|551016|-inf|bits=4286578688|covered=4|Exact|echo=false
+16|善|shan|305341|-inf|bits=4286578688|covered=4|Exact|echo=false
+17|扇|shan|86396|-inf|bits=4286578688|covered=4|Exact|echo=false
+18|衫|shan|77529|-inf|bits=4286578688|covered=4|Exact|echo=false
+19|珊|shan|62734|-inf|bits=4286578688|covered=4|Exact|echo=false
+20|擅|shan|40475|-inf|bits=4286578688|covered=4|Exact|echo=false
+21|姗|shan|32428|-inf|bits=4286578688|covered=4|Exact|echo=false
+22|讪|shan|21892|-inf|bits=4286578688|covered=4|Exact|echo=false
+23|杉|shan|21508|-inf|bits=4286578688|covered=4|Exact|echo=false
+24|陕|shan|18975|-inf|bits=4286578688|covered=4|Exact|echo=false
+25|煽|shan|12159|-inf|bits=4286578688|covered=4|Exact|echo=false
+26|膳|shan|9913|-inf|bits=4286578688|covered=4|Exact|echo=false
+27|跚|shan|6556|-inf|bits=4286578688|covered=4|Exact|echo=false
+28|潸|shan|3155|-inf|bits=4286578688|covered=4|Exact|echo=false
+29|缮|shan|2715|-inf|bits=4286578688|covered=4|Exact|echo=false
+30|汕|shan|2204|-inf|bits=4286578688|covered=4|Exact|echo=false
+31|禅|shan|2000|-inf|bits=4286578688|covered=4|Exact|echo=false
+32|膻|shan|1908|-inf|bits=4286578688|covered=4|Exact|echo=false
+33|赡|shan|1869|-inf|bits=4286578688|covered=4|Exact|echo=false
+34|鳝|shan|1316|-inf|bits=4286578688|covered=4|Exact|echo=false
+35|舢|shan|1209|-inf|bits=4286578688|covered=4|Exact|echo=false
+36|苫|shan|821|-inf|bits=4286578688|covered=4|Exact|echo=false
+37|嬗|shan|764|-inf|bits=4286578688|covered=4|Exact|echo=false
+38|鄯|shan|683|-inf|bits=4286578688|covered=4|Exact|echo=false
+39|骟|shan|416|-inf|bits=4286578688|covered=4|Exact|echo=false
+40|蟮|shan|385|-inf|bits=4286578688|covered=4|Exact|echo=false
+41|墡|shan|269|-inf|bits=4286578688|covered=4|Exact|echo=false
+42|剡|shan|235|-inf|bits=4286578688|covered=4|Exact|echo=false
+43|疝|shan|215|-inf|bits=4286578688|covered=4|Exact|echo=false
+44|芟|shan|162|-inf|bits=4286578688|covered=4|Exact|echo=false
+45|埏|shan|29|-inf|bits=4286578688|covered=4|Exact|echo=false
+46|钐|shan|24|-inf|bits=4286578688|covered=4|Exact|echo=false
+47|嶦|shan|4|-inf|bits=4286578688|covered=4|Exact|echo=false
+48|晱|shan|4|-inf|bits=4286578688|covered=4|Exact|echo=false
+49|单|shan|1|-inf|bits=4286578688|covered=4|Exact|echo=false
+50|栅|shan|1|-inf|bits=4286578688|covered=4|Exact|echo=false
+51|烻|shan|1|-inf|bits=4286578688|covered=4|Exact|echo=false
+52|啥|sha|976190|-inf|bits=4286578688|covered=3|Exact|echo=false
+53|傻|sha|248211|-inf|bits=4286578688|covered=3|Exact|echo=false
+54|杀|sha|109588|-inf|bits=4286578688|covered=3|Exact|echo=false
+55|刹|sha|109543|-inf|bits=4286578688|covered=3|Exact|echo=false
+56|莎|sha|107897|-inf|bits=4286578688|covered=3|Exact|echo=false
+57|煞|sha|70229|-inf|bits=4286578688|covered=3|Exact|echo=false
+58|纱|sha|63048|-inf|bits=4286578688|covered=3|Exact|echo=false
+59|沙|sha|42765|-inf|bits=4286578688|covered=3|Exact|echo=false
+60|厦|sha|35375|-inf|bits=4286578688|covered=3|Exact|echo=false
+61|霎|sha|21405|-inf|bits=4286578688|covered=3|Exact|echo=false
+62|砂|sha|17805|-inf|bits=4286578688|covered=3|Exact|echo=false
+63|鲨|sha|9416|-inf|bits=4286578688|covered=3|Exact|echo=false
+64|裟|sha|3853|-inf|bits=4286578688|covered=3|Exact|echo=false
+65|铩|sha|1309|-inf|bits=4286578688|covered=3|Exact|echo=false
+66|嗄|sha|1019|-inf|bits=4286578688|covered=3|Exact|echo=false
+67|歃|sha|749|-inf|bits=4286578688|covered=3|Exact|echo=false
+68|痧|sha|379|-inf|bits=4286578688|covered=3|Exact|echo=false
+69|唼|sha|70|-inf|bits=4286578688|covered=3|Exact|echo=false
+70|挲|sha|1|-inf|bits=4286578688|covered=3|Exact|echo=false
+71|杉|sha|1|-inf|bits=4286578688|covered=3|Exact|echo=false
+
+### womenjintianqugongyuan
+n=23 min_ms=4.474
+0|我们今天|wo men jin tian|63695|-36.1737|bits=3255874016|covered=12|Exact|echo=false
+1|我们|wo men|509405|-51.0596|bits=3259776260|covered=5|Exact|echo=false
+2|我|wo|29569261|-64.7536|bits=3263267292|covered=2|Exact|echo=false
+3|握|wo|340839|-66.6919|bits=3263521348|covered=2|Exact|echo=false
+4|窝|wo|98104|-67.2328|bits=3263592240|covered=2|Exact|echo=false
+5|卧|wo|96870|-67.2383|bits=3263592960|covered=2|Exact|echo=false
+6|沃|wo|49337|-67.5313|bits=3263631366|covered=2|Exact|echo=false
+7|喔|wo|29429|-67.7557|bits=3263660779|covered=2|Exact|echo=false
+8|倭|wo|24818|-67.8297|bits=3263670479|covered=2|Exact|echo=false
+9|涡|wo|22478|-67.8727|bits=3263676116|covered=2|Exact|echo=false
+10|龌|wo|7451|-68.3523|bits=3263738971|covered=2|Exact|echo=false
+11|蜗|wo|4726|-68.5500|bits=3263764887|covered=2|Exact|echo=false
+12|渥|wo|4566|-68.5649|bits=3263766847|covered=2|Exact|echo=false
+13|斡|wo|3740|-68.6516|bits=3263778206|covered=2|Exact|echo=false
+14|幄|wo|2644|-68.8022|bits=3263797948|covered=2|Exact|echo=false
+15|挝|wo|2048|-68.9131|bits=3263812488|covered=2|Exact|echo=false
+16|莴|wo|601|-69.4456|bits=3263882278|covered=2|Exact|echo=false
+17|硪|wo|109|-70.1870|bits=3263979460|covered=2|Exact|echo=false
+18|肟|wo|78|-70.3324|bits=3263998510|covered=2|Exact|echo=false
+19|偓|wo|37|-70.6563|bits=3264040962|covered=2|Exact|echo=false
+20|涴|wo|23|-70.8627|bits=3264068026|covered=2|Exact|echo=false
+21|踒|wo|2|-71.9234|bits=3264207054|covered=2|Exact|echo=false
+22|我么|wo me|14230|-inf|bits=4286578688|covered=4|Exact|echo=false
+
+### womenjintianqugongyuann
+n=23 min_ms=6.346
+0|我们今天|wo men jin tian|63695|-16.6848|bits=3246750329|covered=9|Abbrev|echo=false
+1|我们|wo men|509405|-53.4575|bits=3260404866|covered=5|Exact|echo=false
+2|我么|wo me|14230|-57.3124|bits=3261415400|covered=4|Exact|echo=false
+3|我|wo|29569261|-14.0181|bits=3244313088|covered=2|Exact|echo=false
+4|握|wo|340839|-15.9564|bits=3246345534|covered=2|Exact|echo=false
+5|窝|wo|98104|-16.4972|bits=3246651983|covered=2|Exact|echo=false
+6|卧|wo|96870|-16.5027|bits=3246654865|covered=2|Exact|echo=false
+7|沃|wo|49337|-16.7957|bits=3246808490|covered=2|Exact|echo=false
+8|喔|wo|29429|-17.0201|bits=3246926139|covered=2|Exact|echo=false
+9|倭|wo|24818|-17.0941|bits=3246964940|covered=2|Exact|echo=false
+10|涡|wo|22478|-17.1371|bits=3246987490|covered=2|Exact|echo=false
+11|龌|wo|7451|-17.6167|bits=3247238908|covered=2|Exact|echo=false
+12|蜗|wo|4726|-17.8144|bits=3247342571|covered=2|Exact|echo=false
+13|渥|wo|4566|-17.8294|bits=3247350413|covered=2|Exact|echo=false
+14|斡|wo|3740|-17.9160|bits=3247395850|covered=2|Exact|echo=false
+15|幄|wo|2644|-18.0666|bits=3247474814|covered=2|Exact|echo=false
+16|挝|wo|2048|-18.1776|bits=3247532974|covered=2|Exact|echo=false
+17|莴|wo|601|-18.7100|bits=3247812134|covered=2|Exact|echo=false
+18|硪|wo|109|-19.4515|bits=3248200866|covered=2|Exact|echo=false
+19|肟|wo|78|-19.5968|bits=3248277062|covered=2|Exact|echo=false
+20|偓|wo|37|-19.9207|bits=3248446874|covered=2|Exact|echo=false
+21|涴|wo|23|-20.1272|bits=3248555126|covered=2|Exact|echo=false
+22|踒|wo|2|-21.1879|bits=3249111238|covered=2|Exact|echo=false
+
+### womenjintianqqugongyuan
+n=23 min_ms=3.460
+0|我们今天|wo men jin tian|63695|-16.6848|bits=3246750329|covered=12|Exact|echo=false
+1|我们|wo men|509405|-53.4575|bits=3260404866|covered=5|Exact|echo=false
+2|我么|wo me|14230|-57.3124|bits=3261415400|covered=4|Exact|echo=false
+3|我|wo|29569261|-14.0181|bits=3244313088|covered=2|Exact|echo=false
+4|握|wo|340839|-15.9564|bits=3246345534|covered=2|Exact|echo=false
+5|窝|wo|98104|-16.4972|bits=3246651983|covered=2|Exact|echo=false
+6|卧|wo|96870|-16.5027|bits=3246654865|covered=2|Exact|echo=false
+7|沃|wo|49337|-16.7957|bits=3246808490|covered=2|Exact|echo=false
+8|喔|wo|29429|-17.0201|bits=3246926139|covered=2|Exact|echo=false
+9|倭|wo|24818|-17.0941|bits=3246964940|covered=2|Exact|echo=false
+10|涡|wo|22478|-17.1371|bits=3246987490|covered=2|Exact|echo=false
+11|龌|wo|7451|-17.6167|bits=3247238908|covered=2|Exact|echo=false
+12|蜗|wo|4726|-17.8144|bits=3247342571|covered=2|Exact|echo=false
+13|渥|wo|4566|-17.8294|bits=3247350413|covered=2|Exact|echo=false
+14|斡|wo|3740|-17.9160|bits=3247395850|covered=2|Exact|echo=false
+15|幄|wo|2644|-18.0666|bits=3247474814|covered=2|Exact|echo=false
+16|挝|wo|2048|-18.1776|bits=3247532974|covered=2|Exact|echo=false
+17|莴|wo|601|-18.7100|bits=3247812134|covered=2|Exact|echo=false
+18|硪|wo|109|-19.4515|bits=3248200866|covered=2|Exact|echo=false
+19|肟|wo|78|-19.5968|bits=3248277062|covered=2|Exact|echo=false
+20|偓|wo|37|-19.9207|bits=3248446874|covered=2|Exact|echo=false
+21|涴|wo|23|-20.1272|bits=3248555126|covered=2|Exact|echo=false
+22|踒|wo|2|-21.1879|bits=3249111238|covered=2|Exact|echo=false
+
+### womenjintianzzgongyuan
+n=24 min_ms=3.315
+0|我们今天|wo men jin tian|63695|-16.6848|bits=3246750329|covered=12|Exact|echo=false
+1|我盟|wo meng|2155|-59.7633|bits=3262057890|covered=6|Fuzzy|echo=false
+2|我们|wo men|509405|-52.1667|bits=3260066484|covered=5|Exact|echo=false
+3|我么|wo me|14230|-56.0216|bits=3261077019|covered=4|Exact|echo=false
+4|我|wo|29569261|-14.0181|bits=3244313088|covered=2|Exact|echo=false
+5|握|wo|340839|-15.9564|bits=3246345534|covered=2|Exact|echo=false
+6|窝|wo|98104|-16.4972|bits=3246651983|covered=2|Exact|echo=false
+7|卧|wo|96870|-16.5027|bits=3246654865|covered=2|Exact|echo=false
+8|沃|wo|49337|-16.7957|bits=3246808490|covered=2|Exact|echo=false
+9|喔|wo|29429|-17.0201|bits=3246926139|covered=2|Exact|echo=false
+10|倭|wo|24818|-17.0941|bits=3246964940|covered=2|Exact|echo=false
+11|涡|wo|22478|-17.1371|bits=3246987490|covered=2|Exact|echo=false
+12|龌|wo|7451|-17.6167|bits=3247238908|covered=2|Exact|echo=false
+13|蜗|wo|4726|-17.8144|bits=3247342571|covered=2|Exact|echo=false
+14|渥|wo|4566|-17.8294|bits=3247350413|covered=2|Exact|echo=false
+15|斡|wo|3740|-17.9160|bits=3247395850|covered=2|Exact|echo=false
+16|幄|wo|2644|-18.0666|bits=3247474814|covered=2|Exact|echo=false
+17|挝|wo|2048|-18.1776|bits=3247532974|covered=2|Exact|echo=false
+18|莴|wo|601|-18.7100|bits=3247812134|covered=2|Exact|echo=false
+19|硪|wo|109|-19.4515|bits=3248200866|covered=2|Exact|echo=false
+20|肟|wo|78|-19.5968|bits=3248277062|covered=2|Exact|echo=false
+21|偓|wo|37|-19.9207|bits=3248446874|covered=2|Exact|echo=false
+22|涴|wo|23|-20.1272|bits=3248555126|covered=2|Exact|echo=false
+23|踒|wo|2|-21.1879|bits=3249111238|covered=2|Exact|echo=false
+
+### womemjintianqugongyuan
+n=24 min_ms=1.255
+0|我没|wo mei|205370|-53.4541|bits=3260403970|covered=5|Fuzzy|echo=false
+1|我妹|wo mei|111|-56.7213|bits=3261260451|covered=5|Fuzzy|echo=false
+2|沃米尔|wo mi er|100|-19.4889|bits=3248220488|covered=4|Abbrev|echo=false
+3|我么|wo me|14230|-17.3357|bits=3247091588|covered=4|Exact|echo=false
+4|我|wo|29569261|-14.0181|bits=3244313088|covered=2|Exact|echo=false
+5|握|wo|340839|-15.9564|bits=3246345534|covered=2|Exact|echo=false
+6|窝|wo|98104|-16.4972|bits=3246651983|covered=2|Exact|echo=false
+7|卧|wo|96870|-16.5027|bits=3246654865|covered=2|Exact|echo=false
+8|沃|wo|49337|-16.7957|bits=3246808490|covered=2|Exact|echo=false
+9|喔|wo|29429|-17.0201|bits=3246926139|covered=2|Exact|echo=false
+10|倭|wo|24818|-17.0941|bits=3246964940|covered=2|Exact|echo=false
+11|涡|wo|22478|-17.1371|bits=3246987490|covered=2|Exact|echo=false
+12|龌|wo|7451|-17.6167|bits=3247238908|covered=2|Exact|echo=false
+13|蜗|wo|4726|-17.8144|bits=3247342571|covered=2|Exact|echo=false
+14|渥|wo|4566|-17.8294|bits=3247350413|covered=2|Exact|echo=false
+15|斡|wo|3740|-17.9160|bits=3247395850|covered=2|Exact|echo=false
+16|幄|wo|2644|-18.0666|bits=3247474814|covered=2|Exact|echo=false
+17|挝|wo|2048|-18.1776|bits=3247532974|covered=2|Exact|echo=false
+18|莴|wo|601|-18.7100|bits=3247812134|covered=2|Exact|echo=false
+19|硪|wo|109|-19.4515|bits=3248200866|covered=2|Exact|echo=false
+20|肟|wo|78|-19.5968|bits=3248277062|covered=2|Exact|echo=false
+21|偓|wo|37|-19.9207|bits=3248446874|covered=2|Exact|echo=false
+22|涴|wo|23|-20.1272|bits=3248555126|covered=2|Exact|echo=false
+23|踒|wo|2|-21.1879|bits=3249111238|covered=2|Exact|echo=false
+
+### womenjinxtianqugongyuan
+n=25 min_ms=2.476
+0|我们尽享|wo men jin xiang|100|-19.4889|bits=3248220488|covered=9|Abbrev|echo=false
+1|我们谨向|wo men jin xiang|1|-21.4889|bits=3249269064|covered=9|Abbrev|echo=false
+2|我们今天|wo men jin tian|63695|-38.5716|bits=3256502622|covered=13|Fuzzy|echo=false
+3|我们|wo men|509405|-53.4575|bits=3260404866|covered=5|Exact|echo=false
+4|我么|wo me|14230|-71.0580|bits=3264093621|covered=4|Exact|echo=false
+5|我|wo|29569261|-14.0181|bits=3244313088|covered=2|Exact|echo=false
+6|握|wo|340839|-15.9564|bits=3246345534|covered=2|Exact|echo=false
+7|窝|wo|98104|-16.4972|bits=3246651983|covered=2|Exact|echo=false
+8|卧|wo|96870|-16.5027|bits=3246654865|covered=2|Exact|echo=false
+9|沃|wo|49337|-16.7957|bits=3246808490|covered=2|Exact|echo=false
+10|喔|wo|29429|-17.0201|bits=3246926139|covered=2|Exact|echo=false
+11|倭|wo|24818|-17.0941|bits=3246964940|covered=2|Exact|echo=false
+12|涡|wo|22478|-17.1371|bits=3246987490|covered=2|Exact|echo=false
+13|龌|wo|7451|-17.6167|bits=3247238908|covered=2|Exact|echo=false
+14|蜗|wo|4726|-17.8144|bits=3247342571|covered=2|Exact|echo=false
+15|渥|wo|4566|-17.8294|bits=3247350413|covered=2|Exact|echo=false
+16|斡|wo|3740|-17.9160|bits=3247395850|covered=2|Exact|echo=false
+17|幄|wo|2644|-18.0666|bits=3247474814|covered=2|Exact|echo=false
+18|挝|wo|2048|-18.1776|bits=3247532974|covered=2|Exact|echo=false
+19|莴|wo|601|-18.7100|bits=3247812134|covered=2|Exact|echo=false
+20|硪|wo|109|-19.4515|bits=3248200866|covered=2|Exact|echo=false
+21|肟|wo|78|-19.5968|bits=3248277062|covered=2|Exact|echo=false
+22|偓|wo|37|-19.9207|bits=3248446874|covered=2|Exact|echo=false
+23|涴|wo|23|-20.1272|bits=3248555126|covered=2|Exact|echo=false
+24|踒|wo|2|-21.1879|bits=3249111238|covered=2|Exact|echo=false
+
+### womenjitianqugongyuan
+n=22 min_ms=4.227
+0|我们|wo men|509405|-51.2718|bits=3259831886|covered=5|Exact|echo=false
+1|我|wo|29569261|-64.9658|bits=3263295106|covered=2|Exact|echo=false
+2|握|wo|340839|-66.9041|bits=3263549162|covered=2|Exact|echo=false
+3|窝|wo|98104|-67.4450|bits=3263620054|covered=2|Exact|echo=false
+4|卧|wo|96870|-67.4505|bits=3263620774|covered=2|Exact|echo=false
+5|沃|wo|49337|-67.7435|bits=3263659180|covered=2|Exact|echo=false
+6|喔|wo|29429|-67.9679|bits=3263688593|covered=2|Exact|echo=false
+7|倭|wo|24818|-68.0419|bits=3263698293|covered=2|Exact|echo=false
+8|涡|wo|22478|-68.0849|bits=3263703930|covered=2|Exact|echo=false
+9|龌|wo|7451|-68.5645|bits=3263766785|covered=2|Exact|echo=false
+10|蜗|wo|4726|-68.7622|bits=3263792701|covered=2|Exact|echo=false
+11|渥|wo|4566|-68.7771|bits=3263794661|covered=2|Exact|echo=false
+12|斡|wo|3740|-68.8638|bits=3263806020|covered=2|Exact|echo=false
+13|幄|wo|2644|-69.0144|bits=3263825762|covered=2|Exact|echo=false
+14|挝|wo|2048|-69.1254|bits=3263840302|covered=2|Exact|echo=false
+15|莴|wo|601|-69.6578|bits=3263910092|covered=2|Exact|echo=false
+16|硪|wo|109|-70.3992|bits=3264007274|covered=2|Exact|echo=false
+17|肟|wo|78|-70.5446|bits=3264026324|covered=2|Exact|echo=false
+18|偓|wo|37|-70.8685|bits=3264068776|covered=2|Exact|echo=false
+19|涴|wo|23|-71.0750|bits=3264095840|covered=2|Exact|echo=false
+20|踒|wo|2|-72.1357|bits=3264234868|covered=2|Exact|echo=false
+21|我么|wo me|14230|-inf|bits=4286578688|covered=4|Exact|echo=false
+
+### womenjintianqugonguan
+n=23 min_ms=4.248
+0|我们今天|wo men jin tian|63695|-16.6848|bits=3246750329|covered=9|Abbrev|echo=false
+1|我们|wo men|509405|-53.4575|bits=3260404866|covered=5|Exact|echo=false
+2|我么|wo me|14230|-57.3124|bits=3261415400|covered=4|Exact|echo=false
+3|我|wo|29569261|-14.0181|bits=3244313088|covered=2|Exact|echo=false
+4|握|wo|340839|-15.9564|bits=3246345534|covered=2|Exact|echo=false
+5|窝|wo|98104|-16.4972|bits=3246651983|covered=2|Exact|echo=false
+6|卧|wo|96870|-16.5027|bits=3246654865|covered=2|Exact|echo=false
+7|沃|wo|49337|-16.7957|bits=3246808490|covered=2|Exact|echo=false
+8|喔|wo|29429|-17.0201|bits=3246926139|covered=2|Exact|echo=false
+9|倭|wo|24818|-17.0941|bits=3246964940|covered=2|Exact|echo=false
+10|涡|wo|22478|-17.1371|bits=3246987490|covered=2|Exact|echo=false
+11|龌|wo|7451|-17.6167|bits=3247238908|covered=2|Exact|echo=false
+12|蜗|wo|4726|-17.8144|bits=3247342571|covered=2|Exact|echo=false
+13|渥|wo|4566|-17.8294|bits=3247350413|covered=2|Exact|echo=false
+14|斡|wo|3740|-17.9160|bits=3247395850|covered=2|Exact|echo=false
+15|幄|wo|2644|-18.0666|bits=3247474814|covered=2|Exact|echo=false
+16|挝|wo|2048|-18.1776|bits=3247532974|covered=2|Exact|echo=false
+17|莴|wo|601|-18.7100|bits=3247812134|covered=2|Exact|echo=false
+18|硪|wo|109|-19.4515|bits=3248200866|covered=2|Exact|echo=false
+19|肟|wo|78|-19.5968|bits=3248277062|covered=2|Exact|echo=false
+20|偓|wo|37|-19.9207|bits=3248446874|covered=2|Exact|echo=false
+21|涴|wo|23|-20.1272|bits=3248555126|covered=2|Exact|echo=false
+22|踒|wo|2|-21.1879|bits=3249111238|covered=2|Exact|echo=false
+
+### womenjintianqugongyuam
+n=23 min_ms=5.483
+0|我们今天|wo men jin tian|63695|-16.6848|bits=3246750329|covered=9|Abbrev|echo=false
+1|我们|wo men|509405|-53.0596|bits=3260300548|covered=5|Exact|echo=false
+2|我么|wo me|14230|-56.9145|bits=3261311083|covered=4|Exact|echo=false
+3|我|wo|29569261|-14.0181|bits=3244313088|covered=2|Exact|echo=false
+4|握|wo|340839|-15.9564|bits=3246345534|covered=2|Exact|echo=false
+5|窝|wo|98104|-16.4972|bits=3246651983|covered=2|Exact|echo=false
+6|卧|wo|96870|-16.5027|bits=3246654865|covered=2|Exact|echo=false
+7|沃|wo|49337|-16.7957|bits=3246808490|covered=2|Exact|echo=false
+8|喔|wo|29429|-17.0201|bits=3246926139|covered=2|Exact|echo=false
+9|倭|wo|24818|-17.0941|bits=3246964940|covered=2|Exact|echo=false
+10|涡|wo|22478|-17.1371|bits=3246987490|covered=2|Exact|echo=false
+11|龌|wo|7451|-17.6167|bits=3247238908|covered=2|Exact|echo=false
+12|蜗|wo|4726|-17.8144|bits=3247342571|covered=2|Exact|echo=false
+13|渥|wo|4566|-17.8294|bits=3247350413|covered=2|Exact|echo=false
+14|斡|wo|3740|-17.9160|bits=3247395850|covered=2|Exact|echo=false
+15|幄|wo|2644|-18.0666|bits=3247474814|covered=2|Exact|echo=false
+16|挝|wo|2048|-18.1776|bits=3247532974|covered=2|Exact|echo=false
+17|莴|wo|601|-18.7100|bits=3247812134|covered=2|Exact|echo=false
+18|硪|wo|109|-19.4515|bits=3248200866|covered=2|Exact|echo=false
+19|肟|wo|78|-19.5968|bits=3248277062|covered=2|Exact|echo=false
+20|偓|wo|37|-19.9207|bits=3248446874|covered=2|Exact|echo=false
+21|涴|wo|23|-20.1272|bits=3248555126|covered=2|Exact|echo=false
+22|踒|wo|2|-21.1879|bits=3249111238|covered=2|Exact|echo=false
+
+## B. session(打字 → 选第 1 个候选;commit_immediately 立即提交接口,非交互路径)
+
+### nihao
+top3_before=["你好", "拟好", "你"]
+committed=Some("你好")
+preedit_after=""
+
+### ni
+top3_before=["你", "尼", "泥"]
+committed=Some("你")
+preedit_after=""
+
+### xian
+top3_before=["先", "现", "显"]
+committed=Some("先")
+preedit_after=""
+
+### ky
+top3_before=["可以", "科研", "跨越"]
+committed=Some("可以")
+preedit_after=""
+
+### mei
+top3_before=["没", "美", "每"]
+committed=Some("没")
+preedit_after=""
+
+### meiy
+top3_before=["没有", "美元", "每月"]
+committed=Some("没有")
+preedit_after=""
+
+### zhongg
+top3_before=["中国", "中共", "忠告"]
+committed=Some("中国")
+preedit_after=""
+
+### zhongguo
+top3_before=["中国", "种过", "种果"]
+committed=Some("中国")
+preedit_after=""
+
+### zhongguor
+top3_before=["中国人", "中国日", "中国热"]
+committed=Some("中国人")
+preedit_after=""
+
+### women
+top3_before=["我们", "我", "握"]
+committed=Some("我们")
+preedit_after=""
+
+### nimen
+top3_before=["你们", "你", "尼"]
+committed=Some("你们")
+preedit_after=""
+
+### nhao
+top3_before=["您好", "你好", "能耗"]
+committed=Some("您好")
+preedit_after=""
+
+### feicde
+top3_before=["非常地", "非常的", "费城的"]
+committed=Some("非常地")
+preedit_after=""
+
+### sh
+top3_before=["是", "说", "上"]
+committed=Some("是")
+preedit_after=""
+
+### zh
+top3_before=["这", "中", "只"]
+committed=Some("这")
+preedit_after=""
+
+### zho
+top3_before=["中", "种", "重"]
+committed=Some("中")
+preedit_after=""
+
+### niha
+top3_before=["你还", "你好", "拟好"]
+committed=Some("你还")
+preedit_after=""
+
+### beijin
+top3_before=["北京", "背景", "被禁"]
+committed=Some("北京")
+preedit_after=""
+
+### meiyo
+top3_before=["没有", "没用", "煤油"]
+committed=Some("没有")
+preedit_after=""
+
+### xianzai
+top3_before=["现在", "先在", "陷在"]
+committed=Some("现在")
+preedit_after=""
+
+### jintian
+top3_before=["今天", "金田", "进"]
+committed=Some("今天")
+preedit_after=""
+
+### gongyuan
+top3_before=["公园", "公元", "贡院"]
+committed=Some("公园")
+preedit_after=""
+
+### zzzz
+top3_before=["重中之重", "尊重作者", "走着走着"]
+committed=Some("重中之重")
+preedit_after=""
+
+### zhzhzhzh
+top3_before=["zhzhzhzh"]
+committed=Some("zhzhzhzh")
+preedit_after=""
+
+### aaaaaaaa
+top3_before=["啊啊啊啊啊啊啊啊", "啊啊啊啊啊啊啊", "啊"]
+committed=Some("啊啊啊啊啊啊啊啊")
+preedit_after=""
+
+### wsm
+top3_before=["为什么", "为生命", "玩什么"]
+committed=Some("为什么")
+preedit_after=""
+
+### zgr
+top3_before=["中国人", "这个人", "整个人"]
+committed=Some("中国人")
+preedit_after=""
+
+### nih
+top3_before=["你会", "你回", "你还"]
+committed=Some("你会")
+preedit_after=""
+
+### nihaoq
+top3_before=["你好奇", "你好强", "你好"]
+committed=Some("你好奇")
+preedit_after=""
+
+### qnihao
+top3_before=["你好", "秦昊", "拟好"]
+committed=Some("你好")
+preedit_after=""
+
+### niqhao
+top3_before=["你好", "倪超", "拟好"]
+committed=Some("你好")
+preedit_after=""
+
+### nihoa
+top3_before=["拟好", "你啊", "鸟"]
+committed=Some("拟好")
+preedit_after=""
+
+### nhao
+top3_before=["您好", "你好", "能耗"]
+committed=Some("您好")
+preedit_after=""
+
+### nihaoo
+top3_before=["你好", "拟好", "你"]
+committed=Some("你好")
+preedit_after="o"
+
+### shenem
+top3_before=["什么", "深二模", "神"]
+committed=Some("什么")
+preedit_after=""
+
+### shanghaai
+top3_before=["上", "伤", "商"]
+committed=Some("上")
+preedit_after="haai"
+
+### womenjintianqugongyuan
+top3_before=["我们今天", "我们", "我"]
+committed=Some("我们今天")
+preedit_after="qugongyuan"
+
+### womenjintianqugongyuann
+top3_before=["我们今天", "我们", "我么"]
+committed=Some("我们今天")
+preedit_after="ianqugongyuann"
+
+### womenjintianqqugongyuan
+top3_before=["我们今天", "我们", "我么"]
+committed=Some("我们今天")
+preedit_after="qqugongyuan"
+
+### womenjintianzzgongyuan
+top3_before=["我们今天", "我盟", "我们"]
+committed=Some("我们今天")
+preedit_after="zzgongyuan"
+
+### womemjintianqugongyuan
+top3_before=["我没", "我妹", "沃米尔"]
+committed=Some("我没")
+preedit_after="jintianqugongyuan"
+
+### womenjinxtianqugongyuan
+top3_before=["我们尽享", "我们谨向", "我们今天"]
+committed=Some("我们尽享")
+preedit_after="tianqugongyuan"
+
+### womenjitianqugongyuan
+top3_before=["我们", "我", "握"]
+committed=Some("我们")
+preedit_after="jitianqugongyuan"
+
+### womenjintianqugonguan
+top3_before=["我们今天", "我们", "我么"]
+committed=Some("我们今天")
+preedit_after="ianqugonguan"
+
+### womenjintianqugongyuam
+top3_before=["我们今天", "我们", "我么"]
+committed=Some("我们今天")
+preedit_after="ianqugongyuam"
+
+## C. session(真实按键序列:handle;确认段/退格/点击/翻页/Ctrl+Delete)
+
+### nihao
+key Char(n)                        -> Updated { preedit="n" cursor=0 page=0/9 n=100 top3=["那", "年", "女"] }
+key Char(i)                        -> Updated { preedit="ni" cursor=0 page=0/9 n=24 top3=["你", "尼", "泥"] }
+key Char(h)                        -> Updated { preedit="nih" cursor=0 page=0/9 n=43 top3=["你会", "你回", "你还"] }
+key Char(a)                        -> Updated { preedit="niha" cursor=0 page=0/9 n=28 top3=["你还", "你好", "拟好"] }
+key Char(o)                        -> Updated { preedit="nihao" cursor=0 page=0/9 n=26 top3=["你好", "拟好", "你"] }
+key Space                          -> Commit("你好")
+key Space                          -> Noop
+final pinyin="" active=false
+
+### womenjintian
+key Char(w)                        -> Updated { preedit="w" cursor=0 page=0/9 n=100 top3=["我", "为", "无"] }
+key Char(o)                        -> Updated { preedit="wo" cursor=0 page=0/9 n=25 top3=["我", "握", "窝"] }
+key Char(m)                        -> Updated { preedit="wom" cursor=0 page=0/9 n=36 top3=["我们", "我没", "我吗"] }
+key Char(e)                        -> Updated { preedit="wome" cursor=0 page=0/9 n=24 top3=["我们", "我没", "我么"] }
+key Char(n)                        -> Updated { preedit="women" cursor=0 page=0/9 n=22 top3=["我们", "我", "握"] }
+key Char(j)                        -> Updated { preedit="womenj" cursor=0 page=0/9 n=26 top3=["我们将", "我们就", "我们家"] }
+key Char(i)                        -> Updated { preedit="womenji" cursor=0 page=0/9 n=26 top3=["我们将", "我们就", "我们家"] }
+key Char(n)                        -> Updated { preedit="womenjin" cursor=0 page=0/9 n=22 top3=["我们", "我", "握"] }
+key Char(t)                        -> Updated { preedit="womenjint" cursor=0 page=0/9 n=21 top3=["我们今天", "我", "握"] }
+key Char(i)                        -> Updated { preedit="womenjinti" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Char(a)                        -> Updated { preedit="womenjintia" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Char(n)                        -> Updated { preedit="womenjintian" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Space                          -> Commit("我们今天")
+key Space                          -> Noop
+final pinyin="" active=false
+
+### womenjintianqubeij
+key Char(w)                        -> Updated { preedit="w" cursor=0 page=0/9 n=100 top3=["我", "为", "无"] }
+key Char(o)                        -> Updated { preedit="wo" cursor=0 page=0/9 n=25 top3=["我", "握", "窝"] }
+key Char(m)                        -> Updated { preedit="wom" cursor=0 page=0/9 n=36 top3=["我们", "我没", "我吗"] }
+key Char(e)                        -> Updated { preedit="wome" cursor=0 page=0/9 n=24 top3=["我们", "我没", "我么"] }
+key Char(n)                        -> Updated { preedit="women" cursor=0 page=0/9 n=22 top3=["我们", "我", "握"] }
+key Char(j)                        -> Updated { preedit="womenj" cursor=0 page=0/9 n=26 top3=["我们将", "我们就", "我们家"] }
+key Char(i)                        -> Updated { preedit="womenji" cursor=0 page=0/9 n=26 top3=["我们将", "我们就", "我们家"] }
+key Char(n)                        -> Updated { preedit="womenjin" cursor=0 page=0/9 n=22 top3=["我们", "我", "握"] }
+key Char(t)                        -> Updated { preedit="womenjint" cursor=0 page=0/9 n=21 top3=["我们今天", "我", "握"] }
+key Char(i)                        -> Updated { preedit="womenjinti" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Char(a)                        -> Updated { preedit="womenjintia" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Char(n)                        -> Updated { preedit="womenjintian" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Char(q)                        -> Updated { preedit="womenjintianq" cursor=0 page=0/9 n=24 top3=["我们今天", "我盟", "我们"] }
+key Char(u)                        -> Updated { preedit="womenjintianqu" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Char(b)                        -> Updated { preedit="womenjintianqub" cursor=0 page=0/9 n=24 top3=["我们今天", "我盟", "我们"] }
+key Char(e)                        -> Updated { preedit="womenjintianqube" cursor=0 page=0/9 n=24 top3=["我们今天", "我盟", "我们"] }
+key Char(i)                        -> Updated { preedit="womenjintianqubei" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我"] }
+key Char(j)                        -> Updated { preedit="womenjintianqubeij" cursor=0 page=0/9 n=23 top3=["我们今天", "我们", "我么"] }
+key Space                          -> Updated { preedit="我们今天ianqubeij" cursor=0 page=0/9 n=1 top3=["ianqubeij"] }
+final pinyin="ianqubeij" active=true
+
+### beijin
+key Char(b)                        -> Updated { preedit="b" cursor=0 page=0/9 n=100 top3=["把", "被", "不"] }
+key Char(e)                        -> Updated { preedit="be" cursor=0 page=0/9 n=100 top3=["被", "本", "备"] }
+key Char(i)                        -> Updated { preedit="bei" cursor=0 page=0/9 n=32 top3=["被", "备", "北"] }
+key Char(j)                        -> Updated { preedit="beij" cursor=0 page=0/9 n=78 top3=["北京", "背景", "北极"] }
+key Char(i)                        -> Updated { preedit="beiji" cursor=0 page=0/9 n=72 top3=["北京", "背景", "北极"] }
+key Char(n)                        -> Updated { preedit="beijin" cursor=0 page=0/9 n=49 top3=["北京", "背景", "被禁"] }
+key Space                          -> Commit("北京")
+final pinyin="" active=false
+
+### xian-click2
+key Char(x)                        -> Updated { preedit="x" cursor=0 page=0/9 n=100 top3=["下", "小", "想"] }
+key Char(i)                        -> Updated { preedit="xi" cursor=0 page=0/9 n=100 top3=["洗", "西", "喜"] }
+key Char(a)                        -> Updated { preedit="xia" cursor=0 page=0/9 n=100 top3=["下", "吓", "夏"] }
+key Char(n)                        -> Updated { preedit="xian" cursor=0 page=0/9 n=100 top3=["先", "现", "显"] }
+key CandidateClicked(2)            -> Commit("显")
+final pinyin="" active=false
+
+### zhongguo-pagedown-click
+key Char(z)                        -> Updated { preedit="z" cursor=0 page=0/9 n=100 top3=["在", "这", "子"] }
+key Char(h)                        -> Updated { preedit="zh" cursor=0 page=0/9 n=100 top3=["这", "中", "只"] }
+key Char(o)                        -> Updated { preedit="zho" cursor=0 page=0/9 n=45 top3=["中", "种", "重"] }
+key Char(n)                        -> Updated { preedit="zhon" cursor=0 page=0/9 n=43 top3=["中", "种", "重"] }
+key Char(g)                        -> Updated { preedit="zhong" cursor=0 page=0/9 n=18 top3=["中", "种", "重"] }
+key Char(g)                        -> Updated { preedit="zhongg" cursor=0 page=0/9 n=55 top3=["中国", "中共", "忠告"] }
+key Char(u)                        -> Updated { preedit="zhonggu" cursor=0 page=0/9 n=36 top3=["中国", "中观", "终归"] }
+key Char(o)                        -> Updated { preedit="zhongguo" cursor=0 page=0/9 n=26 top3=["中国", "种过", "种果"] }
+key PageDown                       -> Updated { preedit="zhongguo" cursor=9 page=1/9 n=26 top3=["中国", "种过", "种果"] }
+key CandidateClicked(0)            -> Updated { preedit="忠guo" cursor=0 page=0/9 n=70 top3=["过", "国", "果"] }
+final pinyin="guo" active=true
+
+### nihao-space-backspace-backspace
+key Char(n)                        -> Updated { preedit="n" cursor=0 page=0/9 n=100 top3=["那", "年", "女"] }
+key Char(i)                        -> Updated { preedit="ni" cursor=0 page=0/9 n=24 top3=["你", "尼", "泥"] }
+key Char(h)                        -> Updated { preedit="nih" cursor=0 page=0/9 n=43 top3=["你会", "你回", "你还"] }
+key Char(a)                        -> Updated { preedit="niha" cursor=0 page=0/9 n=28 top3=["你还", "你好", "拟好"] }
+key Char(o)                        -> Updated { preedit="nihao" cursor=0 page=0/9 n=26 top3=["你好", "拟好", "你"] }
+key Space                          -> Commit("你好")
+key Backspace                      -> Noop
+key Backspace                      -> Noop
+key Space                          -> Noop
+final pinyin="" active=false
+
+### nihao-space-backspace-ao
+key Char(n)                        -> Updated { preedit="n" cursor=0 page=0/9 n=100 top3=["那", "年", "女"] }
+key Char(i)                        -> Updated { preedit="ni" cursor=0 page=0/9 n=24 top3=["你", "尼", "泥"] }
+key Char(h)                        -> Updated { preedit="nih" cursor=0 page=0/9 n=43 top3=["你会", "你回", "你还"] }
+key Char(a)                        -> Updated { preedit="niha" cursor=0 page=0/9 n=28 top3=["你还", "你好", "拟好"] }
+key Char(o)                        -> Updated { preedit="nihao" cursor=0 page=0/9 n=26 top3=["你好", "拟好", "你"] }
+key Space                          -> Commit("你好")
+key Backspace                      -> Noop
+key Char(a)                        -> Updated { preedit="a" cursor=0 page=0/9 n=83 top3=["啊", "阿", "吖"] }
+key Char(o)                        -> Updated { preedit="ao" cursor=0 page=0/9 n=36 top3=["傲", "奥", "熬"] }
+key Space                          -> Commit("傲")
+final pinyin="" active=false
+
+### hello-enter
+key Char(h)                        -> Updated { preedit="h" cursor=0 page=0/9 n=100 top3=["或", "好", "会"] }
+key Char(e)                        -> Updated { preedit="he" cursor=0 page=0/9 n=83 top3=["和", "何", "合"] }
+key Char(l)                        -> Updated { preedit="hel" cursor=0 page=0/9 n=83 top3=["合理", "荷兰", "河流"] }
+key Char(l)                        -> Updated { preedit="hell" cursor=0 page=0/9 n=57 top3=["合理了", "何鲁丽", "核力量"] }
+key Char(o)                        -> Updated { preedit="hello" cursor=0 page=0/9 n=45 top3=["很", "狠", "恨"] }
+key Enter                          -> Commit("hello")
+final pinyin="" active=false
+
+### nihoa-typo
+key Char(n)                        -> Updated { preedit="n" cursor=0 page=0/9 n=100 top3=["那", "年", "女"] }
+key Char(i)                        -> Updated { preedit="ni" cursor=0 page=0/9 n=24 top3=["你", "尼", "泥"] }
+key Char(h)                        -> Updated { preedit="nih" cursor=0 page=0/9 n=43 top3=["你会", "你回", "你还"] }
+key Char(o)                        -> Updated { preedit="niho" cursor=0 page=0/9 n=33 top3=["霓虹", "倪鸿", "你会"] }
+key Char(a)                        -> Updated { preedit="nihoa" cursor=0 page=0/9 n=57 top3=["拟好", "你啊", "鸟"] }
+key Space                          -> Commit("拟好")
+final pinyin="" active=false
+
+### shandian-separator
+key Char(s)                        -> Updated { preedit="s" cursor=0 page=0/9 n=100 top3=["是", "说", "上"] }
+key Char(h)                        -> Updated { preedit="sh" cursor=0 page=0/9 n=100 top3=["是", "说", "上"] }
+key Char(a)                        -> Updated { preedit="sha" cursor=0 page=0/9 n=37 top3=["啥", "傻", "杀"] }
+key Char(n)                        -> Updated { preedit="shan" cursor=0 page=0/9 n=100 top3=["山", "删", "闪"] }
+key Char(')                        -> Updated { preedit="shan'" cursor=0 page=0/9 n=59 top3=["山", "删", "闪"] }
+key Char(d)                        -> Updated { preedit="shan'd" cursor=0 page=0/9 n=59 top3=["山", "删", "闪"] }
+key Char(i)                        -> Updated { preedit="shan'di" cursor=0 page=0/9 n=63 top3=["山地", "山底", "闪迪"] }
+key Char(a)                        -> Updated { preedit="shan'dia" cursor=0 page=0/9 n=63 top3=["山地", "山底", "闪迪"] }
+key Char(n)                        -> Updated { preedit="shan'dian" cursor=0 page=0/9 n=67 top3=["闪电", "山巅", "煽颠"] }
+key Space                          -> Commit("闪电")
+final pinyin="" active=false
+
+### nihao-delete-candidate
+key Char(n)                        -> Updated { preedit="n" cursor=0 page=0/9 n=100 top3=["那", "年", "女"] }
+key Char(i)                        -> Updated { preedit="ni" cursor=0 page=0/9 n=24 top3=["你", "尼", "泥"] }
+key Char(h)                        -> Updated { preedit="nih" cursor=0 page=0/9 n=43 top3=["你会", "你回", "你还"] }
+key Char(a)                        -> Updated { preedit="niha" cursor=0 page=0/9 n=28 top3=["你还", "你好", "拟好"] }
+key Char(o)                        -> Updated { preedit="nihao" cursor=0 page=0/9 n=26 top3=["你好", "拟好", "你"] }
+key DeleteCandidate                -> Updated { preedit="nihao" cursor=0 page=0/9 n=26 top3=["你好", "拟好", "你"] }
+key Space                          -> Commit("你好")
+final pinyin="" active=false

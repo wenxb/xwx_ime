@@ -273,15 +273,15 @@ fn caret_resets_on_commit_and_escape() {
 }
 
 #[test]
-fn commit_at_after_caret_move_still_uses_whole_string() {
-    // commit_at(面板点击路径)在 caret 移动后也应基于完整串的候选。
+fn commit_immediately_after_caret_move_still_uses_whole_string() {
+    // commit_immediately(面板点击路径)在 caret 移动后也应基于完整串的候选。
     let mut s = session_with_dict();
     for c in "nihao".chars() {
         s.handle(InputEvent::Char(c)).expect("不应失败");
     }
     s.handle(InputEvent::Left).expect("不应失败");
     s.handle(InputEvent::Left).expect("不应失败");
-    let word = s.commit_at(0).expect("下标 0 应有候选");
+    let word = s.commit_immediately(0).expect("下标 0 应有候选");
     assert_eq!(word, "你好", "应提交完整串的首选,不是前缀 nih 的结果");
     assert_eq!(s.caret(), 0, "上屏后 caret 应归 0");
 }

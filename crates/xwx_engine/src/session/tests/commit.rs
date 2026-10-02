@@ -76,7 +76,7 @@ fn echo_candidate_commit_does_not_learn() {
 }
 
 #[test]
-fn commit_at_commits_global_index() {
+fn commit_immediately_commits_global_index() {
     let mut s = session_with_dict();
     for c in ['n', 'i', 'h', 'a', 'o'] {
         s.handle(InputEvent::Char(c)).expect("不应失败");
@@ -86,10 +86,10 @@ fn commit_at_commits_global_index() {
     // 所以首选是整串解码出的「你好」，而不是逐字拆开的「你」——
     // 这正是 beam search 解码要的可见行为（短语整体概率 > 逐字累加）。
     // 次选仍是单字候选：你(-1250) > 好(-1250)，可以只上屏一个字。
-    let word = s.commit_at(0).expect("下标 0 应有候选");
+    let word = s.commit_immediately(0).expect("下标 0 应有候选");
     assert_eq!(word, "你好");
     assert!(!s.is_active(), "上屏后会话应复位");
-    assert!(s.commit_at(0).is_none(), "复位后不应再取到候选");
+    assert!(s.commit_immediately(0).is_none(), "复位后不应再取到候选");
 }
 
 /// 选中只覆盖前缀的候选之后,**剩下的字母必须留在串里**,并且面板
@@ -327,10 +327,10 @@ fn punctuation_after_a_segment_keeps_the_rest_composing() {
     assert!(!s.is_active(), "标点之后组合结束");
 }
 
-/// `commit_at`(不经 `handle` 的低层出口)也要把剩余串的候选刷成新的,
+/// `commit_immediately`(不经 `handle` 的低层出口)也要把剩余串的候选刷成新的,
 /// 否则调用方读到的是「剩余串 + 旧候选」这种自相矛盾的会话。
 #[test]
-fn commit_at_refreshes_candidates_for_the_remaining_input() {
+fn commit_immediately_refreshes_candidates_for_the_remaining_input() {
     let mut s = session_with_segments();
     for c in "womenjintian".chars() {
         s.handle(InputEvent::Char(c)).expect("不应失败");
@@ -340,7 +340,7 @@ fn commit_at_refreshes_candidates_for_the_remaining_input() {
         .iter()
         .position(|c| c.word == "我们")
         .expect("候选里应有「我们」");
-    let word = s.commit_at(idx).expect("应有候选");
+    let word = s.commit_immediately(idx).expect("应有候选");
     assert_eq!(word, "我们");
     assert_eq!(s.pinyin(), "jintian");
     let expected = s
@@ -523,4 +523,111 @@ fn covered_candidate_keeps_the_punctuation_immediately_after_it() {
         SessionOutput::Commit(text) => assert_eq!(text, "我们今天，"),
         other => panic!("期望 Commit,实际 {other:?}"),
     }
+}
+
+/// codex 审查 A4:确认一段**既不上屏也不学习**,两者都推迟到组合结束。
+///
+/// 这条钉的是交互语义,不是接口名字:同一步用「立即提交」接口
+/// (`commit_immediately`)会立刻学习并返回文本,所以它在旧语义下必然失败。
+/// 回归探针 C 段记录的是同一条路径的真实按键输出。
+#[test]
+fn confirming_a_segment_defers_commit_and_learning_until_the_combination_ends() {
+    let engine = Arc::new(
+        crate::ImeEngine::new(None)
+            .expect("内存引擎创建失败")
+            .with_user_lm(crate::UserLM::in_memory()),
+    );
+    engine.dict.upsert("我们", "wo men", 300).expect("插入失败");
+    engine.dict.upsert("今天", "jin tian", 300).expect("插入失败");
+    let mut s = InputSession::new(Arc::clone(&engine));
+    for c in "womenjintian".chars() {
+        s.handle(InputEvent::Char(c)).expect("按键失败");
+    }
+
+    let user = engine.user_lm().expect("应有用户层");
+    // 每次取**新的**快照:快照是当时表的克隆,拿旧快照读「现在学没学」读不到。
+    let learned = |w: &str| user.counts_with(&user.snapshot(), None, w);
+
+    // ① 确认「我们」(只覆盖 women):界面刷新、组合还在、零学习。
+    let idx = s
+        .candidates
+        .iter()
+        .position(|c| c.word == "我们")
+        .expect("应有「我们」");
+    let out = s.handle(InputEvent::CandidateClicked(idx)).expect("确认失败");
+    let SessionOutput::Updated(u) = &out else {
+        panic!("确认段不应上屏: {out:?}");
+    };
+    assert!(
+        u.preedit.contains("我们") && u.preedit.contains("jintian"),
+        "确认段留在预编辑区、剩余串继续显示: {:?}",
+        u.preedit
+    );
+    assert_eq!(s.pinyin(), "jintian", "剩余串仍是未上屏的输入");
+    assert!(s.is_active(), "组合没有结束");
+    assert_eq!(learned("我们"), (0, 0), "确认段不学习");
+
+    // ② 退格回退上一次确认:字母原样还回,依然零学习。
+    let out = s.handle(InputEvent::Backspace).expect("退格失败");
+    assert!(
+        matches!(out, SessionOutput::Updated(_)),
+        "回退只刷新界面: {out:?}"
+    );
+    assert_eq!(s.pinyin(), "womenjintian", "退格把已确认段的字母还回输入串");
+    assert_eq!(learned("我们"), (0, 0), "回退不留学习痕迹");
+
+    // ③ 重新确认到底:这一下才上屏,而且这时才学习。
+    let idx = s
+        .candidates
+        .iter()
+        .position(|c| c.word == "我们")
+        .expect("应有「我们」");
+    s.handle(InputEvent::CandidateClicked(idx)).expect("确认失败");
+    let idx = s
+        .candidates
+        .iter()
+        .position(|c| c.word == "今天")
+        .expect("应有「今天」");
+    let out = s.handle(InputEvent::CandidateClicked(idx)).expect("确认失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "我们今天"),
+        "整串结束时一次交给应用: {out:?}"
+    );
+    assert!(
+        learned("我们").0 > 0 && learned("今天").0 > 0,
+        "上屏时才学习: 我们={:?} 今天={:?}",
+        learned("我们"),
+        learned("今天")
+    );
+}
+
+/// 反面对照(见证):同一个输入、同一步用**立即提交**接口,行为完全不同——
+/// 它立刻返回文本、立刻学习。这正是 `commit_immediately` 不能冒充真实
+/// 交互路径的原因(codex 审查 A4),两条接口的差别由这两条用例分别钉住。
+#[test]
+fn immediate_commit_learns_at_once_unlike_the_real_interaction_path() {
+    let engine = Arc::new(
+        crate::ImeEngine::new(None)
+            .expect("内存引擎创建失败")
+            .with_user_lm(crate::UserLM::in_memory()),
+    );
+    engine.dict.upsert("我们", "wo men", 300).expect("插入失败");
+    engine.dict.upsert("今天", "jin tian", 300).expect("插入失败");
+    let mut s = InputSession::new(Arc::clone(&engine));
+    for c in "womenjintian".chars() {
+        s.handle(InputEvent::Char(c)).expect("按键失败");
+    }
+    let user = engine.user_lm().expect("应有用户层");
+    let idx = s
+        .candidates
+        .iter()
+        .position(|c| c.word == "我们")
+        .expect("应有「我们」");
+
+    let text = s.commit_immediately(idx).expect("立即提交应有文本");
+    assert_eq!(text, "我们");
+    assert!(
+        user.counts_with(&user.snapshot(), None, "我们").0 > 0,
+        "立即提交接口在返回文本的同一步就学习了"
+    );
 }

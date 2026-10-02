@@ -251,15 +251,25 @@ impl InputSession {
         }
     }
 
-    /// 直接上屏第 `index` 个候选（全局下标，跨页有效）。
+    /// **立即提交**第 `index` 个候选（全局下标，跨页有效）——测试/探针的
+    /// 快捷接口，**不等价于真实交互**（codex 审查 A4 要求的命名）。
     ///
-    /// 供已有的调用方(测试、以及任何不走 `handle` 的路径)使用；
-    /// 下标越界或没有候选时返回 `None`，会话状态不变。**分段上屏语义
-    /// 与 `handle` 一致**:只消耗候选覆盖的那段,剩余串继续组合;这里
-    /// 顺手把剩余串的候选刷新掉,让调用方看到的会话始终自洽(刷新失败
-    /// 只记日志——本函数的返回类型无法表达错误;需要错误语义的调用方
-    /// 请走 [`InputEvent::CandidateClicked`])。
-    pub fn commit_at(&mut self, index: usize) -> Option<String> {
+    /// 与正式路径（[`InputEvent::CandidateClicked`] / [`InputEvent::Space`]
+    /// 走 [`Self::handle`]）的差别就在「立即」二字：
+    ///
+    /// - `handle` 把选中的一段记为**确认段**（留在预编辑区、可退格回退），
+    ///   上屏与学习推迟到整个组合结束（方案 b，见 `ConfirmedSegment`）；
+    /// - 本函数跳过确认段：立刻消耗覆盖的那段、立刻学习、立刻返回文本。
+    ///
+    /// 所以**确认/学习时序**的验收必须走 `handle`（回归探针 C 段、
+    /// `session/tests/commit.rs` 的 `confirmed_*` 系列）；本函数只用于
+    /// 「给定候选下标要文本」这种与交互无关的场合（测试断言、评测脚本）。
+    ///
+    /// 覆盖范围两者一致：只消耗候选覆盖的那段，剩余串继续组合；这里顺手
+    /// 刷新剩余串候选（刷新失败只记日志——返回类型无法表达错误，需要错误
+    /// 语义的调用方请走 [`InputEvent::CandidateClicked`]）。下标越界或没有
+    /// 候选时返回 `None`，会话状态不变。
+    pub fn commit_immediately(&mut self, index: usize) -> Option<String> {
         let candidate = self.candidates.get(index)?.clone();
         let text = self.commit_word(&candidate);
         if !self.pinyin.is_empty() {

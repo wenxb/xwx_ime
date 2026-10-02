@@ -143,9 +143,9 @@ fn type_pinyin(session: &mut InputSession, pinyin: &str) {
     }
 }
 
-/// 上屏指定词，走完整真实链路：打字 → 查候选 → `commit_at`。
+/// 上屏指定词，走完整真实链路：打字 → 查候选 → `commit_immediately`。
 ///
-/// `commit_at` 与真实 IBus 适配层「点候选 / 数字选词」同一条路
+/// `commit_immediately` 与真实 IBus 适配层「点候选 / 数字选词」同一条路
 /// （都收敛到 `commit_word` → 会话 `record_committed` → 引擎
 /// `learn_committed` → `UserLM::learn`）。
 fn commit_word(engine: &Arc<ImeEngine>, session: &mut InputSession, pinyin: &str, word: &str) {
@@ -157,7 +157,7 @@ fn commit_word(engine: &Arc<ImeEngine>, session: &mut InputSession, pinyin: &str
         .iter()
         .position(|c| c.word == word)
         .unwrap_or_else(|| panic!("「{word}」({pinyin}) 不在候选列表"));
-    let got = session.commit_at(idx).expect("上屏失败");
+    let got = session.commit_immediately(idx).expect("上屏失败");
     assert_eq!(got, word, "上屏的词应与目标一致");
 }
 

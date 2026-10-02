@@ -419,10 +419,10 @@ fn coin_buffer_cap_drops_overlong_run() {
     // 逐字上屏 MAX_COIN_CHARS + 2 个字;每个字拼音都是 "a",
     // 但逐字上屏时输入是单字母 "a",候选第一个就是当前字
     // (词频降序),逐个选「当前该选的字」太脆弱——改为直接用
-    // commit_at(0) 上屏当前首选,只验证缓冲长度上限行为。
+    // commit_immediately(0) 上屏当前首选,只验证缓冲长度上限行为。
     for _ in 0..(MAX_COIN_CHARS + 2) {
         s.handle(InputEvent::Char('a')).expect("按键失败");
-        s.commit_at(0).expect("应有候选");
+        s.commit_immediately(0).expect("应有候选");
     }
     // 超限结算:缓冲长度 ≤ MAX_COIN_CHARS(结算后重新累积)。
     let buffered: usize = s.coin_buffer.iter().map(|(w, _)| w.chars().count()).sum();

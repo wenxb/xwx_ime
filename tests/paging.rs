@@ -239,7 +239,7 @@ fn lookup_table_stays_in_step_with_the_page() {
 /// only pins the plain case; the cross-page case is the next test.
 ///
 /// Wrong-behaviour witnesses:
-/// - `page_start` added twice on page 1 (or `commit_at(index + page_start())`
+/// - `page_start` added twice on page 1 (or `commit_immediately(index + page_start())`
 ///   with a page-local index) → 点 1 上屏「尼」以外的词 → red;
 /// - `CandidateClicked` returning early without a commit when the index is off
 ///   by one → no `CommitText` at all → red.

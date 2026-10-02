@@ -1,0 +1,12 @@
+# xwx_ime 回归探针身份(自动生成,随基线一起提交)
+format=v2
+out_sha256=d853a504c99aed8fac234861241c2a8cb09fd38ea987237e1271a8b16e3545fd
+out_bytes=162291
+out_lines=2515
+git_head=ef35658a892052ca18c131ce24393921b3ab22a6
+git_dirty=yes
+git_dirty_paths=["M .gitignore", "M crates/xwx_engine/examples/regression_probe.rs"]
+data_dir=/home/youngwen/.local/share/xwx
+dict.bin: bytes=80110418 sha256=2d287495ce33385c4d6863853ba4a184c525c473694b0cd8c4e790de3796b5fe
+abbrev.bin: bytes=72235274 sha256=ac4990e35cfbb42dd9a2985faea297df6e7b44885a251a6229a423efd4bffdd6
+wanxiang-lts-zh-hans.gram: bytes=420253740 sha256=051a55abb3824fe103a7af10b8ac96b5ab4e97067a1c0cf1c968841ea2a1c391

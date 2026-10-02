@@ -75,7 +75,7 @@ fn type_and_commit(s: &mut InputSession, input: &str, target: &str) {
         s.handle(InputEvent::Char(ch)).expect("按键失败");
     }
     // 用引擎直接查候选列表定位目标词的全局下标(与会话内部
-    // 一致:同一引擎、同一输入、空上下文),再 commit_at 上屏
+    // 一致:同一引擎、同一输入、空上下文),再 commit_immediately 上屏
     // (等价于用户翻到该候选并选中)。
     let cands = s
         .engine
@@ -85,7 +85,7 @@ fn type_and_commit(s: &mut InputSession, input: &str, target: &str) {
         .iter()
         .position(|c| c.word == target)
         .unwrap_or_else(|| panic!("{input} 的候选里应有 {target}"));
-    let committed = s.commit_at(idx).expect("目标下标应有候选");
+    let committed = s.commit_immediately(idx).expect("目标下标应有候选");
     assert_eq!(committed, target, "应上屏 {target}");
 }
 

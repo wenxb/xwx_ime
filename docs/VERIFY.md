@@ -1,6 +1,6 @@
 # 实机验证清单
 
-> `cargo test` 有 **343** 个测试全绿（275 engine 单测 + 6 ibus 单测 + 9 bin +
+> `cargo test` 有 **345** 个测试全绿（277 engine 单测 + 6 ibus 单测 + 9 bin +
 > **53 D-Bus 集成**），但**它仍不是实机可用的证据**。
 >
 > **2026-10-01 更新**：根 `tests/` 现在有一组 **D-Bus 集成测试**，
@@ -11,6 +11,13 @@
 > `verbatim_url`(7)、`wire_abbrev`(5)、`mods_keys`(4)、`prefix_commit`(1)、
 > `paging`(7)、`blocklist_delete`(2)、`focus_lifecycle`(4)、`punctuation_paging`(1)、
 > `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)。
+>
+> **回归基线**（codex 审查 Q1）：`tests/baselines/regression_v2.txt` 是
+> `examples/regression_probe.rs --format v2` 的输出（2515 行），旁边
+> `regression_v2.id.txt` 记着输出 sha256/行数、Git SHA 和三个数据文件的
+> sha256——探针会先校验词库/副索引/万象**真的加载成功**，任一缺失直接报错，
+> 不会静默拿空库产出“看着是绿的”基线。逐字节对拍历史基线用
+> `--format v1`（2322 行，与 `/tmp/codex_batch1_nt.txt` diff 0 行）。
 >
 > **但它用的是私有总线，不是真实 ibus-daemon + 真实应用**——下面这份清单
 > 仍然要敲，因为它验的是 daemon / GNOME Shell / 应用三者与引擎的
