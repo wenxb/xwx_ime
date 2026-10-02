@@ -299,7 +299,11 @@ fn segmented_commits_of_whole_words_do_not_coin_a_phrase() {
     );
 }
 
-/// 标点跟在分段上屏之后:标点跟着那一段走,剩余串继续组合。
+/// 标点结束组合时,**没被候选解释的字母原样跟上**(codex 审查 D2)。
+///
+/// 契约变更:旧断言是 `我们，`——`jintian` 被静默丢掉(测试把「丢字母」
+/// 固化成了正确行为)。现在上屏文本 = 确认段 + 候选 + 未覆盖后缀 + 标点,
+/// 组合结束;不替用户自动选择余串候选(选错比原样保留更糟)。
 #[test]
 fn punctuation_after_a_segment_keeps_the_rest_composing() {
     let mut s = session_with_segments();
@@ -316,7 +320,7 @@ fn punctuation_after_a_segment_keeps_the_rest_composing() {
     match out {
         // 方案 b:标点结束这次组合——已确认段 + 当前候选 + 标点一次上屏。
         SessionOutput::Commit(text) => {
-            assert_eq!(text, "我们，", "标点跟在已确认段后面一起上屏");
+            assert_eq!(text, "我们jintian，", "候选 + 未覆盖后缀 + 标点,一个字母都不许丢");
         }
         other => panic!("期望 Commit(标点结束组合),实际 {other:?}"),
     }
@@ -477,4 +481,46 @@ fn committed_tail_is_bounded_on_char_boundary() {
         std::str::from_utf8(s.committed_tail.as_bytes()).is_ok(),
         "截断后必须是合法 UTF-8（char 边界截断）"
     );
+}
+
+/// 大写/Verbatim 结束组合时同样不许丢后缀(codex 审查 D2)。
+#[test]
+fn verbatim_after_a_segment_keeps_the_uncovered_suffix() {
+    let mut s = session_with_segments();
+    for c in "womenjintian".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    let idx = s
+        .candidates
+        .iter()
+        .position(|c| c.word == "我们")
+        .expect("候选里应有「我们」");
+    s.cursor = idx;
+    let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+    match out {
+        SessionOutput::Commit(text) => {
+            assert_eq!(text, "我们jintianG", "Shift+字母:候选 + 未覆盖后缀 + 大写字母");
+        }
+        other => panic!("期望 Commit(大写结束组合),实际 {other:?}"),
+    }
+    assert!(!s.is_active(), "组合结束");
+}
+
+/// 候选覆盖整串时行为不变(后缀为空):标点照旧紧跟候选。
+#[test]
+fn covered_candidate_keeps_the_punctuation_immediately_after_it() {
+    let mut s = session_with_segments();
+    for c in "womenjintian".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    // 先确认「我们」「今天」两段,让剩下的候选覆盖整串。
+    let idx = s.candidates.iter().position(|c| c.word == "我们").expect("应有我们");
+    s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+    let idx = s.candidates.iter().position(|c| c.word == "今天").expect("应有今天");
+    s.cursor = idx;
+    let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+    match out {
+        SessionOutput::Commit(text) => assert_eq!(text, "我们今天，"),
+        other => panic!("期望 Commit,实际 {other:?}"),
+    }
 }

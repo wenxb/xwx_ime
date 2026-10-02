@@ -13,6 +13,15 @@ impl InputSession {
         text
     }
 
+    /// 候选 `c` **没解释到**的那部分原始输入(标点/大写结束组合时要原样跟上)。
+    ///
+    /// 空串 = 候选覆盖整串。`c.covered` 已由 `fill_covered` 映射回**原文
+    /// 坐标**,与 `self.pinyin` 是同一坐标系(含用户敲的 `'`)。
+    pub(super) fn uncovered_suffix(&self, c: &Candidate) -> String {
+        let n = c.covered.min(self.pinyin.len());
+        self.pinyin[n..].to_string()
+    }
+
     /// 组合以「原样拼音」结束(回车 / 切英文 / 标点 / 无候选时的空格):
     /// 已确认段照样上屏,尾部原始字母跟着一起。
     pub(super) fn finish_with_raw(&mut self, raw: String) -> String {

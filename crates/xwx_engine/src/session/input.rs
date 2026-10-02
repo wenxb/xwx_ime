@@ -193,7 +193,20 @@ impl InputSession {
                     // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
                     // (段留在组合里),标点就没地方落地了。
                     let out = match self.candidates.get(self.cursor).cloned() {
-                        Some(c) => SessionOutput::Commit(self.commit_selection(&c)),
+                        Some(c) => {
+                            // **后缀守恒(codex 审查 D2)**:候选只覆盖输入的一部分时,
+                            // 没被解释的字母必须**原样跟上**,不能被随后的 `reset()`
+                            // 静默丢掉——`womenjintian` 高亮「我们」时,旧实现只上屏
+                            // 「我们，」,`jintian` 人间蒸发。这里**不**替用户选余串
+                            // 候选:自动选错比原样保留更糟。
+                            let rest = self.uncovered_suffix(&c);
+                            let mut text = self.commit_selection(&c);
+                            if !rest.is_empty() {
+                                self.push_tail(&rest);
+                                text.push_str(&rest);
+                            }
+                            SessionOutput::Commit(text)
+                        }
                         None => SessionOutput::Commit(self.finish_with_raw(self.pinyin.clone())),
                     };
                     // 与 Space 分支的唯一差别:commit_* 已把该段消耗掉,
@@ -223,7 +236,16 @@ impl InputSession {
                     // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
                     // (段留在组合里),标点就没地方落地了。
                     let out = match self.candidates.get(self.cursor).cloned() {
-                        Some(c) => SessionOutput::Commit(self.commit_selection(&c)),
+                        Some(c) => {
+                            // 后缀守恒:与标点分支同一条规则(见那里的注释)。
+                            let rest = self.uncovered_suffix(&c);
+                            let mut text = self.commit_selection(&c);
+                            if !rest.is_empty() {
+                                self.push_tail(&rest);
+                                text.push_str(&rest);
+                            }
+                            SessionOutput::Commit(text)
+                        }
                         None => SessionOutput::Commit(self.finish_with_raw(self.pinyin.clone())),
                     };
                     // 单字母不是词:不进 UserLM 学习(与标点同一取舍),
