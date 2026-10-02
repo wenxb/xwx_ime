@@ -59,6 +59,15 @@ impl XwxEngineServer {
                 self.commit(ctxt, &text).await;
                 true
             }
+            // 分段上屏:上屏这一段,然后把**剩余输入串**的预编辑区与候选窗
+            // 接着画出来——不能走 `commit()` 那套「上屏 + 收起」,否则用户
+            // 看到的正是「选完就没下文了」。顺序固定:先 CommitText 再
+            // UpdatePreeditText/UpdateLookupTable,让应用先落字再显示剩余串。
+            SessionOutput::CommitSegment { text, update } => {
+                self.commit_text_only(ctxt, &text).await;
+                self.refresh_ui(ctxt, &update).await;
+                true
+            }
             SessionOutput::Updated(u) => {
                 self.refresh_ui(ctxt, &u).await;
                 true
@@ -68,6 +77,13 @@ impl XwxEngineServer {
 
     /// 上屏：发 `CommitText` 信号 + 收起预编辑区/候选窗/面板。
     async fn commit(&self, ctxt: &zbus::SignalContext<'_>, text: &str) {
+        self.commit_text_only(ctxt, text).await;
+        self.hide_ui(ctxt).await;
+    }
+
+    /// 只发 `CommitText`(不收起界面)——分段上屏用:上屏一段之后,
+    /// 预编辑区与候选窗要继续显示剩余输入串。
+    async fn commit_text_only(&self, ctxt: &zbus::SignalContext<'_>, text: &str) {
         match ibus_proto::ibus_text(text) {
             Ok(value) => {
                 if let Err(e) = self.commit_text(ctxt, value).await {
@@ -76,7 +92,6 @@ impl XwxEngineServer {
             }
             Err(e) => tracing::warn!(error = %e, "上屏文本构造失败"),
         }
-        self.hide_ui(ctxt).await;
     }
 
     /// 按会话更新刷新预编辑区与候选窗（GNOME Shell candidate popup 渲染）。
@@ -303,10 +318,10 @@ impl XwxEngineServer {
         state: u32,
     ) {
         let _ = (button, state);
-        let word = self.session.lock().await.commit_at(index as usize);
-        if let Some(word) = word {
-            self.commit(&ctxt, &word).await;
-        }
+        // 走会话事件的统一出口(而不是直接 `commit_at`):点击与空格/数字
+        // 共用同一条分段上屏路径,剩余串继续组合的界面刷新也一样。
+        self.handle_key(&ctxt, InputEvent::CandidateClicked(index as usize))
+            .await;
     }
 
     // —— 以下为信号声明（无函数体，zbus 会生成发射器）——

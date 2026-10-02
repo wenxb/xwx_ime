@@ -282,6 +282,7 @@ impl Dictionary for SqliteDict {
                 freq: row.get(2)?,
                 spelling: crate::candidate::SpellingKind::Exact, // 词典条目是精确匹配
                 echo: false,  // 词典条目是真实候选
+                covered: 0,   // 未知/整串:由引擎按查询来源回填(见 Candidate::covered)
             })
         })?;
         let mut out = Vec::new();
@@ -320,6 +321,7 @@ impl Dictionary for SqliteDict {
                     freq: row.get(2)?,
                     spelling: crate::candidate::SpellingKind::Exact, // 词典条目是精确匹配
                     echo: false,  // 词典条目是真实候选
+                    covered: 0,   // 未知/整串:由引擎按查询来源回填(见 Candidate::covered)
                 })
             },
         )?;

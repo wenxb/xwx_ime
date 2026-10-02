@@ -583,6 +583,7 @@ impl ImeEngine {
             if ranked.is_empty() {
                 ranked.push(Self::echo_candidate(pinyin));
             }
+            Self::fill_covered(&mut ranked, pinyin.len(), bounds);
             return Ok(ranked);
         }
 
@@ -625,6 +626,12 @@ impl ImeEngine {
                     SpellingKind::Exact
                 },
                 echo: false,     // 解码出的都是真实候选
+                // 分段上屏的依据:这条边只覆盖输入串开头的 `edge.end` 个字节
+                // (干净串坐标),剩余部分由会话留着继续组合。同一输入的不同
+                // 候选覆盖范围可以不同(「我们」5 字节 vs「我们今天」13 字节)
+                // ——**选哪个候选就等于选哪种分段**,这正是格边候选比
+                // 「先定分段再出候选」更灵活的地方。
+                covered: edge.end,
             };
             let entry = best
                 .entry((cand.word.clone(), cand.pinyin.clone()))
@@ -657,7 +664,28 @@ impl ImeEngine {
             ranked.push(Self::echo_candidate(pinyin));
         }
         self.filter_blocked(&mut ranked);
+        // 覆盖范围回填(干净串坐标 → 原始输入串坐标)必须在**全部来源
+        // 合并、截断、兜底之后**做:候选的来源不同(格边/兜底/简拼/回声),
+        // 只有这里知道整串长度与 `'` 的位置。
+        Self::fill_covered(&mut ranked, pinyin.len(), bounds);
         Ok(ranked)
+    }
+
+    /// 把「干净串里的字节前缀长度」映射回**原始输入串**里的长度。
+    ///
+    /// `'` 只是强制切分符(见 [`ImeEngine::lookup_candidates`] 的归一化),
+    /// 但它在用户**看到的**串里占一个字节。分段上屏要消耗的是原文长度,
+    /// 且口径必须是「吃掉落在覆盖范围内的分隔符 + 紧跟其后的那一个」:
+    /// 覆盖停在分隔符前(`xi'an` 覆盖 `xi`)时,原文长度含那个 `'`(3),
+    /// 否则上屏「西」之后 preedit 会剩下 `'an`——前导分隔符既无意义,又会被
+    /// 用户当成多出来的字符。
+    ///
+    /// `bounds` 为空(输入不含 `'`,绝大多数场景)时是**恒等映射**,零开销。
+    fn original_covered_len(clean_len: usize, bounds: Option<&[usize]>) -> usize {
+        match bounds {
+            None => clean_len,
+            Some(b) => clean_len + b.iter().filter(|&&x| x <= clean_len).count(),
+        }
     }
 
     /// 候选收口的统一过滤:把被用户 Ctrl+Delete 屏蔽的候选从最终
@@ -744,6 +772,28 @@ impl ImeEngine {
             freq: 0,
             spelling: SpellingKind::Exact,
             echo: true,
+            // 回声候选整串上屏(它是「词库解不出的原始输入串」),
+            // 覆盖范围即整串长度——分段上屏时它会一次吃掉全部输入。
+            covered: pinyin.len(),
+        }
+    }
+
+    /// 回填候选的**覆盖范围**(干净串坐标 → 原始输入串坐标)。
+    ///
+    /// 未标注(`covered == 0`,词典直接产出/旧数据)的候选按**整串**处理:
+    /// 这正是本字段引入前的语义(上屏即复位),所以任何没标注的来源都
+    /// 自动保持旧行为,不会退化成「只消耗 0 字节」。
+    ///
+    /// `clean_len` 是干净串(去掉 `'`)的字节长度,`bounds` 是每个 `'`
+    /// 在干净串中的偏移。映射口径见 [`original_covered_len`]。
+    fn fill_covered(cands: &mut [Candidate], clean_len: usize, bounds: Option<&[usize]>) {
+        for c in cands.iter_mut() {
+            let clean = if c.covered == 0 {
+                clean_len
+            } else {
+                c.covered.min(clean_len)
+            };
+            c.covered = Self::original_covered_len(clean, bounds);
         }
     }
 
@@ -804,6 +854,10 @@ impl ImeEngine {
             };
             c.score = dict_logp + lm_score * self.lm_weight;
             c.spelling = SpellingKind::Abbrev;
+            // 简拼候选覆盖整串(它的 key 就是整串的缩写),分段上屏时
+            // 一次吃掉全部输入。此刻 `pinyin` 是干净串,写入的是干净串
+            // 坐标;调用方 [`Self::fill_covered`] 负责映射回原文长度。
+            c.covered = pinyin.len();
             // lookup_abbrev(前缀命中多个简拼 key)与 lookup_mixed(多种
             // 切法)都可能重复命中同一词,简拼层内部仍按 (word, pinyin) 去重。
             let entry = best
@@ -1116,6 +1170,12 @@ impl ImeEngine {
         if !pinyin.is_ascii() {
             return Ok(Vec::new());
         }
+        // 覆盖范围(分段上屏)约定——本函数是唯一有三类来源的候选生产者:
+        // 1. 「最长可切分前缀」命中的词 = 覆盖 `pinyin[..k]`(见下面的 `k`);
+        // 2. 首音节词 = 覆盖第一个音节(见 `first.len()`);
+        // 3. 整串前缀联想(音节枚举展开 / `lookup_prefix`) = 覆盖**整串**
+        //    (它匹配的就是以整个输入开头的 key),故**刻意不标注**,让
+        //    `covered == 0` 的「未知/整串」缺省语义接管。
         let mut merged: Vec<Candidate> = Vec::new();
         // 本次兜底是否走了「声母前缀按音节枚举展开」分支:
         // 决定下面要不要做第二遍按 word 去重(见排序前的注释)。
@@ -1128,12 +1188,27 @@ impl ImeEngine {
         if let Some(k) = segmented {
             for seg in self.segmenter.segment(&pinyin[..k]) {
                 let joined = seg.join(" ");
-                merged.extend(self.dict.lookup(&joined)?);
+                // 覆盖范围(分段上屏):`dict.lookup(joined)` 命中的词恰好
+                // 覆盖被切成音节的那段前缀 `pinyin[..k]` ⇒ `k` 字节;
+                // 首音节词只覆盖**第一个音节**⇒ 它的字节长度。
+                // 两者都只在这个兜底分支里出现(整串解不出时的「最长可切分
+                // 前缀」),其余来源见各自注释。
+                let joined_cov = k;
+                let mut head = self.dict.lookup(&joined)?;
+                for c in head.iter_mut() {
+                    c.covered = joined_cov;
+                }
+                merged.extend(head);
                 // A1:只查首音节(覆盖位置 0 的前缀词),不遍历后续音节
                 // ——非起始音节的词对当前输入没有意义(见函数级文档)。
                 // 多种切法各自的首音节都会查到(循环按切法逐个处理)。
                 if let Some(first) = seg.first() {
-                    merged.extend(self.dict.lookup(first)?);
+                    let first_cov = first.len();
+                    let mut head = self.dict.lookup(first)?;
+                    for c in head.iter_mut() {
+                        c.covered = first_cov;
+                    }
+                    merged.extend(head);
                 }
             }
         }
@@ -1785,6 +1860,129 @@ mod tests {
             "xi'an 的「西安」应显著前移(对照组第 18 名),实际第 {} 名: 前 10 {:?}",
             rank + 1,
             cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+    /// 覆盖范围(分段上屏的地基):候选只覆盖输入串开头**它自己那一段**,
+    /// 而不是整串。
+    ///
+    /// 没有这个字段,会话层就不知道上屏之后该留下哪些字母,只能整串复位
+    /// ——那正是改动前「一长串拼音里选了一段,后面全被静默丢掉」的原因。
+    #[test]
+    fn candidate_covered_spans_only_the_input_it_matches() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("我们", "wo men", 300).expect("插入失败");
+        engine.dict.upsert("我", "wo", 500).expect("插入失败");
+        // 必须有**整串可解**的词条,否则查询会落到兜底路径(只出「我」),
+        // 而本测试要钉的是格边候选的覆盖范围。
+        engine.dict.upsert("今天", "jin tian", 300).expect("插入失败");
+
+        let input = "womenjintian";
+        let cands = engine
+            .lookup_candidates(input, &LmContext::empty())
+            .expect("查询失败");
+        let wo_men = cands.iter().find(|c| c.word == "我们").expect("应含「我们」");
+        assert_eq!(wo_men.covered, 5, "「我们」只覆盖 wo men(5 字节)");
+        let wo = cands.iter().find(|c| c.word == "我").expect("应含「我」");
+        assert_eq!(wo.covered, 2, "「我」只覆盖 wo");
+        // 位置 0 上的候选不可能覆盖超过整串,也不可能覆盖 0 字节
+        // (0 的语义是「未知/整串」,留给没标注的来源)。
+        for c in &cands {
+            assert!(
+                c.covered > 0 && c.covered <= input.len(),
+                "覆盖范围必须落在 (0, 串长] 内:{:?} covered={}",
+                c.word,
+                c.covered
+            );
+        }
+    }
+
+    /// 兜底来源的覆盖范围:`zzzz` 的回声候选整串上屏;`nihaozzzzz` 的前缀
+    /// 候选只覆盖它能解释的那一段(词 = 整个可切分前缀,首音节词 = 首音节)。
+    ///
+    /// 这三条口径缺一条,分段上屏就会「吃多」或「吃少」:吃多会丢掉用户
+    /// 还没解释的字母,吃少会让剩余串永远缩不短。
+    #[test]
+    fn fallback_and_echo_candidates_carry_their_own_coverage() {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        let echo = engine
+            .lookup_candidates("zzzz", &LmContext::empty())
+            .expect("查询失败");
+        assert_eq!(echo.len(), 1, "纯乱码只应有一个回声候选");
+        assert!(echo[0].echo);
+        assert_eq!(echo[0].covered, 4, "回声候选=原样上屏整串");
+
+        engine.dict.upsert("你好", "ni hao", 100).expect("插入失败");
+        engine.dict.upsert("你", "ni", 200).expect("插入失败");
+        let cands = engine
+            .lookup_candidates("nihaozzzzz", &LmContext::empty())
+            .expect("查询失败");
+        let ni_hao = cands.iter().find(|c| c.word == "你好").expect("应含「你好」");
+        assert_eq!(ni_hao.covered, 5, "「你好」覆盖最长可切分前缀 ni hao");
+        let ni = cands.iter().find(|c| c.word == "你").expect("应含「你」");
+        assert_eq!(ni.covered, 2, "「你」只覆盖首音节 ni");
+        assert!(
+            cands.iter().all(|c| c.covered < "nihaozzzzz".len()),
+            "前缀候选都不该声称吃掉了整串(zzzzz 还没被解释)"
+        );
+    }
+
+    /// `'` 占原文一个字节:覆盖停在分隔符前的候选必须把那个 `'` 一起吃掉,
+    /// 否则上屏「西安」之后 preedit 会剩下 `'an`——一个既无意义又会被用户
+    /// 当成多余字符的前导分隔符。
+    #[test]
+    fn covered_swallows_the_apostrophe_separator() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !path.is_file() {
+            return;
+        }
+        let engine = ImeEngine::new(Some(&path)).expect("mmap 词库加载失败");
+        let input = "xi'anha";
+        let cands = engine
+            .lookup_candidates(input, &LmContext::empty())
+            .expect("查询失败");
+        let xian = cands
+            .iter()
+            .find(|c| c.word == "西安")
+            .unwrap_or_else(|| {
+                panic!(
+                    "xi'anha 应含「西安」: 前 10 {:?}",
+                    cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            xian.covered, 5,
+            "干净串 xian(4 字节)+ 它后面那个 `'` = 5 字节"
+        );
+        assert!(xian.covered < input.len(), "剩余 ha 要留给会话继续组合");
+    }
+
+    /// 真实词库下的长串:首选「我们今天」只覆盖 13 字节,剩下的
+    /// `qugongyuan` 必须留给会话(这是生产里「选完接着后面的」的样子)。
+    #[test]
+    fn real_dict_long_input_candidates_cover_only_their_own_span() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        if !path.is_file() {
+            return;
+        }
+        let engine = ImeEngine::new(Some(&path)).expect("mmap 词库加载失败");
+        let input = "womenjintianqugongyuan";
+        let cands = engine
+            .lookup_candidates(input, &LmContext::empty())
+            .expect("查询失败");
+        assert!(!cands.is_empty(), "长串应有候选");
+        let top = &cands[0];
+        assert!(
+            top.covered > 0 && top.covered < input.len(),
+            "首选必须只覆盖一段(实际 {:?} covered={}): 前 5 {:?}",
+            top.word,
+            top.covered,
+            cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            top.covered, 12,
+            "首选「{}」覆盖 wo men jin tian(2+3+3+4=12 字节),剩下 qugongyuan",
+            top.word
         );
     }
 
@@ -3505,6 +3703,7 @@ mod tests {
             freq,
             spelling: kind,
             echo: false,
+            covered: 0, // 本测试只关心分层/配额,覆盖范围不参与
         };
         let head: Vec<Candidate> = (0..100u64)
             .map(|i| mk(format!("e{i}"), 10_000 - i, SpellingKind::Exact))
@@ -3559,11 +3758,11 @@ mod tests {
         // u_min>0 桶),简拼层(恒 0 桶)压过段内精确候选。
         let cover_head = vec![
             Candidate { word: "只覆盖前缀".into(), pinyin: "abc".into(),
-                score: 0.0, freq: 1, spelling: SpellingKind::Exact, echo: false },
+                score: 0.0, freq: 1, spelling: SpellingKind::Exact, echo: false, covered: 0 },
         ];
         let cover_abbrev = vec![
             Candidate { word: "覆盖整串".into(), pinyin: "abc def".into(),
-                score: 0.0, freq: 1, spelling: SpellingKind::Abbrev, echo: false },
+                score: 0.0, freq: 1, spelling: SpellingKind::Abbrev, echo: false, covered: 0 },
         ];
         let (_, out) = merge_with_abbrev("abcdef", cover_head, cover_abbrev);
         assert_eq!(out.len(), 2);

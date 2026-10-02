@@ -767,3 +767,66 @@ fn observed_preedit_sequence_equals_the_typed_sequence() {
          少一步说明有按键被丢弃,顺序不同说明状态被重置"
     );
 }
+/// Selecting a candidate that covers only a **prefix** of the composition must
+/// commit that segment and leave the rest of the pinyin composing — with a live
+/// candidate window for what is left.
+///
+/// Regression target: before this, `commit_word` → `reset()` cleared the whole
+/// input, so typing `nihaobeijing` and picking 你好 silently **dropped**
+/// `beijing`: no commit for it, no preedit, empty candidate window. The user
+/// sees "选完就没下文了" and has to retype.
+///
+/// Wrong-behaviour witnesses (each makes this test red):
+/// - the session still returns `Commit` (commit + hide UI) → there is no
+///   `UpdatePreeditText("beijing")` after the commit → `last_preedit` is `None`;
+/// - coverage counted as the whole string → the preedit is empty and the lookup
+///   table is hidden;
+/// - coverage counted as 0 (nothing consumed) → the second space commits 你好
+///   again instead of 北京;
+/// - the IBus layer treating `CommitSegment` like `Commit` (`commit()` hides
+///   the UI) → no `UpdateLookupTable` carrying 北京 → red.
+#[test]
+fn selecting_a_prefix_candidate_keeps_the_remaining_pinyin_composing() {
+    let h = &mut Harness::new("segment-commit");
+    h.start_engine(shared_fixture());
+    h.focus_out().expect("FocusOut");
+
+    h.clear_backlog();
+    h.type_ascii("nihaobeijing");
+    h.clear_backlog();
+
+    assert!(h.key(keyval::SPACE, 0), "空格应选中候选");
+    let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
+    assert_eq!(
+        support::commits(&sigs),
+        vec!["你好".to_owned()],
+        "先上屏覆盖前缀的那一段「你好」"
+    );
+    assert_eq!(
+        last_preedit(&sigs).as_deref(),
+        Some("beijing"),
+        "剩余串必须留在预编辑区(改动前这里整串消失)"
+    );
+    let table = support::last_table(&sigs).expect("剩余串必须有候选窗——不能什么都没有");
+    assert_eq!(
+        table.candidates.first().map(String::as_str),
+        Some("北京"),
+        "剩余串的首选应是「北京」,实际 {:?}",
+        table.candidates
+    );
+
+    // 接着打完:第二次空格把剩余串也上屏,界面才收起。
+    h.clear_backlog();
+    assert!(h.key(keyval::SPACE, 0), "剩余串仍有候选,空格应继续选词");
+    let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
+    assert_eq!(
+        support::commits(&sigs),
+        vec!["北京".to_owned()],
+        "第二次空格上屏剩余串的首选"
+    );
+    assert_eq!(
+        support::last_table(&sigs),
+        None,
+        "剩余串打完,候选窗应收起(而不是留下一个空面板)"
+    );
+}

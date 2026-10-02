@@ -132,6 +132,13 @@ pub enum InputEvent {
     Verbatim(char),
     /// 数字选词：`Select(1)` 选第 1 个候选；`Select(0)` 选第 10 个。
     Select(u8),
+    /// 候选面板点击(`CandidateClicked`):`index` 是**全局**下标(跨页)。
+    ///
+    /// 走 `handle` 而不是直接调 [`InputSession::commit_at`],是为了让
+    /// 「点击选词」与「空格/数字选词」共用同一条分段上屏路径(同一个
+    /// `SessionOutput` 契约):否则点击路径要么漏掉「剩余串继续组合」,
+    /// 要么得在 IBus 层再实现一遍。
+    CandidateClicked(usize),
     /// 退格键。
     Backspace,
     /// 回车键：拼音串原样上屏。
@@ -198,10 +205,43 @@ impl SessionUpdate {
 pub enum SessionOutput {
     /// 需要上屏的文本。上屏后会话已自动复位。
     Commit(String),
+    /// 上屏**一段**文本,同时组合继续:剩下的输入串还留在预编辑区,
+    /// 候选窗要按 `update` 刷新,**不能**收起。
+    ///
+    /// 产生条件:被选中的候选只覆盖输入串的前缀(见
+    /// [`Candidate::covered`]),即用户在「一长串拼音里选了一段」。
+    /// 与 [`SessionOutput::Commit`] 的差别只在「上屏之后界面怎么办」:
+    /// `Commit` = 上屏 + 收起;本变体 = 上屏 + 继续显示剩余串与候选。
+    CommitSegment {
+        /// 要交给应用的文本(这一段)。
+        text: String,
+        /// 剩余输入串的界面快照(预编辑区 + 候选窗)。
+        update: SessionUpdate,
+    },
     /// 界面需要刷新（拼音串或候选变化）。
     Updated(SessionUpdate),
     /// 本输入法不处理该按键。
     Noop,
+}
+
+/// 把后缀字符(标点 / Verbatim 字母)拼到一次上屏的文本末尾,并**保持
+/// 分段语义**:原本要收起界面的(`Commit`)照旧收起,原本要继续组合的
+/// (`CommitSegment`)照旧带着剩余串的界面快照。
+///
+/// 标点与 Shift+字母落在「输入串非空」的分支里,都是「先上屏当前候选,
+/// 再追加这个字符」;分段上屏之后这两支也可能走到 `CommitSegment`,
+/// 因此拼字符串这件事必须认变体,不能一律拼成 `Commit`。
+fn append_to_commit(out: SessionOutput, suffix: &str) -> SessionOutput {
+    match out {
+        SessionOutput::Commit(text) => SessionOutput::Commit(format!("{text}{suffix}")),
+        SessionOutput::CommitSegment { text, update } => SessionOutput::CommitSegment {
+            text: format!("{text}{suffix}"),
+            update,
+        },
+        // 本函数只被上屏分支调用,`Updated`/`Noop` 不可达;原样返回,
+        // 不制造新的语义。
+        other => other,
+    }
 }
 
 /// 输入会话状态机。
@@ -489,18 +529,19 @@ impl InputSession {
                 if self.pinyin.is_empty() {
                     Ok(SessionOutput::Commit(self.commit_raw(punct.to_string())))
                 } else {
-                    let head = match self.candidates.get(self.cursor).cloned() {
-                        Some(c) => self.commit_word(&c),
-                        None => self.commit_raw(self.pinyin.clone()),
+                    let out = match self.candidates.get(self.cursor).cloned() {
+                        Some(c) => self.commit_candidate(&c)?,
+                        None => SessionOutput::Commit(self.commit_raw(self.pinyin.clone())),
                     };
-                    // 与 Space 分支的唯一差别:commit_* 已把会话复位,
+                    // 与 Space 分支的唯一差别:commit_* 已把该段消耗掉,
                     // 这里只把标点追加进上屏尾部并拼到上屏文本后面。
                     // 标点用 push_tail 而非 record_committed:既不触发学习
                     // (标点不是词,不进 UserLM——对应 librime 标点不进 memory),
                     // 也不动 last_word(刚上屏的「你好」仍是后续打分的有效
-                    // bigram 上文,不被标点抹掉)。
+                    // bigram 上文,不被标点抹掉)。**分段上屏时标点跟着那一段
+                    // 一起上屏,剩余串继续组合**(组合内的标点同样是上下文)。
                     self.push_tail(punct);
-                    Ok(SessionOutput::Commit(format!("{head}{punct}")))
+                    Ok(append_to_commit(out, punct))
                 }
             }
             // —— Verbatim:直接上屏的字符(Shift+字母 / CapsLock,
@@ -514,14 +555,14 @@ impl InputSession {
                 if self.pinyin.is_empty() {
                     Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
                 } else {
-                    let head = match self.candidates.get(self.cursor).cloned() {
-                        Some(c) => self.commit_word(&c),
-                        None => self.commit_raw(self.pinyin.clone()),
+                    let out = match self.candidates.get(self.cursor).cloned() {
+                        Some(c) => self.commit_candidate(&c)?,
+                        None => SessionOutput::Commit(self.commit_raw(self.pinyin.clone())),
                     };
                     // 单字母不是词:不进 UserLM 学习(与标点同一取舍),
                     // 也不动 last_word(刚上屏的候选仍是有效 bigram 上文)。
                     self.push_tail(c.encode_utf8(&mut [0u8; 4]));
-                    Ok(SessionOutput::Commit(format!("{head}{c}")))
+                    Ok(append_to_commit(out, c.encode_utf8(&mut [0u8; 4])))
                 }
             }
             // —— `-`/`=` 翻页(librime `paging_with_minus_equal`,has_menu)——
@@ -549,11 +590,22 @@ impl InputSession {
             InputEvent::Select(n) if !self.pinyin.is_empty() => {
                 let idx = if n == 0 { 9 } else { (n - 1) as usize };
                 match self.candidates.get(idx).cloned() {
-                    Some(c) => Ok(SessionOutput::Commit(self.commit_word(&c))),
+                    Some(c) => self.commit_candidate(&c),
                     None => Ok(SessionOutput::Noop), // 该数字无对应候选
                 }
             }
             InputEvent::Select(_) => Ok(SessionOutput::Noop),
+
+            // —— 候选面板点击(全局下标) ——
+            // 与空格/数字同一条出口:分段上屏语义、失败回滚都在
+            // `commit_candidate` 里,IBus 层不需要另写一遍。
+            InputEvent::CandidateClicked(index) if !self.pinyin.is_empty() => {
+                match self.candidates.get(index).cloned() {
+                    Some(c) => self.commit_candidate(&c),
+                    None => Ok(SessionOutput::Noop),
+                }
+            }
+            InputEvent::CandidateClicked(_) => Ok(SessionOutput::Noop),
 
             // —— 空格：选高亮候选；无候选则原样上屏拼音串 ——
             InputEvent::Space if !self.pinyin.is_empty() => {
@@ -561,7 +613,7 @@ impl InputSession {
                     // 选中真实候选词：走 commit_word，词要进 last_word
                     Some(c) => {
                         let c = c.clone();
-                        Ok(SessionOutput::Commit(self.commit_word(&c)))
+                        self.commit_candidate(&c)
                     }
                     // 没有候选（如只打了一半前缀）：拼音串原样上屏，是
                     // 原始字母，不算词
@@ -733,6 +785,9 @@ impl InputSession {
                 freq: 0,
                 spelling: crate::SpellingKind::Exact,
                 echo: true,
+                // 识别态(邮箱/网址)的回声候选整串上屏:它就是要原样
+                // 上屏整串输入,剩余串按定义为空。
+                covered: self.pinyin.len(),
             }];
         } else {
             self.candidates = self
@@ -762,12 +817,26 @@ impl InputSession {
         }
     }
 
-    /// 上屏指定候选词并复位会话。
+    /// 上屏指定候选词并消耗它覆盖的那段输入。
     ///
-    /// 回声候选(`c.echo`,词库解不出的原始输入串)不是词:按
-    /// `commit_raw` 的语义处理——不学习、`last_word` 置 `None`
-    /// (对应 librime 里 raw 类型不进 memory 的行为)。
+    /// **分段上屏**(2026-10-03):只消耗 [`Candidate::covered`] 个字节,
+    /// 剩余串留在 `pinyin` 里继续组合——修掉的是「一长串拼音里选了一段,
+    /// 后面全被静默丢掉」。覆盖范围未标注(`0`)或已达串尾时按**整串**
+    /// 处理并复位,与改动前逐字节一致。
+    ///
+    /// 本方法只做状态变更、**不刷新候选**(见 [`Self::commit_candidate`]
+    /// 的三段式:先消耗 + 刷新,成功后才记账)。
     fn commit_word(&mut self, c: &Candidate) -> String {
+        let word = self.record_commit(c);
+        self.consume_covered(c);
+        word
+    }
+
+    /// 上屏的**记账**部分:造词缓冲、上屏尾部(bigram 上文)、UserLM 学习。
+    ///
+    /// 与「消耗输入串」拆开是因为分段上屏要先搬走前缀、再刷新剩余串的
+    /// 候选,刷新失败必须能原样回滚——那时**不能**留下任何上屏副作用。
+    fn record_commit(&mut self, c: &Candidate) -> String {
         let word = c.word.clone();
         if c.echo {
             self.break_coin_run();
@@ -776,8 +845,73 @@ impl InputSession {
         }
         let as_word = if c.echo { None } else { Some(word.as_str()) };
         self.record_committed(&word, as_word);
-        self.reset();
         word
+    }
+
+    /// 候选要消耗的输入字节数(`covered == 0` = 未知/整串)。
+    ///
+    /// 串内理论上只有 ASCII(字母 + `'`),但这里仍按字符边界回退——
+    /// 消费量越界或落在半个字符上时宁可少消耗,也绝不 panic。
+    fn covered_len(&self, c: &Candidate) -> usize {
+        let raw = if c.covered == 0 {
+            self.pinyin.len()
+        } else {
+            c.covered.min(self.pinyin.len())
+        };
+        let mut n = raw;
+        while n > 0 && !self.pinyin.is_char_boundary(n) {
+            n -= 1;
+        }
+        n
+    }
+
+    /// 消耗候选覆盖的前缀:够整串就复位(旧语义),否则只搬走前缀。
+    ///
+    /// 编辑光标按**同一个位置**平移(`caret -= covered`),于是「在串尾打字」
+    /// 的用户上屏一段后光标仍在剩余串末尾——与 librime `OnSelect` 里
+    /// `set_caret_pos(input.length())` 的语义一致;光标原本落在被消耗的
+    /// 前缀里时钳到串首(`saturating_sub`),不会指到串外。
+    fn consume_covered(&mut self, c: &Candidate) {
+        let covered = self.covered_len(c);
+        if covered >= self.pinyin.len() {
+            self.reset();
+            return;
+        }
+        self.pinyin.drain(..covered);
+        self.caret = self.caret.saturating_sub(covered);
+        self.cursor = 0;
+        self.page = 0;
+    }
+
+    /// 上屏候选并决定「界面接下来怎么办」——空格/数字/点击/标点的统一出口。
+    ///
+    /// - 剩余串为空 ⇒ [`SessionOutput::Commit`](上屏 + 收起,改动前语义);
+    /// - 剩余串非空 ⇒ [`SessionOutput::CommitSegment`](上屏一段 + 刷新)。
+    ///
+    /// **失败回滚**:剩余串刷新候选失败时把刚搬走的前缀原样塞回去,并
+    /// 保持会话不变量——「已上屏文本 + 剩余输入串」的并集恒等于用户敲过的
+    /// 全部字母。这条不变量正是分段上屏要修的东西:改动前选一段会把后面
+    /// 的字母**静默丢掉**(既不进文档也不留在串里)。
+    fn commit_candidate(&mut self, c: &Candidate) -> Result<SessionOutput, EngineError> {
+        let covered = self.covered_len(c);
+        if covered >= self.pinyin.len() {
+            return Ok(SessionOutput::Commit(self.commit_word(c)));
+        }
+        let prefix: String = self.pinyin[..covered].to_owned();
+        self.consume_covered(c);
+        if let Err(e) = self.refresh() {
+            // 回滚:字母一个都不能少(候选查询失败不该吞掉用户输入)。
+            self.pinyin.insert_str(0, &prefix);
+            self.caret += prefix.len();
+            self.cursor = 0;
+            self.page = 0;
+            return Err(e);
+        }
+        let text = self.record_commit(c);
+        Ok(SessionOutput::CommitSegment {
+            text,
+            update: self.update(),
+        })
     }
 
     /// 上屏任意文本并复位会话。原文计入上屏尾部；
@@ -891,11 +1025,21 @@ impl InputSession {
 
     /// 直接上屏第 `index` 个候选（全局下标，跨页有效）。
     ///
-    /// 供候选面板点击、IBus `CandidateClicked` 等场景使用；
-    /// 下标越界或没有候选时返回 `None`，会话状态不变。
+    /// 供已有的调用方(测试、以及任何不走 `handle` 的路径)使用；
+    /// 下标越界或没有候选时返回 `None`，会话状态不变。**分段上屏语义
+    /// 与 `handle` 一致**:只消耗候选覆盖的那段,剩余串继续组合;这里
+    /// 顺手把剩余串的候选刷新掉,让调用方看到的会话始终自洽(刷新失败
+    /// 只记日志——本函数的返回类型无法表达错误;需要错误语义的调用方
+    /// 请走 [`InputEvent::CandidateClicked`])。
     pub fn commit_at(&mut self, index: usize) -> Option<String> {
         let candidate = self.candidates.get(index)?.clone();
-        Some(self.commit_word(&candidate))
+        let text = self.commit_word(&candidate);
+        if !self.pinyin.is_empty() {
+            if let Err(e) = self.refresh() {
+                tracing::warn!(error = %e, "分段上屏后刷新剩余串候选失败,候选窗仍是旧列表");
+            }
+        }
+        Some(text)
     }
 
     /// 复位到空闲状态。
@@ -1428,6 +1572,222 @@ mod tests {
         assert_eq!(word, "你好");
         assert!(!s.is_active(), "上屏后会话应复位");
         assert!(s.commit_at(0).is_none(), "复位后不应再取到候选");
+    }
+
+    /// 分段上屏用的会话:词库里有「我们」「今天」两个整词与它们的单字,
+    /// 输入 `womenjintian` 整串可解(格边候选覆盖各自那一段)。
+    fn session_with_segments() -> InputSession {
+        let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+        engine.dict.upsert("我们", "wo men", 300).expect("插入失败");
+        engine.dict.upsert("我", "wo", 500).expect("插入失败");
+        engine.dict.upsert("今天", "jin tian", 300).expect("插入失败");
+        InputSession::new(Arc::new(engine))
+    }
+
+    /// 选中只覆盖前缀的候选之后,**剩下的字母必须留在串里**,并且面板
+    /// 立刻显示剩余串的候选——这是「一长串拼音连不起来时,正确的先选,
+    /// 选完接着后面的」的最小可验证形状。
+    ///
+    /// 定向破坏(逐条都能让它变红):
+    /// - `consume_covered` 改成 `reset()`(改动前的行为)→ `pinyin()` 为空、
+    ///   输出变回 `Commit` → 红;
+    /// - `covered_len` 忽略 `Candidate::covered` 一律整串 → 同上 → 红;
+    /// - `commit_candidate` 忘了 `refresh()` → 剩余串有 preedit 但候选窗
+    ///   是空的(或还是旧列表)→ `update.candidates` 断言红;
+    /// - 少扣一次 caret → 下面的 caret 断言红。
+    #[test]
+    fn committing_a_prefix_candidate_keeps_the_rest_of_the_composition() {
+        let mut s = session_with_segments();
+        for c in "womenjintian".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "我们")
+            .expect("候选里应有「我们」");
+        assert_eq!(s.candidates[idx].covered, 5, "「我们」覆盖 wo men");
+
+        let out = s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+        match out {
+            SessionOutput::CommitSegment { text, update } => {
+                assert_eq!(text, "我们");
+                assert_eq!(update.preedit, "jintian", "剩余串留在预编辑区");
+                // 光标按**位置**平移:用户在串尾打字,消耗掉前缀后光标
+                // 落在剩余串末尾(与 librime `OnSelect` 的
+                // `set_caret_pos(input.length())` 同义);光标若在被消耗的
+                // 前缀里则钳到串首——见 `consume_covered` 的注释。
+                assert_eq!(update.caret, update.preedit.len(), "光标跟随到剩余串末尾");
+                assert!(
+                    !update.candidates.is_empty(),
+                    "剩余串必须有候选(面板不能变成空的)"
+                );
+            }
+            other => panic!("期望 CommitSegment(上屏一段+继续组合),实际 {other:?}"),
+        }
+        assert_eq!(s.pinyin(), "jintian", "剩余串仍在会话里");
+        assert!(!s.candidates.is_empty(), "剩余串的候选已刷新");
+    }
+
+    /// 覆盖整串的候选仍走**旧路径**(上屏 + 复位 + 收起界面):这条保证
+    /// 改动对「选一个词就打完了」的常规输入逐字节不变。
+    #[test]
+    fn committing_a_whole_input_candidate_still_uses_the_old_path() {
+        let mut s = session_with_dict();
+        for c in "nihao".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let out = s.handle(InputEvent::Space).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == "你好"),
+            "覆盖整串时应保持旧的 Commit 语义: {out:?}"
+        );
+        assert!(!s.is_active(), "上屏后会话复位");
+    }
+
+    /// 不变量:**用户敲下的字母一个都不能少**。
+    ///
+    /// 「已消耗的字母 + 剩余输入串」恒等于敲过的字母数——改动前选一段会
+    /// 把后面的字母静默丢掉(既不进文档、也不留在串里),这条断言就是钉
+    /// 那个缺陷。
+    #[test]
+    fn segmented_commits_never_drop_typed_letters() {
+        let mut s = session_with_segments();
+        let typed = "womenjintian";
+        for c in typed.chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let mut consumed = 0usize;
+        for step in 0..8 {
+            if s.pinyin().is_empty() {
+                break;
+            }
+            let c = s.candidates.first().cloned().unwrap_or_else(|| {
+                panic!("第 {step} 步:非空输入串必须有候选(回声兜底是最后一道)")
+            });
+            let covered = if c.covered == 0 {
+                s.pinyin().len()
+            } else {
+                c.covered
+            };
+            s.handle(InputEvent::Space).expect("不应失败");
+            consumed += covered;
+            assert_eq!(
+                consumed + s.pinyin().len(),
+                typed.len(),
+                "第 {step} 步:消耗 {consumed} + 剩余 {} 应等于 {}(字母丢失)",
+                s.pinyin().len(),
+                typed.len()
+            );
+            assert!(
+                typed.ends_with(s.pinyin()),
+                "剩余串必须是原串的后缀,实际 {:?}",
+                s.pinyin()
+            );
+        }
+    }
+
+    /// 逐段上屏**整词**不是造词场景:只有「全部片段都是单字」才够格造成
+    /// 用户词条(见 [`COIN_ALL_SEGMENTS_SINGLE_CHAR`] 的判据)。
+    ///
+    /// 分段上屏会让「一次组合里连续上屏多个整词」变得常见,这条测试保证
+    /// 它不会把整句粘进用户词库——那正是之前修掉的「造词失控」的新入口。
+    #[test]
+    fn segmented_commits_of_whole_words_do_not_coin_a_phrase() {
+        let (engine, mut s) = session_for_coin(&[
+            ("我们", "wo men", 300),
+            ("我", "wo", 500),
+            ("今天", "jin tian", 300),
+        ]);
+        let user = engine.user_lm().expect("应有用户层");
+        assert_eq!(user.entry_len(), 0, "初始无造词条目");
+
+        for c in "womenjintian".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "我们")
+            .expect("候选里应有「我们」");
+        s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "今天")
+            .expect("剩余串的候选里应有「今天」");
+        s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+        s.break_coin_run();
+        assert_eq!(
+            user.entry_len(),
+            0,
+            "连续上屏两个整词不该造词(两个片段都不是单字)"
+        );
+    }
+
+    /// 标点跟在分段上屏之后:标点跟着那一段走,剩余串继续组合。
+    #[test]
+    fn punctuation_after_a_segment_keeps_the_rest_composing() {
+        let mut s = session_with_segments();
+        for c in "womenjintian".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "我们")
+            .expect("候选里应有「我们」");
+        s.cursor = idx;
+        let out = s.handle(InputEvent::Char(',')).expect("不应失败");
+        match out {
+            SessionOutput::CommitSegment { text, update } => {
+                assert_eq!(text, "我们，", "标点跟在这一段后面一起上屏");
+                assert_eq!(update.preedit, "jintian", "剩余串继续组合");
+            }
+            other => panic!("期望 CommitSegment,实际 {other:?}"),
+        }
+    }
+
+    /// `commit_at`(不经 `handle` 的低层出口)也要把剩余串的候选刷成新的,
+    /// 否则调用方读到的是「剩余串 + 旧候选」这种自相矛盾的会话。
+    #[test]
+    fn commit_at_refreshes_candidates_for_the_remaining_input() {
+        let mut s = session_with_segments();
+        for c in "womenjintian".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == "我们")
+            .expect("候选里应有「我们」");
+        let word = s.commit_at(idx).expect("应有候选");
+        assert_eq!(word, "我们");
+        assert_eq!(s.pinyin(), "jintian");
+        let expected = s
+            .engine
+            .lookup_candidates("jintian", &s.lm_context())
+            .expect("查询失败");
+        assert_eq!(
+            s.candidates.first().map(|c| c.word.clone()),
+            expected.first().map(|c| c.word.clone()),
+            "剩余串的候选应与引擎对该串的查询一致"
+        );
+    }
+
+    /// 点击越界/无候选时不做任何事(不 panic、不动状态)。
+    #[test]
+    fn clicking_an_out_of_range_candidate_is_a_noop() {
+        let mut s = session_with_segments();
+        for c in "women".chars() {
+            s.handle(InputEvent::Char(c)).expect("不应失败");
+        }
+        let before = s.pinyin().to_owned();
+        let out = s
+            .handle(InputEvent::CandidateClicked(999))
+            .expect("不应失败");
+        assert!(matches!(out, SessionOutput::Noop), "越界点击应无事发生");
+        assert_eq!(s.pinyin(), before);
     }
 
     #[test]

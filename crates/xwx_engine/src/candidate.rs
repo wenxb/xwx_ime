@@ -135,6 +135,23 @@ pub struct Candidate {
     /// 处理——这正是字段引入前的语义,旧候选全是真实候选。
     #[serde(default)]
     pub echo: bool,
+    /// 该候选**覆盖了输入串开头的多少字节**(分段上屏的依据)。
+    ///
+    /// 值 = `covered`,即选中它时应从输入串首部消耗掉的字节数:
+    /// - 格边候选 = 该边在**原始输入串**里的终点(如 `womenjintian` 的
+    ///   「我们」→ 5);
+    /// - 兜底前缀联想 = 它实际匹配到的那个可切分前缀长度;整串联想、
+    ///   简拼层、回声候选 = 整串长度。
+    ///
+    /// **`0` 的语义是「未知/整串」**:词典直接产出的条目、反序列化来的
+    /// 旧数据、以及任何没被引擎回填的场景都保持 `0`,会话层遇到 `0`
+    /// 按**整串消耗**处理——这正是本字段引入前的行为(上屏即复位),
+    /// 因此旧数据/旧调用方的语义逐字节不变,不会出现「只消耗 0 字节、
+    /// 输入串原地不动」这种把键盘卡死的退化。
+    ///
+    /// 序列化向后兼容:旧数据没有此字段,反序列化回落到 `0`。
+    #[serde(default)]
+    pub covered: usize,
 }
 
 impl<'de> Deserialize<'de> for Candidate {
@@ -157,6 +174,8 @@ impl<'de> Deserialize<'de> for Candidate {
             fuzzy: Option<bool>,
             #[serde(default)]
             echo: bool,
+            #[serde(default)]
+            covered: usize,
         }
         let r = Repr::deserialize(deserializer)?;
         Ok(Candidate {
@@ -169,6 +188,7 @@ impl<'de> Deserialize<'de> for Candidate {
                 .or_else(|| r.fuzzy.map(SpellingKind::from))
                 .unwrap_or_default(),
             echo: r.echo,
+            covered: r.covered,
         })
     }
 }
@@ -183,6 +203,7 @@ impl Candidate {
             freq,
             spelling: SpellingKind::Exact, // 词典条目是精确匹配;分层信息由引擎回填
             echo: false, // 词典条目是真实候选;回声标记由引擎追加时设置
+            covered: 0,  // 未知/整串:由引擎在候选来源处回填(见字段文档)
         }
     }
 }
@@ -250,6 +271,25 @@ mod tests {
         assert!(!c.echo, "缺省 echo 应为 false(真实候选)");
         assert_eq!(c.word, "你好");
         assert_eq!(c.freq, 42);
+    }
+
+    #[test]
+    fn serde_legacy_without_covered_defaults_whole_string() {
+        // 字段引入前的旧格式没有 `covered`:反序列化回落 0,而 0 的语义是
+        // 「未知/整串」——旧数据在会话层照旧整串消耗(改动前行为),
+        // 不会退化成「消耗 0 字节」。
+        let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42,"echo":false}"#;
+        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
+        assert_eq!(c.covered, 0, "缺省 covered 应为 0(=未知/整串)");
+    }
+
+    #[test]
+    fn serde_covered_roundtrips() {
+        let mut c = Candidate::new("我们", "wo men", 10);
+        c.covered = 5;
+        let json = serde_json::to_string(&c).expect("序列化不应失败");
+        let back: Candidate = serde_json::from_str(&json).expect("反序列化不应失败");
+        assert_eq!(back.covered, 5);
     }
 
     #[test]
