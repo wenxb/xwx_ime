@@ -673,7 +673,14 @@ impl MmapDict {
         let Some(idx) = &self.abbrev else {
             return Ok(Vec::new());
         };
-        idx.lookup_prefix(abbrev)
+        let mut out = idx.lookup_prefix(abbrev)?;
+        // **一字一字母**(2026-10-02):副索引按 key 前缀匹配,`wsm` 会连带命中
+        // key 更长的 `wsmy`(为什么要/为什么会……实测 356 条里 276 条如此),
+        // 候选比输入字母还多字,按用户口径排除。判据用候选自带的**全拼音节数**
+        // 而不是 key 长度:key 里 `zh`/`ch`/`sh` 可能是两个字母一个音节。
+        let letters = abbrev.len();
+        out.retain(|c| c.pinyin.split(' ').count() <= letters);
+        Ok(out)
     }
 
     /// 混合简拼查询:`zhongguor` → 中国人,`nhao` → 您好。
@@ -946,12 +953,30 @@ fn is_full_pinyin(input: &str, table: &[&str]) -> bool {
             continue;
         }
         for s in table {
-            if input[i..].starts_with(s) {
+            if syllable_matches(s, &input.as_bytes()[i..]) {
                 reachable[i + s.len()] = true;
             }
         }
     }
     reachable[n]
+}
+
+/// 规范音节与输入串在当前位置是否匹配——**全项目唯一的音节匹配口径**
+/// ([`is_full_pinyin`]/[`partial_tail_readings`]/[`segment_prefix`]/
+/// `segment_input`/`MixedDfs::dfs` 五处都走这里,否则会出现「这条路的
+/// 切分认得、那条路的不认得」)。
+///
+/// 等价写法(üe 的 `lue`/`nue`)由 [`crate::segmenter::canonical_syllable`]
+/// 归一,规则只有那一处。两种写法同为 3 字节,调用方按 `syl.len()` 前进即可。
+fn syllable_matches(syl: &str, rest: &[u8]) -> bool {
+    if rest.len() < syl.len() {
+        return false;
+    }
+    let head = &rest[..syl.len()];
+    if head == syl.as_bytes() {
+        return true;
+    }
+    std::str::from_utf8(head).is_ok_and(|h| crate::segmenter::canonical_syllable(h) == syl)
 }
 
 /// 「完整音节前缀 + 尾巴」的全部读法(T2:末尾半音节)。
@@ -975,7 +1000,7 @@ fn partial_tail_readings(input: &str, table: &[&str]) -> Vec<(String, usize)> {
             continue;
         }
         for s in table {
-            if input[i..].starts_with(s) {
+            if syllable_matches(s, &input.as_bytes()[i..]) {
                 reach[i + s.len()] = true;
             }
         }
@@ -1016,7 +1041,7 @@ fn segment_prefix(s: &str, table: &[&str]) -> Option<String> {
             continue;
         }
         for syl in table {
-            if s[i..].starts_with(syl) {
+            if syllable_matches(syl, &s.as_bytes()[i..]) {
                 reach[i + syl.len()] = true;
             }
         }
@@ -1032,7 +1057,7 @@ fn segment_prefix(s: &str, table: &[&str]) -> Option<String> {
             let len = syl.len();
             if len <= end
                 && reach[end - len]
-                && s[end - len..].starts_with(syl)
+                && syllable_matches(syl, &s.as_bytes()[end - len..])
                 && picked.is_none_or(|(_, best): (_, usize)| len > best)
             {
                 picked = Some((*syl, len));
@@ -1167,6 +1192,16 @@ impl MixedDfs<'_> {
     /// 否则前缀是完整音节序列,只收与它完全相等的 key。
     fn collect(&mut self, prefix: &[u8], mid_syllable: bool) -> Result<(), DictError> {
         let dict = self.dict;
+        // **一字一字母**(2026-10-02):`mid_syllable` 时前缀停在末位声母上,
+        // 而字节前缀匹配会把「这个音节之后**还有**音节」的 key 一起扫进来
+        // (`wei shen m` 既命中 `wei shen me`,也命中 `wei shen me yao`)。
+        // 后者比输入字母还多字,按用户口径必须排除。前缀里的空格数 + 1 是它
+        // 已占的音节位,残余部分每多一个空格就再多一个字。
+        let prefix_spaces = if mid_syllable {
+            prefix.iter().filter(|&&b| b == b' ').count()
+        } else {
+            0
+        };
         let mut i = self.lower_bound(prefix)?;
         while i < dict.pinyin_count {
             if self.budget == 0 {
@@ -1178,6 +1213,17 @@ impl MixedDfs<'_> {
             let k = dict.slice(dict.strings_off + rec.str_off, rec.str_len)?;
             if !k.starts_with(prefix) {
                 return Ok(());
+            }
+            // 字数不得超过输入字母数(见上)。key 顺序不与音节数单调,故只跳过
+            // 这一条,不能像 `!mid_syllable` 那样提前收工。
+            if mid_syllable
+                && prefix_spaces
+                    + 1
+                    + k[prefix.len()..].iter().filter(|&&b| b == b' ').count()
+                    > self.input.len()
+            {
+                i += 1;
+                continue;
             }
             // **整 key 跳过**(分支界限):词块内 freq 降序,若这个 key 的最高
             // 词频都低于「收集池第 N 名的下界」,它一条都进不了最终列表。
@@ -1243,7 +1289,7 @@ impl MixedDfs<'_> {
         for idx in 0..n {
             let s: &'static str = self.by_len[idx];
             let sb = s.as_bytes();
-            if !rest.starts_with(sb) {
+            if !syllable_matches(s, rest) {
                 continue;
             }
             let np = joined(prefix, sb);
@@ -1301,7 +1347,7 @@ fn segment_input(input: &str, table: &[&str]) -> Vec<(Vec<String>, String)> {
         }
         let mut matched = false;
         for syl in by_len {
-            if s[pos..].starts_with(syl) {
+            if syllable_matches(syl, &s.as_bytes()[pos..]) {
                 syls.push((*syl).to_owned());
                 rec(s, pos + syl.len(), by_len, syls, out);
                 syls.pop();
@@ -1956,5 +2002,38 @@ mod tests {
             "早停应把结果限制在 500 条内,实际 {}", res.len());
         assert_eq!(res.len(), MAX_LOOKUP_RESULTS as usize,
             "xx 命中远超 500,应恰好截到 500(证明是早停而非全扫)");
+    }
+
+    /// **一字一字母(2026-10-02)**:副索引是按 key 前缀匹配的,`wsm` 会连带
+    /// 命中 key 更长的 `wsmy`(为什么要/为什么会……),候选比输入字母还多字。
+    /// 用户口径:候选字数不得超过输入字母数,故 `lookup_abbrev` 按**候选全拼
+    /// 的音节数**过滤(不用 key 长度:key 里 `zh`/`ch`/`sh` 可能两字母一个音节)。
+    ///
+    /// 失败见证:把 `lookup_abbrev` 里的 `retain` 去掉 → 红(实测 `wsm` 356
+    /// 条里 276 条超长、`zgr` 337 条里 292 条超长)。
+    #[test]
+    fn real_abbrev_index_never_returns_more_characters_than_letters() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let dict = MmapDict::open(&dict_path).expect("词库加载失败")
+            .with_abbrev(&abbrev_path);
+        for input in ["wsm", "zgr", "ky", "zho", "sh", "zh", "n", "w"] {
+            let res = dict.lookup_abbrev(input).expect("副索引查询失败");
+            let over: Vec<_> = res.iter()
+                .filter(|c| c.pinyin.split(' ').count() > input.len())
+                .map(|c| (&c.word, &c.pinyin))
+                .collect();
+            assert!(over.is_empty(), "`{input}` 出现字数 > 字母数的候选: {over:?}");
+        }
+        // 界限不得误杀:`wsm` 仍要给出「为什么」(key 恰好等于输入)。
+        let res = dict.lookup_abbrev("wsm").expect("副索引查询失败");
+        assert!(
+            res.iter().any(|c| c.word == "为什么"),
+            "`wsm` 仍须给出「为什么」: {:?}",
+            res.iter().take(5).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
+        );
     }
 }

@@ -13,9 +13,9 @@
 早已过期——文档腐烂和判据腐烂是同一类病，见第 3 节）：
 
 ```
-git log --oneline    →  21 个提交（工作区还有本轮未提交的改动）
+git log --oneline    →  22 个提交（工作区干净；`AGENTS.md` 是本地文件，刻意未跟踪）
 cargo test --workspace --offline
-                     →  286 passed / 0 failed / 1 ignored（= 223 + 5 + 9 单元 + 49 集成）
+                     →  290 passed / 0 failed / 1 ignored（= 227 + 5 + 9 单元 + 49 集成）
 cargo clippy --workspace --all-targets -- -D warnings
                      →  全绿（这是硬门槛，见 PLAN.md 第三节「工程卫生」）
 ```
@@ -373,6 +373,41 @@ T2（末尾半音节）踩到三件事：
 >
 > 附带一条探针陷阱：`ProcessKeyEvent` 的签名是 `(keyval, keycode, state)`，
 > 参数错位（keyval 传 0）会得到 `(false,)` 的假象，看着像「英文模式」。
+
+### ⑲ ü 的匹配口径必须全层共享；简拼要「一字一字母」（2026-10-02）
+
+> **一、一个词的名次取决于「哪个层看见它」。** 词库把 ü 写成 `v`（`lve`/`nve`），
+> 用户按 `lue`/`nue` 打——`hulue` 打不出「忽略」、`lue` 打不出「略」、
+> `nuedai` 打不出「虐待」。规则只有一条（`lue`→`lve`、`nue`→`nve`），但**落在
+> 三处**，漏一处就残：
+> 1. `segmenter::canonical_syllable` —— 唯一口径，`Segmenter::is_syllable`/`segment`
+>    都走它，且**切分结果里放规范写法**；
+> 2. `dict.rs::syllable_matches` —— `is_full_pinyin`/`partial_tail_readings`/
+>    `segment_prefix`/`segment_input`/`MixedDfs::dfs` **五处共用**，别各写一份；
+> 3. `lib.rs::build_lattice` —— **推进链里必须放规范写法**，因为 `chain.join(" ")`
+>    就是查词库的 key。
+>
+> 第 3 处漏掉的代价最直观：候选构造完全正确，但格子拼出的 key 是 `hu lue`（查不到），
+> 于是只能从简拼层兜底进来 —— 层序从 `Exact` 变 `Abbrev`，同一个词、同一个分数，
+> 名次 **#1 → #59**。**「候选对了」不等于「排序也认」：要看 `spelling` 层序。**
+>
+> **口径（用户拍板）**：只认 üe 这一组；`lu`/`nu` 是「路/努」的合法全拼，
+> **不**当 `lv`/`nv`（否则打 `nu` 会混进「女」，打 `lu` 混进「绿」）。
+>
+> **二、一字一字母：简拼候选的字数不得超过输入字母数。** 用户报「`wsm` 出现四个字」。
+> 三个来源都要堵，少一个都漏：
+> - 副索引 `lookup_abbrev`：按 key 前缀匹配，`wsm` 命中 `wsmy`（为什么要）；
+> - `MixedDfs::collect` 的末位声母分支：`wei shen m` 是**字节前缀**，
+>   `wei shen me yao` 也满足「以它开头」；
+> - `fallback_candidates` 的前缀联想：`zho` 捞出 `zhong a guan xi`（中阿关系）。
+>
+> 判据用**候选全拼的音节数**，不用 key 长度（key 里 `zh`/`ch`/`sh` 可能两字母一个
+> 音节）。实测 `wsm` 100 条里 78 条超长、`zgr` 83 条、副索引 `wsm` 356 条里 276 条
+> 超长；修完全部归零。**只在这三层过滤**：用户 LM 里学过的词不在此列——那是用户
+> 自己显式教的，不该被规则抹掉。
+>
+> 代价（用户已确认接受）：短输入的候选变少（打 `w` 只剩单字，不再有 我们/为什么），
+> 全拼与 `nhao`/`meiy`/`women`/`diannao` 这类既有简拼输入的前 10 一条没动。
 
 ## 2. 已知的「刻意代价」（不是 bug，别去"修"）
 

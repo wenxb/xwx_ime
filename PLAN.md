@@ -10,7 +10,7 @@
 > [`docs/gear-audit.md`](docs/gear-audit.md) 组件审计 ·
 > [`docs/design-batch1.md`](docs/design-batch1.md) 早期设计。
 >
-> **当前状态**：测试 **286 passed / 1 ignored**（237 单元 + 49 D-Bus 集成），
+> **当前状态**：测试 **290 passed / 1 ignored**（241 单元 + 49 D-Bus 集成），
 > clippy `-D warnings` **全绿**；仓库无远端。gear 审计已清零——简拼（纯 + 混合）、
 > 中文标点、可编辑输入缓冲、Shift 大写、造词、`,`/`.` 翻页、`'` 分隔符、
 > Ctrl+Delete、邮箱/网址识别全部可用，全拼行为无退化。
@@ -116,7 +116,7 @@ python3 tools/compare.py /tmp/oracle.txt /tmp/xwx.txt tools/corpus/basic.txt
 
 ### ⚠ 实机验证（现在最该做的一件事）
 
-**286 passed 里已含 49 条 D-Bus 集成测试**（私有总线 + 真实引擎进程），
+**290 passed 里已含 49 条 D-Bus 集成测试**（私有总线 + 真实引擎进程），
 所以下面这些路径**不再是「结构上摸不到」**——已被自动化覆盖：
 英文模式透传（`engine.rs` 的 `process_key_event` 直接 `return false`）、
 `UpdatePreeditText` / `UpdateLookupTable` / `CommitText` 三个信号的内容与字段

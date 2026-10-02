@@ -778,3 +778,41 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 > **教训：验证要用隔离的 IBus 环境（集成测试那套私有总线），或者干脆别跑真实
 > 二进制**——只改 `XDG_DATA_HOME` 会把总线地址一起改没。另：`ProcessKeyEvent`
 > 签名是 `(keyval, keycode, state)`，探针里参数错位会得到 `(false,)` 的假象。
+
+## 2026-10-02（六）ü 的键盘写法与简拼「一字一字母」
+
+### 起因（用户报两条）
+- `hulue` 打不出「忽略」（候选里只有 `hu lu` 系的 葫芦/呼噜/护路），`lue` 打不出「略」、
+  `nuedai` 打不出「虐待」：词库把 ü 记成 `v`（`lve`/`nve`），用户按 `u` 打。
+- `wsm` 第一次就给「为什么要 / 为什么会 / 为什么不 / 为什么呢」等四个字；`zgr` 给
+  「中国人民 / 最高人民法院」。用户口径：**候选字数不得超过输入字母数**。
+
+### 修法
+- **üe 归一只留一处**：`segmenter::canonical_syllable`（`lue`→`lve`、`nue`→`nve`，
+  **只这两个**，`lu`/`nu` 不动）。`Segmenter::is_syllable`/`segment`、
+  `dict.rs::syllable_matches`（`is_full_pinyin` / `partial_tail_readings` /
+  `segment_prefix` / `segment_input` / `MixedDfs::dfs` 五处共用）、
+  `lib.rs::build_lattice` 全部走它；**切分结果与推进链里放的都是词库写法**。
+- **一字一字母**（候选音节数 ≤ 输入字母数）：`lookup_abbrev`、
+  `MixedDfs::collect` 的 `mid_syllable` 分支、`fallback_candidates` 末尾各加一道过滤。
+  用户 LM 不在过滤范围——那是用户显式教过的词。
+
+### 验证（release、真实词库 186 万条 + 万象）
+| 输入 | 目标词名次（前 → 后） |
+|---|---|
+| `hulue` | 忽略 **缺席 → #1**（层序 Exact） |
+| `lue` | 略 **缺席 → #1** |
+| `nuedai` | 虐待 **缺席 → #1** |
+| `nuren` | 女人 仍缺席（口径：`lu`/`nu` 不当 ü） |
+| `hulve` / `lve` / `nvedai` / `nvren` | 全部仍 #1，名次不变 |
+
+超长候选（字数 > 字母数）条数，前 → 后：`wsm` 78→0、`zgr` 83→0、`ky` 12→0、
+`zho` 13→0、`sh` 1→0、`xian` 1→0、`nih` 27→0、`beijin` 4→0、`zhongg` 5→0（其余本来 0）。
+26 个输入逐条对拍：全拼与 `nhao`/`meiy`/`women`/`diannao`/`nihao`/`feicde`/`zgren`/`zhongg`
+等既有简拼输入的前 10 一条没动。
+
+延迟（`examples/abbrev_bench.rs`，门槛 5ms）：`zhongg` 2.84ms、`zhongguor` 4.97ms、
+`nhao` 1.50ms、`zzzz` 1.96ms、`zhzhzhzh` 3.26ms —— 与改动前同档。
+
+新测试 4 条，**六处定向破坏**逐一确认会红：去掉 `lue→lve`、多加 `lu→lv`、
+`build_lattice` 不归一、`lookup_abbrev` 不过滤、`collect` 不过滤、`fallback` 不过滤。

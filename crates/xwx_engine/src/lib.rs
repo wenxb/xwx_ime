@@ -892,7 +892,11 @@ impl ImeEngine {
             if bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x < pos + len)) {
                 continue;
             }
-            let syl = &pinyin[pos..pos + len];
+            // 归一成词库写法(`lue`→`lve`、`nue`→`nve`)后再判合法性,且
+            // **推进链里放的是规范写法**:下面的 `chain.join(" ")` 就是查
+            // 词库的 key(`hu lue` 查不到 忽略,`hu lve` 才能)。两种写法同为
+            // 3 字节,`end = pos + len` 仍按输入原文推进。
+            let syl = segmenter::canonical_syllable(&pinyin[pos..pos + len]);
             if !self.segmenter.is_syllable(syl) {
                 continue;
             }
@@ -1170,6 +1174,13 @@ impl ImeEngine {
                 merged.extend(self.dict.lookup_prefix(pinyin)?);
             }
         }
+
+        // **一字一字母**(2026-10-02):上面的 `lookup_prefix`/`lookup_prefix_limited`
+        // 是「pinyin 以它开头」的匹配,`zho` 会把 `zhong a guan xi`(中阿关系)
+        // 这类**比输入字母还多字**的词一并捞进来(实测 100 条里 4 条)。用户口径:
+        // 候选的字数不得超过输入字母数。只在这一层过滤——用户 LM 里学过的词
+        // 不在此列,那是显式行为。
+        merged.retain(|c| c.pinyin.split(' ').count() <= pinyin.len());
 
         let state = self.lm.state_from_context(ctx);
         // 与 decode_beam 同一打分公式：log10(freq/总词频) + lm_weight × logp
@@ -2635,6 +2646,104 @@ mod tests {
             exact_scores.windows(2).all(|w| w[0] >= w[1]),
             "同桶精确层内仍按分降序: {exact_scores:?}"
         );
+    }
+
+    /// ü 的另一种键盘写法(真实词库):`lue`/`nue` 必须能打到词库里的
+    /// `lve`/`nve` 音节——用户报的「`hulue` 打不出 忽略」正是这个。
+    ///
+    /// 关键在于**走主切分层**:分词器把 `lue` 归一成 `lve` 之后,格子里才
+    /// 有 `hu lve` 这条边,候选才是 `Exact`。不归一的话(D-C 之前的实测)
+    /// 候选只能从简拼层兜底进来,层序是 `Abbrev`,排在所有 `Exact` 之后
+    /// ——同一个词、同一个分数,名次从第 1 掉到第 59。
+    ///
+    /// 失败见证:把 `build_lattice` 里的 `segmenter::canonical_syllable(...)`
+    /// 换回 `&pinyin[pos..pos + len]` → 红(`忽略` 变 `Abbrev`、位次跌出前 10);
+    /// 给 `segmenter::canonical_syllable` 加上 `"lu" => "lv"` → 最后一条断言红。
+    #[test]
+    fn real_dict_ue_input_reaches_the_v_spelling() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+        let ctx = LmContext::empty();
+
+        for (input, word) in [("hulue", "忽略"), ("lue", "略"), ("nuedai", "虐待")] {
+            let cands = engine.lookup_candidates(input, &ctx).expect("查询失败");
+            let pos = cands.iter().position(|c| c.word == word).unwrap_or_else(|| {
+                panic!(
+                    "`{input}` 必须能打出「{word}」: 前 5 = {:?}",
+                    cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+                )
+            });
+            assert_eq!(
+                cands[pos].spelling,
+                SpellingKind::Exact,
+                "`{input}` 的「{word}」应来自主切分层(不是简拼层兜底): 第 {} 名",
+                pos + 1
+            );
+            assert!(pos < 10, "`{input}` 的「{word}」应在前 10: 第 {} 名", pos + 1);
+        }
+
+        // 用户明确否掉的口径:`lu`/`nu` 是「路/努」,不当 ü ——
+        // 打 `nuren` 不得混进「女人」。
+        let cands = engine.lookup_candidates("nuren", &ctx).expect("查询失败");
+        assert!(
+            !cands.iter().any(|c| c.word == "女人"),
+            "`nuren` 不得出现「女人」(`lu`/`nu` 不合并到 `lv`/`nv`): {:?}",
+            cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+    /// **一字一字母**(真实词库):简拼输入下,候选的字数不得超过输入字母数
+    /// ——用户报的「`wsm` 出现四个字」。
+    ///
+    /// 三个来源都要堵,少一个都还有漏网:副索引 `lookup_abbrev`(key 前缀
+    /// 匹配,`wsm` 命中 `wsmy`)、`MixedDfs::collect` 的末位声母分支
+    /// (`wei shen m` 是字节前缀,`wei shen me yao` 也满足)、兜底联想的
+    /// `lookup_prefix*`(`zho` 捞出 `zhong a guan xi`)。
+    ///
+    /// 失败见证:分别去掉这三处的过滤 → `wsm`(78 条超长)、`zho`(13 条)、
+    /// `sh`(1 条)各自变红。
+    #[test]
+    fn real_dict_candidates_never_exceed_one_character_per_letter() {
+        let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+        if !dict_path.is_file() || !abbrev_path.is_file() {
+            return;
+        }
+        let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+        engine.dict = engine.dict.with_abbrev(&abbrev_path);
+        let ctx = LmContext::empty();
+
+        for input in ["wsm", "zgr", "ky", "zho", "sh", "zh", "xian", "nih", "w"] {
+            let cands = engine.lookup_candidates(input, &ctx).expect("查询失败");
+            let over: Vec<_> = cands
+                .iter()
+                .filter(|c| c.word.chars().count() > input.len())
+                .map(|c| (&c.word, &c.pinyin))
+                .collect();
+            assert!(over.is_empty(), "`{input}` 出现字数 > 字母数的候选: {over:?}");
+        }
+
+        // 界限不得误杀目标词:简拼该给的一个都不能少。
+        for (input, word) in [
+            ("wsm", "为什么"),
+            ("zgr", "中国人"),
+            ("zgr", "这个人"),
+            ("ky", "可以"),
+            ("zho", "中国"),
+            ("xian", "西安"),
+        ] {
+            let cands = engine.lookup_candidates(input, &ctx).expect("查询失败");
+            assert!(
+                cands.iter().any(|c| c.word == word),
+                "`{input}` 仍须给出「{word}」: {:?}",
+                cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+            );
+        }
     }
 
     /// B4 层间边界(真实词库):同覆盖度内,层序必须整体非降——

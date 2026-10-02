@@ -105,6 +105,21 @@ pub(crate) const MAX_SYLLABLE_LEN: usize = 6;
 /// 兜底路径仍会以病态串为前缀，因此保留该硬上限。
 const MAX_SEGMENTATION_RESULTS: usize = 4096;
 
+/// üe 的两套键盘写法：输入里可能是 `lue`/`nue`，词库一律写 `lve`/`nve`。
+/// 本函数把输入写法归一成词库写法（其余音节原样返回），是**全项目唯一的
+/// ü 口径**——[`Segmenter`] 的匹配与 `dict.rs` 的音节匹配都走它，免得
+/// 「分词器认得、词库匹配不认得」。
+///
+/// **只限这两个音节**：`lu`/`nu` 本身就是「路/努」的合法全拼，不能当
+/// `lv`/`nv`（否则打 `nu` 会混进「女」），用户已明确否掉。
+pub(crate) fn canonical_syllable(syl: &str) -> &str {
+    match syl {
+        "lue" => "lve",
+        "nue" => "nve",
+        other => other,
+    }
+}
+
 /// 拼音切分器：持有一张音节集合，提供查音节与 DP 切分。
 #[derive(Debug, Clone, Default)]
 pub struct Segmenter {
@@ -119,9 +134,9 @@ impl Segmenter {
         }
     }
 
-    /// 判断一个字符串是否是合法音节。
+    /// 判断一个字符串是否是合法音节（`lue`/`nue` 按 üe 算合法）。
     pub fn is_syllable(&self, s: &str) -> bool {
-        self.syllables.contains(s)
+        self.syllables.contains(canonical_syllable(s))
     }
 
     /// 返回 `input` 的**所有**合法音节切分。
@@ -170,7 +185,10 @@ impl Segmenter {
         // 依次尝试 1..=max_len 长的前缀是否构成音节；前缀长度升序，
         // 保证结果顺序确定（短音节切分在前）。
         for len in 1..=max_len {
-            let syl = &input[pos..pos + len];
+            // 归一成词库写法后再查表：`lue` 命中 `lve`、`nue` 命中 `nve`，
+            // 且**切分结果里放的是规范写法**（`dict.lookup` 的 key 用它拼）。
+            let raw = &input[pos..pos + len];
+            let syl = canonical_syllable(raw);
             if !self.syllables.contains(syl) {
                 continue;
             }
@@ -228,6 +246,32 @@ mod tests {
     fn no_segmentation() {
         assert!(segs("qqq").is_empty());
         assert!(segs("你好").is_empty());
+    }
+
+    /// üe 的两种键盘写法:`lue`/`nue` 与词库的 `lve`/`nve` 等价,且切分结果
+    /// 必须是**词库写法**(`dict.lookup` 的 key 靠它拼)。**只限 üe**:
+    /// `lu`/`nu` 是「路/努」的合法全拼,不得当成 `lv`/`nv`(用户 2026-10-02 口径)。
+    ///
+    /// 失败见证:把 `canonical_syllable` 的 `"lue" => "lve"` 去掉 → 红
+    /// (切分退化成 `lu`+`e`);把 `"lu" => "lv"` 加进去 → 「nu 不得切出 nv」红。
+    #[test]
+    fn ue_accepts_both_spellings_but_lu_is_not_lv() {
+        let s = Segmenter::new();
+        assert!(s.is_syllable("lue") && s.is_syllable("lve"));
+        assert!(s.is_syllable("nue") && s.is_syllable("nve"));
+        assert!(s.is_syllable("lu") && s.is_syllable("nu"));
+
+        let r = segs("hulue");
+        assert!(
+            r.contains(&vec!["hu".into(), "lve".into()]),
+            "`hulue` 必须切出词库写法 hu+lve(否则「忽略」查不到): {r:?}"
+        );
+        assert!(
+            r.contains(&vec!["hu".into(), "lu".into(), "e".into()]),
+            "原来的 hu+lu+e 读法不得消失: {r:?}"
+        );
+        let n = segs("nu");
+        assert_eq!(n, vec![vec!["nu".to_string()]], "`nu` 不得被切出 `nv`(女)");
     }
 
     #[test]
