@@ -705,7 +705,9 @@ impl ImeEngine {
             let tolerant_suffix = self.backward_completion(pinyin, ctx, &tolerant_lattice)?;
             tolerant_explains = tolerant_suffix[0].is_finite();
             if tolerant_explains {
-                let tolerant = self.lattice_candidates(pinyin, ctx, &tolerant_lattice)?;
+                // 复用上面那次后向 DP(`lattice_candidates` 会再算一遍)。
+                let tolerant =
+                    self.lattice_candidates_scored(ctx, &tolerant_lattice, &tolerant_suffix)?;
                 let tolerant_best = tolerant
                     .iter()
                     .map(|c| c.score)
@@ -793,6 +795,20 @@ impl ImeEngine {
         // 先跑后向 DP 拿「每个位置到串尾的最优补全分」,再给 lattice[0]
         // 上每条边打分。
         let best_suffix = self.backward_completion(pinyin, ctx, lattice)?;
+        self.lattice_candidates_scored(ctx, lattice, &best_suffix)
+    }
+
+    /// [`Self::lattice_candidates`] 的主体,但后向 DP 由调用方传入。
+    ///
+    /// 容错路径上这个 DP 已经被算过一次(判「容错格有没有走到底」),
+    /// 再让 `lattice_candidates` 自己算一遍就是把整张格的 LM 打分做两次
+    /// ——长串上实测约 0.4ms 的纯重复开销。
+    fn lattice_candidates_scored(
+        &self,
+        ctx: &LmContext<'_>,
+        lattice: &[Vec<LatticeEdge>],
+        best_suffix: &[f32],
+    ) -> Result<Vec<Candidate>, EngineError> {
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
 
@@ -856,7 +872,7 @@ impl ImeEngine {
             }
         }
 
-        Ok(best.into_values().collect())
+        Ok(ordered_candidates(best))
     }
 
     /// 窗口里是否含元音(`v` 记 ü,也算)。
@@ -1074,7 +1090,7 @@ fn window_has_vowel(window: &str) -> bool {
                 *entry = c;
             }
         }
-        Ok(best.into_values().collect())
+        Ok(ordered_candidates(best))
     }
 
     /// 位置 `pos` 是否允许开容错弧(现在恒为「允许」,`center` 只表示
@@ -1696,7 +1712,7 @@ fn window_has_vowel(window: &str) -> bool {
                 *entry = c;
             }
         }
-        ranked = best.into_values().collect();
+        ranked = ordered_candidates(best);
         if enum_expand_used {
             // 枚举展开的第二遍去重(键 = word):逐音节查询会把多音字的
             // 每个读音都捞出来(如「这」同时挂在 zhe/zhei 下),同一个字
@@ -1718,7 +1734,7 @@ fn window_has_vowel(window: &str) -> bool {
                     *entry = c;
                 }
             }
-            ranked = best_by_word.into_values().collect();
+            ranked = ordered_candidates(best_by_word);
         }
         sort_candidates(pinyin, &mut ranked);
         ranked.truncate(MAX_CANDIDATES);
@@ -1729,6 +1745,23 @@ fn window_has_vowel(window: &str) -> bool {
 /// 候选按最终排序规则排好(u_min 桶 → 层序 → 分数−覆盖罚分 → 同分
 /// 频次降序 → 再按词/拼音),保证输出确定性与亲和性(旧实现同分时
 /// 顺序任意,依赖 HashMap 序)。排序键的构成与理由见函数内注释。
+/// `HashMap` 的精简输出转成**有确定顺序**的 `Vec<Candidate>`。
+///
+/// 为什么不能直接取 `into_values`:`HashMap` 的迭代顺序是每进程随机化的,
+/// 而下游的去重/截断会在**同分**处保留「先遇到的那条」——于是同一个二进制
+/// 两次运行的候选顺序会不一样(实测 `sh` 第 28 名「谁」的拼音在
+/// `shei`/`shui` 之间跳、`zh` 的简拼层整段尾序不同)。一个输入法不该在两次
+/// 引擎重启之间让同一个词换位置,对拍工具也要求这里可复现。
+///
+/// 只定序、不改内容:按 (词, 全拼) 排,与 `sort_candidates` 的收尾键同式。
+fn ordered_candidates<K>(
+    map: std::collections::HashMap<K, Candidate>,
+) -> Vec<Candidate> {
+    let mut v: Vec<Candidate> = map.into_values().collect();
+    v.sort_by(|a, b| a.word.cmp(&b.word).then_with(|| a.pinyin.cmp(&b.pinyin)));
+    v
+}
+
 fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
     // 排序键 = (u_min 桶, 拼写来源层序, 分数 − 覆盖罚分, 频次降序, ...):
     //
