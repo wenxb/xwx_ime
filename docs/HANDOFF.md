@@ -350,6 +350,30 @@ T2（末尾半音节）踩到三件事：
 > 而这些词还有**整个音节没打**（`zho` 只覆盖「中」的一半，中国还有一个 `guo`）
 > ——要提前就得给「未输入的音节」加罚分（A3 补全罚分的同构做法）。
 
+### ⑱ 开发/验证环境：三件踩过的事（2026-10-02）
+
+> **一、`just dev` 的顺序不能反：先确保 daemon 在跑，再让出引擎位。**
+> 一个总线名只能一个 owner。daemon 不存在时，调试引擎会**自己拉起 daemon**，
+> 而那个 daemon 一启动就按 component XML 激活 release 引擎抢走
+> `org.freedesktop.IBus.Engine.xwx` —— recipe 里那 0.5 秒「让位窗口」因此完全
+> 失效，**第一次 dev 必报 NameTaken**。daemon 已存在时它不会立刻回拉（实测 5 轮
+> 窗口安全），所以正确顺序是：`if ! pgrep -x ibus-daemon; then ibus-daemon -rdx;
+> sleep 2; fi` → 杀掉引擎 → sleep 0.5 → exec。两个场景都实测过。
+>
+> **二、开发期用户模型要隔离。** `just dev` 起的调试引擎原先读写真实
+> `user_bigram.txt`（计数 / 造词 / Ctrl+Delete 屏蔽表三段同文件，污染后很难清）。
+> 现在 debug 构建默认走 `user_bigram.dev.txt`（`user_lm_file_name()`），
+> 优先级 `XWX_USER_LM_PATH` > debug 默认 > release 默认；`just install` 装的是
+> release，实机不受影响。
+>
+> **三、别用「真实二进制 + 改过的 `XDG_DATA_HOME`」做验证。** 我这么干过一次：
+> 它找不到 IBus 总线地址 → **自己拉起 daemon** → 那个 daemon 带着被删掉的临时
+> 数据目录，按 XML 拉起的引擎**找不到词库**，把当时正在用的输入法弄坏了几秒。
+> 要验证就走集成测试那套**私有总线**，或者干脆别跑真实二进制。
+>
+> 附带一条探针陷阱：`ProcessKeyEvent` 的签名是 `(keyval, keycode, state)`，
+> 参数错位（keyval 传 0）会得到 `(false,)` 的假象，看着像「英文模式」。
+
 ## 2. 已知的「刻意代价」（不是 bug，别去"修"）
 
 ### A3 后向 DP 的 LM 近似

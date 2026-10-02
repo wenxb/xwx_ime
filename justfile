@@ -42,13 +42,19 @@ check:
 # test + check 一把过（提交前跑这个）
 verify: check test
 
-# dev：前台跑引擎（debug，日志直接打在终端）。daemon 已经拉起过引擎时会先让出
-# 那个实例——一个总线名只能一个 owner，不让出来就是 NameTaken；让出来后 daemon
-# 会直接改用这个实例（实测有效）。
+# dev：前台跑引擎（debug，日志直接打在终端）。一个总线名只能一个 owner：
+# daemon 按 component XML 拉起过 release 引擎时要先让它让位，否则 NameTaken；
+# 让出来后 daemon 会直接改用这个实例（实测有效）。
+#
+# **先确保 daemon 在跑**，再让位——顺序反了第一次必失败（实测）：daemon 不在时
+# 调试引擎自己会拉起一个 daemon，而那个 daemon 一启动就按 XML 激活 release
+# 引擎抢走名字，0.5 秒窗口完全失效。daemon 已存在时它**不会**立刻回拉
+# （实测 5 轮窗口安全），所以这一步之后让位窗口才是可靠的。
 # 按**进程名**精确匹配（pgrep -x）而不是全命令行：全命令行匹配会连
 # 「正在执行这条命令的 shell」一起匹配上，等于自杀（调试时踩过两次）。
 dev:
     cargo build -p xwx_ime
+    if ! pgrep -x ibus-daemon >/dev/null; then ibus-daemon -rdx; sleep 2; fi
     -for pid in $(pgrep -x xwx_ime); do kill "$pid"; done
     sleep 0.5
     exec {{target_dir}}/debug/xwx_ime --ibus
