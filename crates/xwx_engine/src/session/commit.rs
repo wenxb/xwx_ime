@@ -272,6 +272,9 @@ impl InputSession {
         self.page = 0;
         self.confirmed.clear();
         self.recognized = None;
+        // 「被翻页吃掉的那个点」是**当前串**的属性,串都没了就作废
+        // (codex 审查 D8)。
+        self.pending_url_dot = None;
     }
 
     /// 焦点切换（IBus `FocusOut` / `Reset` / `Disable`）的复位。

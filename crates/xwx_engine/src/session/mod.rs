@@ -275,6 +275,14 @@ pub struct InputSession {
     last_word: Option<String>,
     /// 英文模式（中英切换）：开启时除 Shift 外的按键直接透传给应用。
     english_mode: bool,
+    /// 「用户真的敲过一个点、但它被翻页语义吃掉了」的位置（= 串长）。
+    ///
+    /// `www` 后敲 `.` 时,候选窗开着 → `.` 走翻页、不进串;下一个字母
+    /// (`www.e`) 只有凭这个记录才允许把点补回串里。旧实现靠**串形状**
+    /// 猜(`www`/`ftp` 开头 + 无点 + 补点后命中 url),于是 `wwwx` 也被
+    /// 补成 `www.x`——凭空造出用户没输入的字符(codex 审查 D8)。
+    /// 任何编辑/选词/复位都会清掉它(见 `reset`、Backspace 分支)。
+    pending_url_dot: Option<usize>,
     /// 造词缓冲:连续的「候选词上屏」暂存区(word + 其拼音)。
     ///
     /// 用户逐字/逐词选出来的整段(如 `zhangsanfeng` 分三次选

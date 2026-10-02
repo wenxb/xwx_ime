@@ -127,4 +127,5 @@ mod punct_verbatim;
 mod coin;
 mod paging_delete;
 mod prefix_mixed;
+mod url_dot;
 mod recognizer;

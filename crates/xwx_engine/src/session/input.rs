@@ -168,6 +168,13 @@ impl InputSession {
                     match c {
                         '.' | '=' => {
                             self.page = (self.page + 1).min(max_page);
+                            // 记下「真的敲过这个点」(位置 = 当前串长)。
+                            // `www.` 的点被翻页吃掉,下一个字母到来时
+                            // refresh 只有凭这条记录才允许把它补回串里
+                            // ——不靠串形状猜(codex 审查 D8)。
+                            if c == '.' {
+                                self.pending_url_dot = Some(self.pinyin.len());
+                            }
                             return Ok(SessionOutput::Updated(self.update()));
                         }
                         ',' | '-' if self.page > 0 => {
@@ -317,6 +324,7 @@ impl InputSession {
                 // (用户还在继续打字),若要求 caret 在分界处才回退,用户就得
                 // 先把剩余串一个字一个字删光——那正是要修掉的手感。
                 if !self.confirmed.is_empty() {
+                    self.pending_url_dot = None;
                     let seg = self.confirmed.pop().expect("上面判过非空");
                     self.pinyin.insert_str(0, &seg.letters);
                     // 回到「选之前那一步」的光标位置:串尾(继续打字就在后面接)。
@@ -330,6 +338,7 @@ impl InputSession {
                 // 无前字符可删,吃掉按键、状态不变——越界删除或透传
                 // 都会破坏用户预期(透传会让应用删掉自己文本框里的字)。
                 if self.caret > 0 {
+                    self.pending_url_dot = None;
                     // caret-1 必为 char 边界(串内只有单字节 ASCII)。
                     let removed = self.pinyin.remove(self.caret - 1);
                     self.caret -= removed.len_utf8();
@@ -440,13 +449,20 @@ impl InputSession {
         if self.recognized.is_none() && crate::URL_PREFIXES.contains(&self.pinyin.as_str()) {
             self.recognized = Some(crate::Recognized::Url);
         }
+        // 补点**必须凭真实敲过的那个点**:`pending_url_dot` 只能是 `.` 键
+        // 被翻页吃掉时留下的,且位置要正好落在 `www`/`ftp` 之后。旧实现
+        // 只看串形状,于是 `wwwx`(没敲点)也被补成 `www.x`(codex 审查 D8)。
         if self.recognized.is_none() && !self.pinyin.contains('.') {
             for bare in ["www", "ftp"] {
+                if self.pending_url_dot != Some(bare.len()) {
+                    continue;
+                }
                 if let Some(rest) = self.pinyin.strip_prefix(bare) {
                     if !rest.is_empty() {
                         let restored = format!("{bare}.{rest}");
                         if crate::recognize(&restored).is_some() {
                             self.pinyin = restored;
+                            self.pending_url_dot = None; // 只补一次
                             if self.caret >= bare.len() {
                                 self.caret += 1;
                             }

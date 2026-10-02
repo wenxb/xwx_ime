@@ -20,6 +20,7 @@ impl InputSession {
             coin_buffer: Vec::new(),
             confirmed: Vec::new(),
             recognized: None,
+            pending_url_dot: None,
         }
     }
 
