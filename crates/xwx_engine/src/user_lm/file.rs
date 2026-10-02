@@ -185,13 +185,39 @@ impl UserLM {
     ///   完整的一代快照,崩溃不会留下半截文件;
     /// - 没有任何新学习时直接跳过(空写只会徒增 SSD 磨损)。
     pub fn flush(&self) -> Result<(), LmError> {
+        // **串行化**:两次 flush 并发会交错写同一个临时文件、rename 顺序也
+        // 无法保证(codex 审查 D4)。
+        let _serial = self.flush_lock.lock().unwrap_or_else(|p| p.into_inner());
         let Some(path) = &self.path else {
             self.dirty.store(0, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         };
-        if self.dirty_count() == 0 {
+        // **先认领这一代**:swap 之后发生的学习会重新累加 dirty,不会被本次
+        // 落盘清零。旧实现是「写完无条件 `store(0)`」,把「快照之后、落盘
+        // 期间」发生的学习一起抹掉——它们还在内存表里,但定时器不会再保存
+        // (`flush` 见 `dirty == 0` 直接返回),进程一退就丢(codex 审查 D4)。
+        let taken = self.dirty.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if taken == 0 {
             return Ok(());
         }
+        match self.write_snapshot(path) {
+            Ok(()) => {
+                info!(path = %path.display(), "用户语言模型已回写");
+                Ok(())
+            }
+            Err(e) => {
+                // 这一代还是脏的:还回去,下一轮再写(绝不静默丢)。
+                self.dirty.fetch_add(taken, std::sync::atomic::Ordering::Relaxed);
+                Err(e)
+            }
+        }
+    }
+
+    /// 落盘实现:取快照 → 序列化 → 同目录临时文件 → 原子 rename。
+    ///
+    /// 与 [`Self::flush`] 分开,是为了让「认领代号 / 失败还回」只有一处:
+    /// 这里任何一个 `?` 提前返回,`taken` 都不会被丢掉。
+    fn write_snapshot(&self, path: &Path) -> Result<(), LmError> {
         // 序列化基于一份快照:flush 期间的学习写入新表,计入下一轮 dirty。
         let snap = self.snapshot();
         let mut text = String::with_capacity(snap.tables.unigrams.len() * 24);
@@ -277,12 +303,6 @@ impl UserLM {
             let _ = std::fs::remove_file(&tmp); // 不留垃圾
         }
         write_result?;
-        // 只清零本代:flush 期间又发生的学习(resize 代差)不丢。
-        // 严格说「flush 快照之后的学习」会被这次清零覆盖——它们还在内存
-        // 表里,只是 dirty 计数少了;为简化取保守清零,下一轮学习会再次
-        // 计数,最迟退出兜底 flush 落盘。
-        self.dirty.store(0, std::sync::atomic::Ordering::Relaxed);
-        info!(path = %path.display(), "用户语言模型已回写");
         Ok(())
     }
 }

@@ -377,3 +377,54 @@ fn concurrent_writes_never_publish_an_empty_table() {
     );
     assert_eq!(lm.blocklist_len(), 1);
 }
+
+/// 落盘后再载入必须完整(codex 审查 D4 的基本面)。
+#[test]
+fn flush_then_reload_keeps_every_count() {
+    let dir = std::env::temp_dir().join(format!("xwx_userlm_rt2_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("建目录失败");
+    let path = dir.join("user_bigram.txt");
+
+    let lm = UserLM::open_or_create(&path);
+    for _ in 0..3 {
+        lm.learn(None, "我们");
+        lm.learn(Some("我们"), "今天");
+    }
+    lm.add_entry("我们今天", "wo men jin tian");
+    lm.block_candidate("测试词", "ce shi ci");
+    lm.flush().expect("落盘失败");
+    assert_eq!(lm.dirty_count(), 0, "落盘成功后应清零");
+
+    let reloaded = UserLM::open_or_create(&path);
+    let snap = reloaded.snapshot();
+    assert_eq!(reloaded.counts_with(&snap, None, "我们"), (3, 0));
+    // 一元计数对 prev/word 各自加(learn 给词本身记频,bigram 另记)
+    assert_eq!(reloaded.counts_with(&snap, Some("我们"), "今天"), (3, 3));
+    assert_eq!(reloaded.blocklist_len(), 1);
+
+    // 没有新学习时 flush 是空操作(空写只徒增 SSD 磨损)。
+    reloaded.flush().expect("空 flush 不应失败");
+    assert_eq!(reloaded.dirty_count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 落盘**失败**时这一代必须还是脏的(不能静默丢):
+/// 把路径的父目录指成一个普通文件,`create_dir_all` 必失败。
+#[test]
+fn failed_flush_keeps_the_generation_dirty() {
+    let dir = std::env::temp_dir().join(format!("xwx_userlm_fail_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("建目录失败");
+    let blocker = dir.join("not-a-dir");
+    std::fs::write(&blocker, b"x").expect("写文件失败");
+    let path = blocker.join("user_bigram.txt");
+
+    let lm = UserLM::open_or_create(&path);
+    lm.learn(None, "我们");
+    assert_eq!(lm.dirty_count(), 1);
+    assert!(lm.flush().is_err(), "父目录是文件,落盘必须失败");
+    assert_eq!(lm.dirty_count(), 1, "失败后这一代必须还回去,不能丢");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -160,6 +160,9 @@ pub struct UserLM {
     /// 距上次成功落盘的净增学习次数(到达 [`FLUSH_LEARN_THRESHOLD`]
     /// 后由调用方触发 [`Self::flush`])。
     dirty: std::sync::atomic::AtomicU32,
+    /// 落盘串行化:两次 flush 并发会交错写同一个临时文件,rename 顺序也
+    /// 无法保证(codex 审查 D4)。
+    flush_lock: std::sync::Mutex<()>,
 }
 
 impl UserLM {
@@ -169,6 +172,7 @@ impl UserLM {
             tables: RwLock::new(Arc::new(UserTables::default())),
             path: None,
             dirty: std::sync::atomic::AtomicU32::new(0),
+            flush_lock: std::sync::Mutex::new(()),
         }
     }
 

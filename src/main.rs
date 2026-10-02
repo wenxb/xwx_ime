@@ -268,32 +268,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // flush 失败只告警不吞掉(用户词频是统计量,丢一批可接受,但绝不静默)。
     let mut flush_tick = tokio::time::interval(std::time::Duration::from_secs(30));
     flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // **SIGTERM 也要兜底**:`just dev` 停引擎用的是普通 `kill`(SIGTERM),
+    // 旧实现只监听 Ctrl+C,开发期的学习尾巴永远不会落盘(codex 审查 D4)。
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     loop {
         tokio::select! {
             _ = flush_tick.tick() => {
-                if let Some(user) = engine.user_lm() {
-                    if user.needs_flush() {
-                        if let Err(e) = user.flush() {
-                            tracing::warn!(error = %e, "用户语言模型定时回写失败");
-                        }
-                    }
+                // **任意非零增量都保存**(30s 一次):[`FLUSH_LEARN_THRESHOLD`]
+                // 只是额外触发,不是「不到 64 次就不存」——旧实现那样会让不足
+                // 阈值的尾巴在退出时被 `flush` 的 `dirty == 0` 早退跳过。
+                if engine.user_lm().is_some_and(|u| u.dirty_count() > 0) {
+                    flush_user_lm(&engine).await;
+                    tracing::info!("用户语言模型定时回写完成");
                 }
+            }
+            _ = sigterm.recv() => {
+                flush_user_lm(&engine).await;
+                tracing::info!("收到 SIGTERM,已兜底回写用户语言模型");
+                break;
             }
             sig = tokio::signal::ctrl_c() => {
                 if let Err(e) = sig {
                     tracing::warn!(error = %e, "监听 Ctrl+C 失败");
                 }
-                if let Some(user) = engine.user_lm() {
-                    if let Err(e) = user.flush() {
-                        tracing::warn!(error = %e, "用户语言模型退出回写失败");
-                    }
-                }
+                flush_user_lm(&engine).await;
                 tracing::info!("收到退出信号,已兜底回写用户语言模型");
                 break;
             }
         }
     }
     Ok(())
+}
+
+/// 用户模型落盘放到**阻塞线程**上:序列化 + `sync_data` 是同步 IO,
+/// 直接在 tokio 运行时里跑会卡住定时器与信号处理(codex 审查 D4)。
+async fn flush_user_lm(engine: &Arc<ImeEngine>) {
+    let engine = Arc::clone(engine);
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Some(user) = engine.user_lm() {
+            if let Err(e) = user.flush() {
+                tracing::warn!(error = %e, "用户语言模型回写失败");
+            }
+        }
+    })
+    .await;
 }
 
 /// 拉起 ibus-daemon，并等它写出总线地址文件。
