@@ -120,8 +120,8 @@ just install
 > daemon 扫描**。XML 只能放 `/usr/share/ibus/component/`。
 
 > **与 fcitx5 冲突**：fcitx5 出于兼容需要，会在启动时伪装占用
-> `org.freedesktop.IBus` 总线名。它在跑时 XWX 无法注册。切换输入法框架请先；
-> `fcitx5 -k && pkill -x fcitx5`。
+> `org.freedesktop.IBus` 总线名。它在跑时 XWX 无法注册，切换输入法框架请先
+> `fcitx5 -k`（没停干净时再 `kill $(pgrep -x fcitx5)`）。
 
 ## 手动安装（查错用）
 

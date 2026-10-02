@@ -42,9 +42,15 @@ check:
 # test + check 一把过（提交前跑这个）
 verify: check test
 
-# dev：前台跑引擎（debug）；ibus-daemon 在跑时先 pkill -x ibus-daemon
+# dev：前台跑引擎（debug，日志直接打在终端）。daemon 已经拉起过引擎时会先让出
+# 那个实例——一个总线名只能一个 owner，不让出来就是 NameTaken；让出来后 daemon
+# 会直接改用这个实例（实测有效）。
+# 按**进程名**精确匹配（pgrep -x）而不是全命令行：全命令行匹配会连
+# 「正在执行这条命令的 shell」一起匹配上，等于自杀（调试时踩过两次）。
 dev:
     cargo build -p xwx_ime
+    -for pid in $(pgrep -x xwx_ime); do kill "$pid"; done
+    sleep 0.5
     exec {{target_dir}}/debug/xwx_ime --ibus
 
 # 输出 component XML 到 stdout（打 deb 时用 --exec 指 /usr/bin/xwx_ime）
@@ -70,7 +76,7 @@ install:
     # fcitx5 占用 org.freedesktop.IBus 时给出提示
     if pgrep -x fcitx5 >/dev/null; then echo "警告：fcitx5 正在运行，会占用 IBus 总线名。需要时先 fcitx5 -k 停掉。" >&2; fi
     # 刷新 daemon
-    if command -v ibus >/dev/null 2>&1; then ibus restart >/dev/null 2>&1 || true; else pkill -x ibus-daemon >/dev/null 2>&1 || true; fi
+    if command -v ibus >/dev/null 2>&1; then ibus restart >/dev/null 2>&1 || true; else for pid in $(pgrep -x ibus-daemon); do kill "$pid" 2>/dev/null || true; done; fi
     # 语言模型不进 install / .deb(400 MB、CC-BY-4.0、需另行下载),
     # 但装完提醒一句,免得排序默默退化成纯词频。
     if ! ls {{xwx_data}}/*.gram >/dev/null 2>&1 && ! test -f {{xwx_data}}/bigram.txt; then \
