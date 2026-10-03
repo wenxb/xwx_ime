@@ -27,7 +27,26 @@ pub(crate) fn resolve_data_path(env_key: &str, file_name: &str) -> PathBuf {
         return PathBuf::from(p);
     }
     let base = xdg_data_home(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"));
-    base.join("xwx").join(file_name)
+    let user = base.join("xwx").join(file_name);
+    // **系统级回退**：deb 把词库/副索引装到 `/usr/share/xwx/`，而用户目录里没有
+    // 的时候必须能读到——否则装了包也只退化成内置小词库（Q5 离线交付）。
+    let system = PathBuf::from(SYSTEM_DATA_DIR).join(file_name);
+    pick_existing(user, system)
+}
+
+/// 系统级数据目录（deb 的 asset 目标）。
+const SYSTEM_DATA_DIR: &str = "/usr/share/xwx";
+
+/// 用户目录优先、其次系统目录；两者都不存在时返回用户路径
+/// （调用方按「缺文件」处理并告警，保持原有错误路径不变）。
+fn pick_existing(user: PathBuf, system: PathBuf) -> PathBuf {
+    if user.is_file() {
+        user
+    } else if system.is_file() {
+        system
+    } else {
+        user
+    }
 }
 
 /// 由 `XDG_DATA_HOME` / `HOME` 算出 XDG 数据根目录。
@@ -264,5 +283,30 @@ mod tests {
         let choice = resolve_lm_path_in(None, &xdg);
         assert_eq!(choice.path, xdg.join("xwx").join("bigram.txt"));
         assert_eq!(choice.source, LmSource::FallbackBigramTxt);
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    /// 用户目录里有就用用户的；没有就用系统的；都没有仍返回用户路径
+    /// （保持调用方原有的「缺文件→告警」路径）。
+    #[test]
+    fn data_path_prefers_user_then_system_then_user_default() {
+        let dir = std::env::temp_dir().join(format!("xwx-lmpath-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let user = dir.join("user.bin");
+        let system = dir.join("system.bin");
+
+        // 都没有 ⇒ 返回用户路径
+        assert_eq!(pick_existing(user.clone(), system.clone()), user);
+        // 只有系统 ⇒ 返回系统
+        std::fs::write(&system, b"x").expect("写");
+        assert_eq!(pick_existing(user.clone(), system.clone()), system);
+        // 用户也有 ⇒ 用户优先
+        std::fs::write(&user, b"x").expect("写");
+        assert_eq!(pick_existing(user.clone(), system.clone()), user);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

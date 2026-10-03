@@ -24,8 +24,10 @@
    ```
    ⇒ 装了 deb 的机器上引擎会退化成内置小词库（`just install` 里那句警告说的就是这件事）。
    **修法**：加两条 asset 把 `data/dict.bin`、`data/abbrev.bin` 装到
-   `/usr/share/xwx/`，并确认引擎的数据路径解析**包含系统级目录**（`src/lm_path.rs`
-   的 `resolve_data_path`；本次上下文用尽没核完，作为第一步）。
+   `/usr/share/xwx/`；**引擎侧已补好系统级回退**（`src/lm_path.rs::resolve_data_path`
+   改为「用户目录优先 → 系统目录 `/usr/share/xwx/` → 都没有时仍返回用户路径」，
+   配 `fallback_tests::data_path_prefers_user_then_system_then_user_default`）。
+   **剩**：真正的 asset 条目还没加（下一步）。
 2. **没有维护者脚本刷新 IBus**
    `maintainer-scripts = "data/debian"` 已配置，但该目录当前只有生成的 `xwx.xml`，
    没有 `postinst`/`prerm` ⇒ 装完后用户得自己重启 ibus-daemon 才能看到引擎。
