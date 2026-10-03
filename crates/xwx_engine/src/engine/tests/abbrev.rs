@@ -212,7 +212,12 @@ fn real_dict_partial_syllable_completions_reach_the_first_page() {
         ("beijin", "北京", 3),
         ("niha", "你好", 3),
         ("meiyo", "没有", 2),
-        ("zhongguor", "中国", 10),
+        // ⑤⑩⑫(W1b)后 zhongguor 进降级范围:用户目标「中国人」#1(词条口径),
+        // 部分读法「中国」按覆盖分桶让位给整串读法(zhong guo r* 全串补全族),
+        // 两种上屏文本等价(中国人 = 中国+人),钉用户目标而非部分读法。
+        ("zhongguor", "中国人", 3),
+        // 部分补全契约钉在它仍是主要读法的输入上:`zhongg` 的 中国 #1。
+        ("zhongg", "中国", 3),
     ] {
         let cands = engine.lookup_candidates(input, &ctx).expect("查询失败");
         let rank = cands.iter().position(|c| c.word == want).map(|i| i + 1);

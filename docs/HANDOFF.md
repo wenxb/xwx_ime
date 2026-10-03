@@ -5149,3 +5149,31 @@ perf 稳态 p95 5.980ms、max 11.652ms、超线 0（负载 ≈7 下与第 7 步�
 
 **遗留**：W1b（`leading_abbrev_input` 的硬编码排除——zho/zhongg/zhongguor 进格）、
 前置A（早停放宽，按 smsh 清单判定）、第 8 步删除。
+
+## ⑤⑩⑫ 扩围 W1b：`leading_abbrev_input` 删除 zh/ch/sh 硬编码排除（zho/zhongg/zhongguor 进格）
+
+**改动**：`rank.rs::leading_abbrev_input` 删 `!matches!(zh|ch|sh)` 子句。历史理由
+（「zh 是全拼音节的开头，不是开头即缩写；不排除 zhongguor 的中国被挤出前 10」）
+失效的机理：门槛只管「旧通道是否降级」，读法结构由格子自己管——字面弧
+（zhong+guo）与缩写弧（r→ren）本来共存（womenjtqbj 同构），「中国」走补全经
+条目边照常供给。实测 zhongg 段逐字节不变（它在 W1a 就已因 pure_abbrev 的
+元音判据进格：`o` 本身是音节 哦，`abbrev_syllables("o")` 非空）。
+
+**zhongguor 的变化**（唯一漂移段，24→100 条）：中国人 #1 且词条口径计分
+（−4.2284，此前旧通道 beam 刻度 −12.23）；中国日/热/儿（zhong guo r* 全串补全
+族，真整串读法）跟上；**部分读法「中国」按覆盖分桶让位**（#87，原 ≤10）——
+整串读法先于前缀读法是覆盖桶的结构序，且两种上屏文本等价（中国人 = 中国+人，
+B 段提交不变）。`real_dict_partial_syllable_completions_reach_the_first_page`
+的钉从 (zhongguor,中国,10) 改为 (zhongguor,中国人,3) + 新增 (zhongg,中国,3)
+——部分补全契约钉在它仍是主要读法的输入上（zhongg 的中国本就是重算后 #1）。
+
+**门槛**：401/0 · clippy 0 · 对拍 89/90 逐字节同、首位变化 0、exit 0 ·
+daily 1.000 / mixed 13/14·0.929 / keystrokes 0.877 / edits 0.728 ·
+清单 20/20+20/20 · 形态 10/10 · perf p95 5.506ms、超线 0。
+
+**旧通道剩余用户**（第 8 步的删除对象边界）：nih/niha/meiyo/meiy/nihaoq/niqhao/
+nihoa 这类「首音节合法 + 尾部残缺」输入——既非 pure（含 i/u/v 类非声母字母）
+也非 leading（首 1-2 字母能成音节）。它们的整串读法格子本来就能给（字面弧 +
+音节图缩写弧：nih 的 你好 = [ni 字面][h→hao 缩写]），条目边经 lookup_mixed 原语
+照常——第 8 步删的是 `abbrev_candidates` 通道（合并/配额/独立层序），保留
+dict 层两个查询函数作纯匹配原语。

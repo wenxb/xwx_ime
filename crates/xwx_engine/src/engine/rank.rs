@@ -200,9 +200,11 @@ pub(super) fn pure_abbrev_input(inp: &str, has_abbrev: bool) -> bool {
 /// 收紧到「前两个字母都不能构成音节」是有实测依据的：只看首字母会把
 /// 「打错的正常输入」也算进来（`nihso` 的 `n` 不成音节，但它开头其实是
 /// 正常的 `ni`），实测那样会让 `edits` 语料 MRR 0.728 → 0.680 退化。
-/// `zh`/`ch`/`sh` 是**合法双字母声母**（`zhongguor` 的开头），不是「开头即
-/// 缩写」——不排除它们会把全拼输入也拉进这一支（实测 `zhongguor` 的「中国」
-/// 被挤出前 10）。
+/// `zh`/`ch`/`sh` 开头的输入曾经被排除（它们更像「全拼音节打到一半」，
+/// 不是「开头即缩写」；实测不排除时 `zhongguor` 的「中国」被挤出前 10）。
+/// ⑤⑩⑫ 删除排除：门槛只管「旧通道是否降级」，读法结构由格子自己管——
+/// 字面弧（zhong+guo）与缩写弧（r→ren）本来就能共存（`womenjtqbj` 同构），
+/// 而「中国」走补全读法经条目边照常供给。
 ///
 /// 调用方保证 `!reachable`，理由同 [`pure_abbrev_input`]。
 pub(super) fn leading_abbrev_input(seg: &Segmenter, inp: &str, has_abbrev: bool) -> bool {
@@ -210,7 +212,6 @@ pub(super) fn leading_abbrev_input(seg: &Segmenter, inp: &str, has_abbrev: bool)
         && inp.len() >= 3
         && seg.segment(&inp[..1]).is_empty()
         && seg.segment(&inp[..2]).is_empty()
-        && !matches!(&inp[..2], "zh" | "ch" | "sh")
 }
 
 /// 候选的完整排序键,供 [`sort_candidates`] 与 [`merge_with_abbrev`]
