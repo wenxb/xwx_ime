@@ -1460,3 +1460,7 @@ mixed 0.929→0.503、keystrokes 0.877→0.795。⇒ 格子供给（整串条目
 迹：srkl abbrev=4/mixed=0、ztai abbrev=0/mixed=35、wsm abbrev=80/mixed=0，但 kept 全为空
 ⇒ covered != pinyin.len() 恒成立 ⇒ 整串条目边一条没进格子。修法：先打印 covered 真实值，
 或直接去掉该过滤（这些候选本就来自整串查询）+ 按 word 去重。
+
+## 2026-10-03 尝试 N：去掉 covered 过滤致 keystrokes/edits 退化，回退
+
+去掉过滤会混进不覆盖整串的读法 ⇒ 修法 2 否掉；先打印 covered 真值确定量纲（对照 srkl/ztai 长 4、wsm 长 3）。
