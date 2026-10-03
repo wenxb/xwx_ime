@@ -1650,3 +1650,13 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   `window_covers_stall` 加 `#[inline]` 后回到 **11.5ms** 通过。
 - **教训**：拆分热路径文件必须用 `perf_probe` 复测；「对拍零差异」只能证明**行为**没变，
   证明不了**性能**没变。
+
+## ㉚ 拆分 session/tests/commit.rs（633 → 93 + 547）
+
+- 按单文件 ≤600 行拆：`commit.rs` 留「提交/学习/回声/立即提交」等基础用例；
+  「分段确认（方案 b）+ 退回上一段」那 10 个用例移到
+  `crates/xwx_engine/src/session/tests/commit_segment.rs`，在 `tests/mod.rs` 注册。
+- 纯搬运：`cargo test --workspace` 366 passed / 0 failed、clippy 0。
+- 仓库里仍超 600 行的只剩 `crates/xwx_engine/examples/regression_probe.rs`(621)：
+  拆法是目录式示例 `examples/regression_probe/main.rs` + `corpus.rs`，
+  `--example regression_probe` 的调用方式不变；拆完必须重跑 v1 对拍（它本身是基线生成器）。
