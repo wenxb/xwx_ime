@@ -75,6 +75,46 @@ def initial_key(pinyin):
     return "".join(syl[0] for syl in pinyin.split(" ") if syl)
 
 
+def _validate(blob):
+    """写出前后自检：头部自洽、记录数组在范围内、key 严格升序（Q4）。"""
+    magic, version, n_keys, _n_assoc, rec_off, str_off, ent_off = struct.unpack_from(
+        "<8sIQQQQQ", blob, 0
+    )
+    if magic != MAGIC or version != VERSION:
+        raise SystemExit("产物魔数/版本不符")
+    if not (HEADER_LEN <= rec_off <= str_off <= ent_off <= len(blob)):
+        raise SystemExit(
+            f"区段顺序/范围不合法: rec={rec_off} str={str_off} ent={ent_off} len={len(blob)}"
+        )
+    if rec_off + n_keys * RECORD_LEN > str_off:
+        raise SystemExit("记录数组越界")
+    prev = None
+    for i in range(n_keys):
+        o, sl, eo, el = struct.unpack_from("<IHIH", blob, rec_off + i * RECORD_LEN)
+        if str_off + o + sl > ent_off or ent_off + eo + el > len(blob):
+            raise SystemExit(f"第 {i} 条记录越界")
+        key = blob[str_off + o: str_off + o + sl]
+        if prev is not None and key <= prev:
+            raise SystemExit(f"key 未严格升序: {prev!r} → {key!r}")
+        prev = key
+
+
+def _write_atomically(src, dst, blob):
+    """校验后**原子替换**。
+
+    直接覆盖目的文件有两个后果：构建失败或中途被杀会留下**半文件**，而正在用
+    这张表的进程（mmap）会读到残缺数据；在线重建时也会先截断旧文件。
+    所以：拒绝「输入=输出」，先写同目录临时文件、自检通过再 `os.replace`。
+    """
+    if os.path.abspath(src) == os.path.abspath(dst):
+        raise SystemExit(f"输入与输出是同一个文件: {dst}（会先截断源文件，拒绝）")
+    _validate(blob)
+    tmp = dst + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(blob)
+    os.replace(tmp, dst)
+
+
 def main() -> None:
     src = sys.argv[1] if len(sys.argv) > 1 else "data/dict.bin"
     dst = sys.argv[2] if len(sys.argv) > 2 else "data/abbrev.bin"
@@ -134,11 +174,7 @@ def main() -> None:
     assert len(header) == HEADER_LEN, "头部布局与 Rust 端不一致"
 
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    with open(dst, "wb") as f:
-        f.write(header)
-        f.write(records)
-        f.write(strings)
-        f.write(entries)
+    _write_atomically(src, dst, header + records + strings + entries)
     size = os.path.getsize(dst)
     main_size = os.path.getsize(src)
     print(f"已写出: {dst}({size / 1024 / 1024:.1f} MB,为主索引的 {size / main_size:.2f}x)")

@@ -1739,3 +1739,16 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   校验前缀，否则 `LmError::BadGram("不支持的 .gram 格式 …")`。
 - **验收**：单元 300 全绿、clippy 0、v1 对拍 **0 行**（真实模型照常加载）、真实查询正常。
 - **待补**：构造坏 header 的定向用例（要手工拼 `.gram` 头部，含 OffsetPtr 校验路径）。
+
+## ㊱ Q4 第二步：构建脚本原子替换 + 自检
+
+- **问题**（Q4）：构建脚本直接覆盖目的文件——中途失败或在线重建会留下**半文件**，
+  正在 mmap 这张表的进程会读到残缺数据；也没有「输入=输出」的保护。
+- **做法**（`scripts/abbrev_to_bin.py`）：新增 `_validate(blob)`（头部自洽、区段顺序
+  与范围、记录数组越界、**key 严格升序**）与 `_write_atomically(src, dst, blob)`
+  （拒绝输入=输出 → 自检 → 写同目录 `.tmp` → `os.replace` 原子替换）。
+- **实测**：用 `data/dict.bin` 重建到 `/tmp` 的产物与现有 `data/abbrev.bin`
+  **逐字节一致**（68.9 MB）；`data/dict.bin data/dict.bin` 被拒绝；
+  人为篡改魔数与区段起点都被 `_validate` 拦下。
+- **待做**：`scripts/dict_to_bin.py` 套用同一套（下一轮）；读取端的 checked 偏移
+  与头部区段校验（Rust 侧）仍未做。
