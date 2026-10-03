@@ -4000,3 +4000,23 @@ v1 对拍 44 输入 **0 变化**；clippy **0**；`--no-fail-fast` **401 passed 
 4. 验证：`cargo test -p xwx_engine` 应回到 **327 passed / 0 failed**；
    开关 `true` 时 20 条清单应保持 **20/20（召回）、15/20（首位）**；
    开关 `false`（默认）时四套语料与 v1 对拍必须与 HEAD 完全一致。
+
+### ⑤⑧② 附录二：`cp_len > inp.len()` 这个判据**不够**（实测仍破 3 个契约）
+
+**尝试**：不动任何签名，把破例的适用条件收窄为"读法**展开了缩写**"——
+`cp_len > inp.len()`（候选拼音字母数超过输入长度）。理由：`ztai`(4) → 状态 `zhuang tai`(9) ✓，
+而 `ren`(3) → 人 `ren`(3)、`beijing`(7) → 北京 `bei jing`(7) 相等 ⇒ 预期不影响全拼输入。
+
+**结果**：`cargo test -p xwx_engine` 仍是 **324 passed / 3 failed**（同样那三个用例）⇒
+判据不够：全拼输入（如 `ren`）的简拼层里**也有展开型候选**（人民 `ren min` 等），
+它们同样被抬进了精确档。四套语料倒是全在基线。⇒ **已回退**（`rank.rs` 还原）。
+
+**结论（收窄只能按输入类别）**：必须走 ⑤⑧② 附录一的**方案 1**——在 `lookup.rs` 里算出
+`entry_tier_exception = pure_abbrev || leading_abbrev`（那里有 `Segmenter`），
+通过 `sort_candidates(..., bool)` → `sort_key(..., bool)` 传进去；
+其余调用点传 `false`。**判据必须来自输入本身，不能来自候选**。
+
+**已排除的替代判据**（省得下次再试）：
+- `covered >= inp.len()`：链候选构造上就成立，无区分力；
+- `freq > 0`：全拼输入的简拼层候选也有 `freq > 0`（条目级），无区分力；
+- `cp_len > inp.len()`：全拼输入也有展开型简拼候选，无区分力（本轮实测）。

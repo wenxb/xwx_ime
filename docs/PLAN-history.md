@@ -1522,3 +1522,9 @@ completion::full_pinyin_first_page_recovers（全拼首页）⇒ 破例必须是
 abbrev_quota 两个用例用 "ren"（全拼可切分）、completion 用例也是全拼 ⇒ 把层序破例收窄到
 pure_abbrev/leading_abbrev 两类即可保住它们，且不影响开关 true 时的 20/20、15/20。
 实现：sort_candidates/sort_key 加 bool 参数（约 5 处调用点传 false，简拼分支传 true）。
+
+## 2026-10-03 收窄尝试：cp_len>inp.len() 判据不够（仍 324/3），回退
+
+全拼输入的简拼层里也有展开型候选（人民 ren min），故该判据无法区分输入类别。
+结论：收窄必须按输入类别（lookup.rs 算好 pure_abbrev/leading_abbrev，传进 sort_candidates/sort_key）。
+已排除的判据：covered>=len、freq>0、cp_len>inp.len()。
