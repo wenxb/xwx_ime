@@ -1635,3 +1635,8 @@ dict/lookup.rs:104 用 idx.lookup_prefix(variant) + retain(音节数<=字母数)
 lookup_prefix 内已有被匹配 key `s` ⇒ 构造候选时写 covered = s.chars().count()；
 build.rs 建整串条目边时按 covered == 输入字母数 过滤 lookup_abbrev 的返回（lookup_mixed 全收）。
 风险：其它消费者/测试可能钉 covered==0，改完先跑 -p xwx_engine。验收：20 条 20/20、mixed≥0.929、默认逐字节不变。
+
+## 2026-10-03 最后一步：锚点确认(abbrev.rs:206)、补丁编译失败(原因被 grep -q 吞掉)，已回退
+
+补丁：let mut cand = Candidate::new(...); cand.covered = s.chars().count(); out.push(cand);
+下次：构建时完整保留编译器输出(tail -30)再调整；守卫不要把输出丢掉。

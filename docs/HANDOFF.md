@@ -4517,3 +4517,28 @@ mixed 从 0.893 → **≥0.929**；开关 false ⇒ 四套语料基线、v1 对�
 逐个 `Candidate { … }` 地推入 `out`），直接
 `grep -n "Candidate" crates/xwx_engine/src/dict/abbrev.rs | head` 取行号后精确插入
 `covered: s.chars().count()`（`s` 是被匹配到的 key）。
+
+### ⑤⑨⑨ 附录四：锚点已确认，首次尝试**编译失败**（原因未知，因我把错误信息吞掉了）
+
+- **锚点确认**：`dict/abbrev.rs:206` 就是 `lookup_prefix` 里构造候选的那一行
+  （`out.push(Candidate::new(word, pinyin, freq as u64));`），被匹配的 key `s`
+  在同一循环内、作用域可见 ✓。
+- **补丁写法**：把那一行换成
+  ```rust
+  let mut cand = Candidate::new(word, pinyin, freq as u64);
+  cand.covered = s.chars().count();
+  out.push(cand);
+  ```
+- **结果**：**编译失败** ⇒ 已回退（树干净）。**原因未知**——因为我用
+  `cargo build … 2>&1 | grep -qE "^error"` 判断时**把编译器输出丢掉了**，
+  既不知道错在哪，也让"构建失败"这个结论缺少证据。
+
+**⇒ 下一步的正确做法（两件事一起做）**：
+1. 重新施加上面的补丁，构建时**完整保留编译器输出**（`cargo build … 2>&1 | tail -30`），
+   按报错调整（可能的点：`Candidate::new` 的字段可见性、`covered` 的类型/语义、
+   或者这一行不在 `s` 的作用域内）；
+2. 构建通过后再跑 `cargo test -p xwx_engine`（327/0 为基线，防 `covered==0` 的断言），
+   然后按 ⑤⑨⑨ 施工单第 3 处加 `build.rs` 的过滤，最后做两侧验收。
+
+**纪律再补一条（本会话第三次栽在守卫上）**：**守卫脚本绝不能把被守卫对象的输出丢掉**
+（不能 `grep -q` 后只留结论）——红/绿的判据必须连同**原因**一起留下。
