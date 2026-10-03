@@ -392,3 +392,32 @@ fn real_dict_two_letter_initial_abbreviations_hit_the_side_index() {
         );
     }
 }
+
+/// 末尾**单字母**尾巴也应补全成词库里的真实整串键。
+///
+/// `daishix`（dai+shi+x，差一个字母）现在给的是容错读法「带上/戴上/代收」——
+/// 因为 `needs_abbrev` 里的 `!tolerant_explains` 把简拼/末尾补全那条路关掉了，
+/// 「x → xian」这条读法（键 `dai shi xian` = 待实现）**压根没被产出**。
+/// 对照：完整输入 `daishixian` 能出「待实现」。
+///
+/// 修法限定在「精确格不可达 + 尾部单字母 + 该字母能拼出词库里真实存在的整串键」，
+/// 不整条拆掉 `!tolerant_explains`（早前整体拆过：390 行漂移、零改善）。
+#[test]
+#[ignore = "目标形态：daishix 前 3 内有「待实现」（当前红：全是容错读法）"]
+fn single_letter_tail_completion_reaches_the_real_key() {
+    let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+    let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+    if !dict_path.is_file() || !abbrev_path.is_file() {
+        return;
+    }
+    let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+    engine.dict = engine.dict.with_abbrev(&abbrev_path);
+    let cands = engine
+        .lookup_candidates("daishix", &LmContext::empty())
+        .expect("查询失败");
+    let top3: Vec<&str> = cands.iter().take(3).map(|c| c.word.as_str()).collect();
+    assert!(
+        top3.contains(&"待实现"),
+        "前 3 条里应有「待实现」，实际: {top3:?}"
+    );
+}
