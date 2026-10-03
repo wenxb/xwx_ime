@@ -22,6 +22,7 @@ fn candidate(word: &str, pinyin: &str, freq: u64) -> Candidate {
         spelling: SpellingKind::Exact,
         echo: false,
         covered: 0,
+        matched_len: 0,
     }
 }
 

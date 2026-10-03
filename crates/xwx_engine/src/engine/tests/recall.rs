@@ -43,6 +43,7 @@ fn fold_keeps_the_source_of_the_winner() {
         spelling: SpellingKind::Exact,
         echo: false,
         covered,
+        matched_len: 0,
     };
     let out = crate::engine::recall::fold_with_sources(vec![
         (mk("出在哪", "chu zai na", 5), crate::engine::recall::RecallSource::Abbrev),

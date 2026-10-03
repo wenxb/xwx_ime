@@ -19,6 +19,7 @@ impl InputSession {
             spelling: crate::SpellingKind::Exact,
             echo: true,
             covered: pinyin.len(),
+            matched_len: 0,
         }
     }
 }

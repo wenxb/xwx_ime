@@ -252,6 +252,7 @@ fn merge_with_abbrev_quota_branches() {
         spelling: kind,
         echo: false,
         covered: 0, // 本测试只关心分层/配额,覆盖范围不参与
+        matched_len: 0,
     };
     let head: Vec<Candidate> = (0..100u64)
         .map(|i| mk(format!("e{i}"), 10_000 - i, SpellingKind::Exact))
@@ -306,11 +307,11 @@ fn merge_with_abbrev_quota_branches() {
     // u_min>0 桶),简拼层(恒 0 桶)压过段内精确候选。
     let cover_head = vec![
         Candidate { word: "只覆盖前缀".into(), pinyin: "abc".into(),
-            score: 0.0, freq: 1, spelling: SpellingKind::Exact, echo: false, covered: 0 },
+            score: 0.0, freq: 1, spelling: SpellingKind::Exact, echo: false, covered: 0 , matched_len: 0 },
     ];
     let cover_abbrev = vec![
         Candidate { word: "覆盖整串".into(), pinyin: "abc def".into(),
-            score: 0.0, freq: 1, spelling: SpellingKind::Abbrev, echo: false, covered: 0 },
+            score: 0.0, freq: 1, spelling: SpellingKind::Abbrev, echo: false, covered: 0 , matched_len: 0 },
     ];
     let (_, out) = merge_with_abbrev("abcdef", cover_head, cover_abbrev);
     assert_eq!(out.len(), 2);

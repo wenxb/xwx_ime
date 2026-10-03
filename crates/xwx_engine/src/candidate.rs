@@ -152,6 +152,35 @@ pub struct Candidate {
     /// 序列化向后兼容:旧数据没有此字段,反序列化回落到 `0`。
     #[serde(default)]
     pub covered: usize,
+    /// 副索引(`abbrev.bin`)命中时,被匹配到的那个 key **消费了多少个输入字母**。
+    ///
+    /// **不复用 `covered`**:`covered` 的语义是「该候选在原文串里覆盖到第几字节」,
+    /// 被多处依赖(上屏消耗、分段、前缀混拼的真实覆盖),改它等于改一个共享字段的
+    /// 全局含义——实测那样做会把 mixed 的召回从 13/14 打到 10/14(见 HANDOFF ⑤⑨⑨
+    /// 附录五)。本字段只回答一个问题:「这次前缀匹配吃掉了整串吗」。
+    ///
+    /// 值 = 被匹配到的副索引 key 的字母数(副索引 key 是「每音节一个字母」,
+    /// `zh`/`ch`/`sh` 计两个字母,故 `smsh` 的 key 长 4)。与输入字母数相等
+    /// 才是**整串命中**;`lookup_prefix` 是**前缀**匹配(`wmjt` 会被
+    /// `wmjtqbj` 查到),所以只有这个真值能区分「整串」与「前缀」——
+    /// 想从词条拼音反推(音节数/首字母串)的三次尝试全部失败(⑤⑨②/⑤⑨③/⑤⑨⑦)。
+    ///
+    /// `0` = 未知/非副索引来源(其余所有构造点)。只由
+    /// [`crate::dict::AbbrevIndex::lookup_prefix`] 填值。
+    ///
+    /// **不序列化**:它纯粹是引擎内部的判据,进线格式只会白白改变
+    /// 稳定输出(与 `covered` 不同——后者是上屏语义,必须跨进程保留)。
+    ///
+    /// **当前生产代码没有消费它**:⑤⑤④ 的「整串条目边」一度想用它筛,但
+    /// `lookup_abbrev` 在收集阶段就到 `MAX_LOOKUP_RESULTS`(500 条)早停,
+    /// 而筛只能发生在早停之后 ⇒ 排在 500 名以后的整串命中会被误杀
+    /// (`smsh` 实测:命中的 `matched_len` 只有 {3,4},500 条窗口里的「什么是」
+    /// 是 ml=4,但 20 条清单会因此从 20/20 掉到 19/20)。建边处改用候选自己的
+    /// `covered`(`engine/lattice/build.rs` 的整串条目边)。本字段保留为
+    /// **可测的匹配长度真值**,给后续要放宽早停、或按匹配长度做优先收集的
+    /// 改动当输入。
+    #[serde(skip)]
+    pub matched_len: usize,
 }
 
 impl<'de> Deserialize<'de> for Candidate {
@@ -189,6 +218,8 @@ impl<'de> Deserialize<'de> for Candidate {
                 .unwrap_or_default(),
             echo: r.echo,
             covered: r.covered,
+            // 不参与序列化(见字段文档):反序列化一律回落到 `0`。
+            matched_len: 0,
         })
     }
 }
@@ -204,6 +235,7 @@ impl Candidate {
             spelling: SpellingKind::Exact, // 词典条目是精确匹配;分层信息由引擎回填
             echo: false, // 词典条目是真实候选;回声标记由引擎追加时设置
             covered: 0,  // 未知/整串:由引擎在候选来源处回填(见字段文档)
+            matched_len: 0, // 副索引匹配长度:只有 AbbrevIndex::lookup_prefix 填(见字段文档)
         }
     }
 }

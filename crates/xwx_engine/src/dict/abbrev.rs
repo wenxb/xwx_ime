@@ -203,7 +203,16 @@ impl AbbrevIndex {
                     .map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
                 let pinyin = std::str::from_utf8(py_bytes)
                     .map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?;
-                out.push(Candidate::new(word, pinyin, freq as u64));
+                // 把「这次前缀匹配吃掉了多少个输入字母」如实带出来：key 就是
+                // 被匹配到的那个首字母串（`s`），长度即匹配长度。`s` 全部是
+                // ASCII 字母（副索引 key 由 `scripts/abbrev_to_bin.py` 生成），
+                // 故字节数 == 字母数。**这是唯一能区分「整串命中」与「前缀
+                // 命中」的真值**——`lookup_prefix` 是前缀匹配，`wmjt` 会被
+                // `wmjtqbj` 查到，从词条拼音反推匹配长度三次都失败了（⑤⑨②/
+                // ⑤⑨③/⑤⑨⑦）。消费者见 `Candidate::matched_len` 的字段文档。
+                let mut cand = Candidate::new(word, pinyin, freq as u64);
+                cand.matched_len = s.len();
+                out.push(cand);
                 if out.len() >= MAX_LOOKUP_RESULTS as usize {
                     return Ok(out);
                 }

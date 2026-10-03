@@ -701,6 +701,7 @@ impl ImeEngine {
                 // ——**选哪个候选就等于选哪种分段**,这正是格边候选比
                 // 「先定分段再出候选」更灵活的地方。
                 covered: edge.end,
+                matched_len: 0,
             };
             let entry = best
                 .entry((cand.word.clone(), cand.pinyin.clone()))
@@ -791,6 +792,7 @@ impl ImeEngine {
                 spelling,
                 echo: false,
                 covered: pinyin.len(),
+                matched_len: 0,
             });
         }
         Ok(out)

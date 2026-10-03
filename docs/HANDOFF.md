@@ -4573,3 +4573,114 @@ mixed 从 0.893 → **≥0.929**；开关 false ⇒ 四套语料基线、v1 对�
 **本会话在此停手**：已是第三次在"改动共享结构"上踩到隐藏依赖，
 下一步应当**先 grep `covered` 的全部消费点**（`grep -rn "\.covered" crates/`），
 确认它的语义边界后，再决定是新字段还是新返回类型。
+
+---
+
+## ⑤⑩⓪ 阶段 3/4 收尾**完成**：`matched_len` 独立带出 + 建边改用 `covered` 筛（mixed 0.893 → **0.929**）
+
+**起因**（⑤⑨⑨ 的施工单）：副索引的"匹配长度"要**独立**于 `covered` 带出来，
+再用它筛 ⑤⑤④ 的"整串条目边"。
+
+### 第一步：`covered` 的语义边界（先查后动，按纪律）
+
+`grep -rn "\.covered" crates/` 的结论——**`covered` 有真实语义，绝不能复用**：
+
+- 语义 = 「该候选在**原文串**里覆盖到第几字节」（`candidate.rs` 的字段文档），
+  由 `fill_covered` 把干净串坐标映射回原文；
+- 消费点有 5 类，且**都在生产路径上**：会话层上屏消耗（`session/commit.rs:21/71/74/90/95/111/116`）、
+  分段、`engine/decode.rs:271/281` 的兜底前缀覆盖、`engine/lattice.rs:394` 的原文映射、
+  **排序键**（`engine/rank.rs:172`、`engine/lookup.rs:146/193/312/389/444/506/510/523/576`）；
+- 另有契约测试钉着它（`engine/tests/lookup.rs` 的 `covered` 断言、`session/tests/prefix_mixed.rs:82`
+  钉 `covered==7`、`session/tests/commit_segment.rs:31` 钉 `covered==5`）。
+
+⇒ ⑤⑨⑨ 附录五的退化（mixed 召回 13/14 → 10/14）由此得到机制解释，不是我"手艺不精"。
+
+### 第二步：新增 `matched_len`（独立字段，零序列化影响）
+
+- `candidate.rs`：新增 `pub matched_len: usize`，**`#[serde(skip)]`**。
+  这一点是刻意的：`covered` 必须跨进程（上屏语义），而 `matched_len` 纯粹是引擎内部判据
+  ——若是进线格式，所有候选的稳定输出都会多一个字段，白白扰动对拍。
+- `dict/abbrev.rs::AbbrevIndex::lookup_prefix`：被匹配到的 key 就是循环里的 `s`，
+  故 `cand.matched_len = s.len()`（key 全 ASCII ⇒ 字节数 == 字母数）。
+- 其余构造点（10 处 `Candidate { … }` 字面量 + `Candidate::new` + 反序列化）一律 `0`。
+  **反序列化也回落到 0**（不读线格式，与 `skip` 对称）。
+
+### 第三步：建边筛——**真值是我没料到的那个**（决定性）
+
+先按施工单把 `lookup_abbrev` 的返回按 `matched_len == pinyin.len()` 筛。实测**树里跑出 19/20**
+（`smsh` →「什么是」丢召回、mixed 仍 0.893）。探针（4 个临时迹，用完已撤）给出全部事实：
+
+```
+[探针] 建边输入=womenjtqbj n_letters=10 abbrev 返回 0 条        ← ① look_abbrev 对混拼输入是空的
+[探针M] mixed 返回 1 条: 我们今天|py=wo men jin tian|cov=7 freq=63695   ← ② 前缀混拼读法，covered=7
+[探针P] push 整串边: 我们今天 | c.cov=7 → 边 end=10             ← ③ 正是这里把它抬成"整串"
+[探针E] lattice[0] 含我们: …我们今天|end=7… | …我们今天|end=10…  ← ④ 同一 (词,音) 在位置 0 出现两次
+```
+
+**⇒ 真正的根因不是 `lookup_abbrev` 的前缀匹配**（它对 `womenjtqbj` 返回 0 条），
+而是 **`lookup_mixed` 的返回里含"前缀混拼读法"那一路**（`lookup_mixed_full_pinyin` 的 (4)），
+它的 `covered` 是**真实前缀长度 7**，却被循环里写死的 `end: pinyin.len()` 抬成整串；
+而去重判据 `e.end == pinyin.len()` 也拦不住（那条前缀边自己的 `end` 是 7，两者不相等）。
+
+**修法（一行级）**：建边只放行真正覆盖整串的候选 ——
+`if c.covered > 0 && c.covered < n_letters { continue; }`（`covered == 0` 是「未知/整串」的约定值，保留）。
+
+### 第四步：为什么 `matched_len` 筛**不能用**（重要，别再试一次）
+
+`smsh` 实测（临时单测，已删）：
+
+```
+smsh         len= 4 返回= 280  matched_len 集合={3, 4}  整串命中前8=[什么事啊, 什么是爱, 时明时暗, …]
+什么是       ← 在这 280 条里，但 ml=4
+```
+
+- 命中的 `matched_len` **只有 {3,4}** 两种，说明 `smsh` 确实有一个真整串命中（ml=4）；
+- 但 `lookup_abbrev` 在**收集阶段**就到 `MAX_LOOKUP_RESULTS`（**500** 条）**早停**
+  （`abbrev.rs` 里 `if out.len() >= MAX_LOOKUP_RESULTS { return Ok(out) }`），
+  而 `retain`/筛只能发生在**早停之后** ⇒ 排在 500 名以后的整串命中被误杀；
+- 实测后果：20 条清单 **20/20 → 19/20**、「什么是」**直接丢召回**。
+
+⇒ 要用 `matched_len` 当筛，必须**先把早停放宽、或改成按 ml 优先收集**（dict 侧改动），
+或**取代 `covered`**（配一次全量重测）。这两条都不在本阶段范围内，故本阶段**不启用**该筛。
+
+### 验收（两侧全过）
+
+| 检查 | 开关 `true`（降级世界） | 开关 `false`（默认，**最重要**） |
+|---|---|---|
+| 20 条纯缩写清单首位 | **20/20**（保持） | 20/20 |
+| 正确读法在候选表 | **20/20** | 20/20 |
+| `womenjtqbj` 首位 | **我们今天去北京**（cov10） | 我们今天去北京 |
+| `womenjtqbj` 的「我们今天」 | **covered=7**（不再是 10）✓ | covered=7 |
+| daily | 1.000 | 1.000（**逐字节不变**） |
+| **mixed** | 0.893 → **0.929** ✅ | 0.929（**逐字节不变**） |
+| keystrokes | 0.835 → **0.876**（**涨了**，见下） | 0.877（**逐字节不变**） |
+| edits | 0.728 | 0.728（**逐字节不变**） |
+| v1 对拍 | —（降级世界本就与默认不同） | 2928 非计时行 **sha eb1095302acf2db8 一模一样** |
+| `cargo test --workspace --no-fail-fast` | — | **401 passed / 0 failed** |
+| clippy `-D warnings` | — | **0** |
+| perf | — | 见下（负载 26.8，**未打补丁的 HEAD 同样超线**） |
+
+**默认路径的"逐字节不变"是实测的**：`corpus_*.txt`、`probe_v1_nt.txt`、`checklist20.txt`
+六份产物与改动前基线 `diff` 全绿（不是"看着差不多"）。机制上也吻合：
+建边那一块的第一道条件就是 `DEMOTE_OLD_ABBREV_CHANNEL`，默认 false ⇒ 新代码一次都不进。
+
+### 两条负结果/意外（如实记档）
+
+1. **keystrokes 在降级世界里涨了 0.835 → 0.876**（不是退化）。逐条点名：只有
+   `womenjtqb` 一条变（`rank 2 → 1`：期望「我们今天去吧」从 #2 升到 #1），
+   其余 11 条一字不变。这与 mixed 的修法是**同一个机制**（前缀混拼读法不再谎报整串）。
+   ⚠️ **注意一个旧数字**：handoff ⑤⑧⑦ 表里 keystrokes 写的是 0.835，而它在
+   **开关 false（默认）** 下是 **0.877**；两侧都与本次实测一致，说明那一栏记的是降级世界的值。
+2. **perf 门槛在本机负载下本来就红**：`load average: 26.81`（20 核）。
+   **A/B 对照**：未打补丁的 HEAD 同样报
+   `full:womenjintianquxian p95=21.115ms、mixed:womenjintqubeij p95=19.258ms`（总 p95=9.540ms），
+   与打补丁后的 9.315ms 落在同一量级 ⇒ **超线是环境（负载）造成的，不是本改动**。
+
+### 剩余（下一步的明确切入点）
+
+- **`matched_len` 目前"有值无消费者"**：字段、填充与文档都在，筛却关着（原因见第四步）。
+  下一步若要启用它，第一步是**放宽 `lookup_abbrev` 的早停**（或按 ml 优先收集 500 条），
+  再 A/B —— 这条属性（"消费了多少"）**无法从词条拼音重建**，⑤⑨②/⑤⑨③/⑤⑨⑦/⑤⑨⑧ 四次已证；
+- 混拼类输入（`womenjtqbj`）现在由 **`covered`** 判整串，语义上依赖
+  "`covered>0` ⇒ 真实前缀长度" 这条约定（`lookup_mixed` 的 (4) 路）。若将来有来源
+  既非整串又给 `covered==0`，这条判据会误放行 —— 到那时才需要 `matched_len` 上场。

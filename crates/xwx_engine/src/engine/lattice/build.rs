@@ -106,8 +106,8 @@ impl ImeEngine {
         // 约束展开后**恰好命中词库条目**的读法，作为位置 0 的一条边。
         // 数据依据：20 条纯缩写输入里 18 条的正确答案属于这一类（生日快乐/
         // 新年快乐/状态…都是词条级命中），而格子原先只会逐词拼链。
-        // 复用现成匹配语义（`lookup_abbrev` 纯首字母 + `lookup_mixed` 的 MixedDfs），
-        // 只取 `covered == 整串` 的结果；旧通道保留作回退点，两者按 (词, 音) 去重。
+        // 复用现成匹配语义（`lookup_abbrev` 纯首字母 + `lookup_mixed` 的 MixedDfs）；
+        // 旧通道保留作回退点，两者按 (词, 音) 去重。
         // **只在切换开关打开时才加**：默认（旧通道仍在供给）下这些边会扰动既有排序
         // （⑤⑦② 实测 keystrokes 0.877→0.794、edits 0.728→0.561），所以必须挂开关。
         if crate::engine::DEMOTE_OLD_ABBREV_CHANNEL && entry_tier && self.dict.has_abbrev() {
@@ -115,11 +115,42 @@ impl ImeEngine {
             let DictStore::Mmap(d) = &self.dict else {
                 return Ok(lattice);
             };
+            // **只放行真正覆盖整串的候选**：以前对两个来源一律写
+            // `end = pinyin.len()`（整串），于是 `womenjtqbj` 的「我们今天」被
+            // 标成 covered=10（⑤⑨④ 的实测迹），与真正覆盖整串的「我们今天去北京」
+            // 同桶 ⇒ 胜负落回分数 ⇒ 有真实词频的前缀读法赢（⑤⑨①/⑤⑨④）。
+            // 去重判据 `e.end == pinyin.len()` 也拦不住它：那条前缀边自己的
+            // `end` 是 7，与新建的整串边**不相等**，于是同一 (词, 音) 在位置 0
+            // 上出现两次（实测）。
+            //
+            // 判据落在**候选自己的 `covered`** 上，因为两个来源里出问题的那个
+            // 是 `lookup_mixed`：MixedDfs 按输入逐位消费没问题，但它的返回还含
+            // **前缀混拼读法**那一路（`lookup_mixed_full_pinyin` 的 (4)），那一路
+            // 的 `covered` 是**真实前缀长度**（实测 `womenjtqbj` → 「我们今天」
+            // `covered=7`）——旧代码正是把它抬成了整串。
+            // `covered == 0` 保留：那是「未知/整串」的约定值（字段文档），
+            // `lookup_abbrev` 的返回恒为 0（⑤⑦③ 实测），而 `abbrev_candidates`
+            // 对 0 一律回填整串长度。
+            //
+            // **`lookup_abbrev` 侧不要再按 `matched_len == n_letters` 筛**
+            // （试过一次，已回退）：它虽然是「整串命中」的真值判据
+            // （见 `Candidate::matched_len`），但 `lookup_abbrev` 在收集阶段就到
+            // `MAX_LOOKUP_RESULTS`（500 条）**早停**，筛是**早停之后**才做的 ⇒
+            // 排在 500 名以后的整串命中被误杀。实测 `smsh`：命中的 `matched_len`
+            // 只有 {3,4} 两种，而 500 条里「什么是」（ml=4）已被挡在窗口外 ⇒
+            // 20 条清单从 20/20 掉到 19/20、「什么是」直接丢召回。要用它必须先把
+            // 早停放宽或改成按 ml 优先收集，那是 dict 侧的改动，不在本阶段范围。
+            let n_letters = pinyin.len(); // 纯 ASCII 输入：字节数 == 字母数
             let mut whole: Vec<Candidate> = d.lookup_abbrev(pinyin)?;
             whole.extend(d.lookup_mixed(pinyin)?);
             for c in whole {
-                // `covered` 对这两个查表函数的返回**恒为 0**（⑤⑦③ 实测），
-                // 不能拿它判"是否覆盖整串"——它们本来就是整串查询的结果。
+                // 来源分流的具体落点：只放行真正覆盖整串的候选。`covered`
+                // 在这里**不是**「恒为 0」——`lookup_mixed` 的前缀混拼读法会
+                // 带上真实前缀长度（实测 `womenjtqbj` → 「我们今天」`covered=7`），
+                // 正是它以前被下面的 `end: pinyin.len()` 抬成「覆盖整串」。
+                if c.covered > 0 && c.covered < n_letters {
+                    continue;
+                }
                 if lattice[0]
                     .iter()
                     .any(|e| e.word == c.word && e.end == pinyin.len())
