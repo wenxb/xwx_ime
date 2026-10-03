@@ -1624,3 +1624,15 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   改写(`beam_lm.rs`、`lookup.rs`、`tests/prefix_commit.rs`);`shanghaai`(打错一个字母)
   首位由「上」变为整句「上哈爱」——两者都差,属于容错门槛的另一类,记为待办。
 - **门槛**:workspace 全绿、clippy 0、perf 通过(max 11.2ms);v1 对拍变化输入 5/44。
+
+## ㉘ P2 第 3 项:UI 更新区分「内容变化」与「仅光标变化」
+
+- **改动**:`crates/xwx_ibus/src/engine.rs` 的 `XwxEngineServer` 增加
+  `last_ui: Mutex<Option<UiSnapshot>>`(preedit / caret / 候选表 Arc / **全局** cursor /
+  page_size / 隐藏态)。`refresh_ui` 先跟上次比较:
+  - 文本与插入点都没变 ⇒ **不重发 `UpdatePreeditText`**(纯光标移动/翻页时);
+  - 候选表 `Arc::ptr_eq` 为真、且 cursor/page_size/隐藏态都没变 ⇒ **不重建
+    `UpdateLookupTable`**(省掉 9 条 146µs、500 条 7.5ms 的值构造)。
+- **坑(实测踩到并修)**:快照里存**页内**下标会漏掉翻页——第 1→2 页时页内 cursor
+  都是 0,显示的页却变了,必须重发。改存**全局** cursor 后 3 条翻页用例回绿。
+- **门槛**:`cargo test --workspace` 全绿、clippy `-D warnings` 0 告警。

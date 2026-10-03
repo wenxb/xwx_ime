@@ -28,7 +28,28 @@ use crate::ibus_proto::{self, ENGINE_NAME, ENGINE_PATH};
 /// zbus 要求接口类型 `Send + Sync`：`ImeEngine` 经 `Mutex<Connection>`
 /// 变成 `Sync`（见 xwx_engine 的 dict.rs），会话放在 `tokio::sync::Mutex`
 /// 里保证同一实例的按键串行处理。
+/// 上一次发出的 UI 状态快照（见 [`XwxEngineServer::last_ui`]）。
+struct UiSnapshot {
+    preedit: String,
+    caret: u32,
+    /// 同一张候选表（`Arc::ptr_eq` 为真）⇒ 内容没变，只有光标可能动。
+    candidates: std::sync::Arc<Vec<xwx_engine::Candidate>>,
+    /// **全局** cursor（不是页内下标）：翻页时页内下标可能不变（都是 0），
+    /// 但显示的页变了，必须重发查找表。
+    cursor: usize,
+    page_size: usize,
+    hidden_table: bool,
+}
+
 pub struct XwxEngineServer {
+    /// **上一次发给面板的 UI 状态**（P2 第 3 项）：`(preedit, caret, 候选表, 页内 cursor, page_size)`。
+    ///
+    /// 面板刷新分两类：**内容变化**（新查询/选词/翻页 ⇒ 候选表或文本变了）与
+    /// **仅光标变化**（左右移动插入点、翻页时高亮移动）。后者不必重建
+    /// `UpdateLookupTable` 的值（实测 9 条 146µs、500 条 7.5ms，见下面注释），
+    /// 预编辑文本也没变就不必重发。候选表用 `Arc::ptr_eq` 判断「还是同一张表」，
+    /// 与 `SessionUpdate.candidates` 的 Arc 共享（P2 前两项）配套。
+    last_ui: tokio::sync::Mutex<Option<UiSnapshot>>,
     /// 输入会话状态机。
     session: tokio::sync::Mutex<InputSession>,
 }
@@ -38,6 +59,7 @@ impl XwxEngineServer {
     pub fn new(engine: Arc<ImeEngine>) -> Self {
         Self {
             session: tokio::sync::Mutex::new(InputSession::new(engine)),
+            last_ui: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -93,17 +115,48 @@ impl XwxEngineServer {
             return;
         }
 
+        // **区分「内容变化」与「仅光标变化」**（P2 第 3 项）：先跟上次发出去的状态比。
+        let caret = u.caret as u32;
+        let page = u.page_candidates();
+        let hidden_table = page.is_empty();
+        // `cursor` 与 `page` 同源（`page = cursor / page_size`），这里就是取模。
+        let cursor_in_page = u.cursor - u.page_start();
+        let (send_preedit, send_table) = {
+            let mut last = self.last_ui.lock().await;
+            let same_preedit = last
+                .as_ref()
+                .is_some_and(|s| s.preedit == u.preedit && s.caret == caret);
+            let same_table = last.as_ref().is_some_and(|s| {
+                s.page_size == u.page_size
+                    && s.hidden_table == hidden_table
+                    && s.cursor == u.cursor
+                    && (hidden_table
+                        || std::sync::Arc::ptr_eq(&s.candidates, &u.candidates))
+            });
+            *last = Some(UiSnapshot {
+                preedit: u.preedit.clone(),
+                caret,
+                candidates: std::sync::Arc::clone(&u.candidates),
+                cursor: u.cursor,
+                page_size: u.page_size,
+                hidden_table,
+            });
+            (!same_preedit, !same_table)
+        };
+
         // 预编辑区：UpdatePreeditText(text, cursor_pos, visible, mode)
-        match ibus_proto::ibus_text(&u.preedit) {
-            Ok(value) => {
-                // preedit 光标跟随会话的编辑光标(caret),不再是串尾:
-                // 用户左移光标在中间插字母时,文本光标要停在插入点。
-                let cursor = u.caret as u32;
-                if let Err(e) = self.update_preedit_text(ctxt, value, cursor, true, 0).await {
-                    tracing::warn!(error = %e, "UpdatePreeditText 信号发送失败");
+        // 文本与插入点都没变就跳过（纯光标移动/翻页时不重发）。
+        if send_preedit {
+            match ibus_proto::ibus_text(&u.preedit) {
+                Ok(value) => {
+                    // preedit 光标跟随会话的编辑光标(caret),不再是串尾:
+                    // 用户左移光标在中间插字母时,文本光标要停在插入点。
+                    if let Err(e) = self.update_preedit_text(ctxt, value, caret, true, 0).await {
+                        tracing::warn!(error = %e, "UpdatePreeditText 信号发送失败");
+                    }
                 }
+                Err(e) => tracing::warn!(error = %e, "预编辑文本构造失败"),
             }
-            Err(e) => tracing::warn!(error = %e, "预编辑文本构造失败"),
         }
 
         // 候选窗：只发标准 UpdateLookupTable，渲染由 GNOME Shell 负责。
@@ -121,21 +174,19 @@ impl XwxEngineServer {
         // 条映射），而页码由唯一权威的全局 cursor 推导（见 `InputSession::page`）。
         // 旧实现的缺陷不在页内方案本身，而在**映射缺失**：会话把页内下标
         // 当成全局下标，第 2 页点第 1 条会上屏第 1 页第 1 条。
-        let page = u.page_candidates();
-        if page.is_empty() {
-            let _ = self.hide_lookup_table(ctxt).await;
-        } else {
-            let words: Vec<String> = page.iter().map(|c| c.word.clone()).collect();
-            // `cursor` 与 `page` 同源（`page = cursor / page_size`），所以
-            // 这里就是取模，不会越界、也不会与页切片错位。
-            let cursor_in_page = u.cursor - u.page_start();
-            match ibus_proto::ibus_lookup_table(&words, cursor_in_page, u.page_size) {
-                Ok(table) => {
-                    if let Err(e) = self.update_lookup_table(ctxt, table, true).await {
-                        tracing::warn!(error = %e, "UpdateLookupTable 信号发送失败");
+        if send_table {
+            if hidden_table {
+                let _ = self.hide_lookup_table(ctxt).await;
+            } else {
+                let words: Vec<String> = page.iter().map(|c| c.word.clone()).collect();
+                match ibus_proto::ibus_lookup_table(&words, cursor_in_page, u.page_size) {
+                    Ok(table) => {
+                        if let Err(e) = self.update_lookup_table(ctxt, table, true).await {
+                            tracing::warn!(error = %e, "UpdateLookupTable 信号发送失败");
+                        }
                     }
+                    Err(e) => tracing::warn!(error = %e, "候选表构造失败"),
                 }
-                Err(e) => tracing::warn!(error = %e, "候选表构造失败"),
             }
         }
     }
