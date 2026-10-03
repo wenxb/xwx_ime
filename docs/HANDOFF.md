@@ -1675,3 +1675,30 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   **收口内部实现、不动对外签名**是同样能收口的最小改动面。
 - **验收**：`cargo test --workspace` 366 passed / 0 failed；clippy `-D warnings` 0；
   `regression_probe --format v1` 对拍 **0 行**；`perf_probe` 通过。
+
+## ㉜ A2 进度：两个缺陷已修、两个落点指向 RecallHit
+
+设计定稿在 `docs/recall-hit.md`（含两次失败试验的实证）。
+
+**已修**
+- **缺陷 1：简拼配额被 Exact 补全白占**（`76ca81c`）。`merge_with_abbrev` 原按
+  「来源」切层，把简拼这条路返回的尾部 N 条一律当简拼层；但 `abbrev_candidates`
+  里「末尾半音节补全」那批是有意的 `Exact`。改为**按拼写分层**。
+  定向用例 `engine/tests/quota.rs`（构造式）：旧实现红（`实际 []`）、新实现绿。
+  实测：长候选表尾部由词频 16/4/1 的生僻字换成词频 353 万的「所」。
+- **缺陷 3：容错层没有统一配额**（`59240c9`）。容错候选原先只做
+  「push → 整表 sort → truncate」，精确层占满上限时纠错读法被整批截掉。
+  把 `merge_with_abbrev` 泛化成 `merge_layer(inp, ranked, extra, layer, quota)`，
+  简拼层传 `Abbrev/ABBREV_QUOTA`、容错层传 `Fuzzy/TOLERANT_QUOTA=8`。
+
+**两次被数据否掉的试验（都已回退）**
+- **缺陷 4（去重键）**：把 `(word, pinyin)` 加宽成 `(word, pinyin, covered)` ⇒
+  v1 对拍 310 行、**重复 word 由 4 条涨到 10 条**（`xian`→洗 ×2、`zh`→这 ×2 …），
+  且把 `ni` 的容错读法顶到第 4/5 位。⇒ 内部要共存，**展示仍须折叠**。
+- **缺陷 2（覆盖口径）**：把排序首键从「任何 `Abbrev` 都 0 桶」改成按实际覆盖查表
+  ⇒ 44 条语料 **0 行差异**，且我写的定向用例判别力不成立（同桶时 `SpellingKind`
+  的实际排序与假设相反，用例在修复版上也红）。**教训练习**：判 red/green 前先确认
+  脚本真的生效——那次的「旧实现为红」其实是 patch 静默失败后跑出的假证据。
+
+**下一步**：按 `docs/recall-hit.md` 的三步落地（纯结构 → 折叠 → 首键），
+缺陷 2 的显形输入用并列卡 `t-murt2eic-k3oz8w`（系统性打字测试）的清单去找。

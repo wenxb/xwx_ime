@@ -1102,3 +1102,11 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
 - `engine/lattice.rs`(845) → `lattice.rs`(389) + `lattice/build.rs`(465)，满足单文件 ≤600 行。
 - 搬运后对拍 0 行但 perf 破线（11.2 → 13.7ms，混合简拼长串）；加 `#[inline]` 回 11.5ms。
 - 结论：热路径文件拆分后必须跑 `perf_probe`；纯搬运不等于零风险。
+
+## 十七、A2 分层与配额（2026-10-03）
+
+- 简拼配额按拼写分层（Exact 补全不再占缩写名额）、容错层纳入统一配额
+  （`merge_layer(inp, ranked, extra, layer, quota)`，`TOLERANT_QUOTA=8`）。
+- 两次试验被数据否掉并回退：放宽去重键（重复 word 4→10）、改排序首键
+  （44 条语料 0 行差异且用例判别力不成立）。
+- 设计定稿 `docs/recall-hit.md`：召回事实（来源/拼写/消费范围/编辑数）与展示候选分离。
