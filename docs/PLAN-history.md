@@ -1373,3 +1373,9 @@ build_abbrev_lattice 追加整串条目边（lookup_abbrev+lookup_mixed 的 cove
 自检通过（ztai 简拼段前五随开关变化）。整串条目边已进格子（默认路径 10/20 候选变长），
 但关旧通道后容错层仍排在简拼层之前、状态进不了前 10。下一步实验：置顶只认"分支内 freq>0 的
 整串条目级候选"（而非链候选）——之前尝试 I 失败是因为无差别顶链候选。
+
+## 2026-10-03 下一步实验的障碍与绕法
+
+best_chain_candidates 写死 freq:0 ⇒ 无法从候选分辨条目级/链。绕法：分支内先用
+lookup_abbrev+lookup_mixed 的 covered==len 集合(word,pinyin)，置顶时优先认领该集合内的候选，
+集合空则退回现规则。验收口径已预先写死。
