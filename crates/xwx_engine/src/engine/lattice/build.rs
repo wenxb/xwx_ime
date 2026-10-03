@@ -98,6 +98,7 @@ impl ImeEngine {
         pinyin: &str,
         bounds: Option<&[usize]>,
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
+        entry_tier: bool,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let mut lattice =
             self.build_lattice_flags(pinyin, bounds, false, true, None, user_entries)?;
@@ -109,7 +110,7 @@ impl ImeEngine {
         // 只取 `covered == 整串` 的结果；旧通道保留作回退点，两者按 (词, 音) 去重。
         // **只在切换开关打开时才加**：默认（旧通道仍在供给）下这些边会扰动既有排序
         // （⑤⑦② 实测 keystrokes 0.877→0.794、edits 0.728→0.561），所以必须挂开关。
-        if crate::engine::DEMOTE_OLD_ABBREV_CHANNEL && self.dict.has_abbrev() {
+        if crate::engine::DEMOTE_OLD_ABBREV_CHANNEL && entry_tier && self.dict.has_abbrev() {
             // 与 `ImeEngine::abbrev_candidates` 同一取法：匹配在 `MmapDict` 上。
             let DictStore::Mmap(d) = &self.dict else {
                 return Ok(lattice);

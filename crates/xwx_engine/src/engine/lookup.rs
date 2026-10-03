@@ -351,7 +351,7 @@ impl ImeEngine {
             // "整串命中词条的简拼读法"按精确档参与层序比较。
             let entry_tier_exception = pure_abbrev || leading_abbrev;
             let abbrev_lattice = super::trace::timed("建简拼格", || {
-                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref())
+                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref(), entry_tier_exception)
             })?;
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），所以整串
@@ -380,7 +380,10 @@ impl ImeEngine {
                         // 状态 freq=503366 被「这台」64585 压到 #3）。
                         // **必须挂开关**：默认世界里格子与旧通道候选同场竞争，直接改分
                         // 会扰动全局排序（⑤⑧④ 实测 mixed 0.929→0.893、zgr/smsh 首位变错）。
-                        if super::DEMOTE_OLD_ABBREV_CHANNEL && c.covered >= pinyin.len() {
+                        if super::DEMOTE_OLD_ABBREV_CHANNEL
+                            && entry_tier_exception
+                            && c.covered >= pinyin.len()
+                        {
                             let total = self.dict.total_freq()?;
                             if total > 0 {
                                 let dict_logp = ((e.freq.max(1) as f64).log10()
