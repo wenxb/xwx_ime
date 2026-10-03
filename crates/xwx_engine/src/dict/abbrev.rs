@@ -29,6 +29,8 @@ use super::{read_u16, read_u32, read_u64, DictError, MmapRecord, ABBREV_HEADER_L
 pub struct AbbrevIndex {
     map: Mmap,
     key_count: usize,
+    /// 关联数（见 [`Self::association_count`]）。
+    association_count: u64,
     records_off: usize,
     strings_off: usize,
     entries_off: usize,
@@ -97,6 +99,7 @@ impl AbbrevIndex {
             return Err(DictError::Corrupt("abbrev.bin 版本不兼容"));
         }
         let key_count = read_u64(bytes, 12)? as usize;
+        let association_count = read_u64(bytes, 20)?;
         let records_off = read_u64(bytes, 28)? as usize;
         let strings_off = read_u64(bytes, 36)? as usize;
         let entries_off = read_u64(bytes, 44)? as usize;
@@ -120,7 +123,20 @@ impl AbbrevIndex {
                 "副索引记录数组越界: key_count × 记录长度超出 strings 区",
             ));
         }
-        Ok(Self { map, key_count, records_off, strings_off, entries_off })
+        Ok(Self {
+            map,
+            key_count,
+            association_count,
+            records_off,
+            strings_off,
+            entries_off,
+        })
+    }
+
+    /// 关联数（词条数）:生成脚本保证「同一词条只进一个首字母 key」，
+    /// 所以它恒等于主索引的词条总数——装配时用它做**同源校验**。
+    pub fn association_count(&self) -> u64 {
+        self.association_count
     }
 
     /// 边界检查的切片:越界一律返回损坏错误(不 panic)。

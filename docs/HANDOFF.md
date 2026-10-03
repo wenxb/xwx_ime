@@ -1784,3 +1784,19 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 用例 `dict/tests.rs::corrupt_abbrev_section_offsets_are_rejected_at_open`：
   构造 records 起点跑过头的副索引头，`AbbrevIndex::open` 必须报错并点名区段。
 - 验收：workspace 全绿、clippy 0、v1 对拍 0 行、perf 通过。
+
+## ㊵ Q4 第六步：主副索引同源标识（不新增头部字段）
+
+- **问题**（Q4）：主副索引没有同源标识，拿错代的 `abbrev.bin` 会**静默给出错候选**
+  ——比装不上更糟。
+- **为什么不加头部字段**：加字段会让现有 `.bin` 与新读取端不兼容，而
+  `dict_to_bin.py` 的源（sqlite3）不在仓库里，**无法重新生成** `data/dict.bin`——
+  那会直接废掉用户正在用的词库。
+- **做法**：用已有的**派生不变量**当同源标识——生成脚本保证「同一词条只进一个
+  首字母 key」，所以副索引的关联数恒等于主索引的词条总数（脚本实测 1.00×）。
+  `AbbrevIndex::association_count()` 暴露它，`MmapDict::with_abbrev` 比对
+  `self.total_entries`，不符就 **warning + 不装配**（简拼退化为空，精确查询不受影响）。
+- **用例**：`dict/tests.rs::abbrev_from_another_generation_is_not_attached`——取真实
+  `data/abbrev.bin`，把头部关联数改掉，装配后必须 `has_abbrev() == false`
+  （旧实现会装上 ⇒ 旧实现必红）。
+- **验收**：workspace **374 全绿**、clippy 0、v1 对拍 0 行、perf 通过。

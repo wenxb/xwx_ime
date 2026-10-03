@@ -78,7 +78,20 @@ impl MmapDict {
     /// 引擎自然退回精确查询路径,不会静默变成空词库。
     pub fn with_abbrev<P: AsRef<Path>>(mut self, path: P) -> Self {
         match AbbrevIndex::open(path.as_ref()) {
-            Ok(idx) => self.abbrev = Some(idx),
+            Ok(idx) => {
+                // **同源校验**：副索引由主索引生成，关联数恒等于词条总数。拿错代的
+                // 副索引只会静默给出错候选（简拼层命中别的词），比装不上更糟——
+                // 所以不一致就不装配，简拼退化为空、精确查询不受影响。
+                if idx.association_count() != self.total_entries {
+                    tracing::warn!(
+                        dict_entries = self.total_entries,
+                        abbrev_associations = idx.association_count(),
+                        "副索引与词库不同代(关联数不符)，不装配"
+                    );
+                } else {
+                    self.abbrev = Some(idx);
+                }
+            }
             Err(e) => {
                 tracing::warn!(error = %e, path = %path.as_ref().display(),
                     "简拼副索引打开失败,简拼查询退化为空(精确查询不受影响)");
