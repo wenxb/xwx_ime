@@ -1322,3 +1322,9 @@ ztai 的格子单独前 10 全是 Fuzzy（ztai→zhai 的容错读法），Abbre
 
 tail_is_syllable 判据下格子单独仍 5/20 ⇒ 守卫不是唯一堵点。下一步停止假设，直接给建格插桩
 （打印 readings / abbrev_word_len_ok 判定 / prefix_state==None 被丢的 key），一次定位真堵点。
+
+## 2026-10-03 插桩推翻 ⑤㊺/⑤㊼：链是通的，缺口在分支内候选选择
+
+zhuang tai(状态) 这条链 ok=true、边存在；但关旧通道后简拼段前五全是 Fuzzy、Abbrev=0
+⇒ 缺口在 best_chain_candidates(beam+n-best=4) 没选出它。另：⑤㊲/⑤㊳ 的 n-best 实验在门槛修复前跑的，
+结论无效，需重做。
