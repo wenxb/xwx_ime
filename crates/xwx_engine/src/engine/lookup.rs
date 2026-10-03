@@ -261,7 +261,13 @@ impl ImeEngine {
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），整串读法
             // 由带 LM 状态的 beam 自己重建（见 `best_chain_candidate`）。
-            for c in self.best_chain_candidates(pinyin, ctx, &abbrev_lattice, SpellingKind::Abbrev)? {
+            for c in self.best_chain_candidates(
+                pinyin,
+                ctx,
+                &abbrev_lattice,
+                SpellingKind::Abbrev,
+                ABBREV_PER_WORD_PENALTY,
+            )? {
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                     ranked.push(c);
                 }
@@ -303,14 +309,11 @@ impl ImeEngine {
         // 只在**精确格能覆盖整串**且当前没有整串候选时做：打一半的输入不走
         // 这里（简拼/容错各有自己的门槛），打对的短词也不受影响（那本来就是
         // 一条词条覆盖整串，`has_reliable_phrase` 为真）。
-        if reachable
-            && pinyin.len() >= MIN_ABBREV_INPUT_LEN
-            && !ranked.iter().any(|c| c.covered >= pinyin.len())
-        {
+        if reachable && pinyin.len() >= MIN_ABBREV_INPUT_LEN {
             // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
             let sentence_lattice = tolerant_lattice_opt.as_ref().unwrap_or(&lattice);
             for c in
-                self.best_chain_candidates(pinyin, ctx, sentence_lattice, SpellingKind::Exact)?
+                self.best_chain_candidates(pinyin, ctx, sentence_lattice, SpellingKind::Exact, 0.0)?
             {
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                     ranked.push(c);
@@ -506,6 +509,7 @@ impl ImeEngine {
         ctx: &LmContext<'_>,
         lattice: &[Vec<LatticeEdge>],
         spelling: SpellingKind,
+        per_word_penalty: f32,
     ) -> Result<Vec<Candidate>, EngineError> {
         // 先验进 beam 的剪枝目标（见 `decode_beam_with_lattice_penalized`）。
         let paths = self.decode_beam_with_lattice_penalized(
@@ -513,7 +517,7 @@ impl ImeEngine {
             ctx,
             ABBREV_CHAIN_NBEST,
             lattice,
-            ABBREV_PER_WORD_PENALTY,
+            per_word_penalty,
         )?;
         let mut out: Vec<Candidate> = Vec::new();
         for path in paths {

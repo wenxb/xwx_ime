@@ -69,6 +69,13 @@ impl ImeEngine {
         // 总词频为 0（空词库）时词频项取 0，不进对数（避免 -inf/NaN）。
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
+        // **基线补偿**：LM 的「无证据基线分」（万象实测 -11.605767，见
+        // examples/lm_word_probe.rs）不该按词数复付——多词读法每多一个词
+        // 就白扣一次基线，实测「出+在+哪」因此输给单词「杵在那」12.19 个
+        // log10。这里对第 2 个词起扣掉基线（保留各词高于基线的条件证据）。
+        // 只对**全拼整句路径**（`per_word_penalty == 0.0`）生效：简拼层的逐词
+        // 惩罚口径是上一期的约定，不动它。模型没有基线概念时 floor 是 0.0 ⇒ 原式。
+        let lm_floor = if per_word_penalty == 0.0 { self.lm.floor_log10() } else { 0.0 };
         arena.push(BeamNode {
             score: 0.0,
             state: self.lm.state_from_context(ctx),
@@ -125,7 +132,8 @@ impl ImeEngine {
                     arena.push(BeamNode {
                         // 模糊惩罚是同量纲(log10)的加性扣分:精确边 0,
                         // 模糊边减去累计 -log10(weight),多处混淆叠加累加。
-                        score: arena[node_idx].score + dict_logp + logp * self.lm_weight
+                        score: arena[node_idx].score + dict_logp
+                            + if node_idx == 0 { logp } else { logp - lm_floor } * self.lm_weight
                             - edge.fuzzy_penalty
                             - edge.typo_penalty
                             - per_word_penalty,
