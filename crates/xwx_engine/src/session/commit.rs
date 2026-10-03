@@ -329,6 +329,11 @@ impl InputSession {
         self.committed_tail.clear();
         self.last_word = None;
         self.reset();
+        // **焦点切换同时把模式收回中文**：模式是全局的，而顶栏此前没有任何
+        // 中/英指示，英文态跨应用存活会让用户以为输入法坏了——在 A 应用按了
+        // Ctrl+空格，切到 B 应用打出来的全是字母，且没有任何线索。收回中文是
+        // 保守的一侧：用户看到中文，再按一次就能进英文；反过来用户无从判断。
+        self.english_mode = false;
         text
     }
 
@@ -338,7 +343,8 @@ impl InputSession {
     /// - 中文 → 英文：若拼音串仍未上屏，先原样上屏（不丢字）；
     /// - 英文 → 中文：直接切回（英文模式下拼音串必然为空）。
     ///
-    /// `reset` 不清除模式：中/英状态跨焦点切换保持，直到再次按 Shift。
+    /// `reset` 不清除模式；跨焦点则由 [`Self::reset_for_focus_change`]
+    /// 收回中文（原因见那里的注释）。
     pub(super) fn toggle_ascii(&mut self) -> SessionOutput {
         if !self.pinyin.is_empty() && !self.english_mode {
             // 切英文时已确认段一起上屏(`finish_with_raw` 拼上并记账)。

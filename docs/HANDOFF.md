@@ -1971,3 +1971,23 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   整体不出现，看起来像「找不到北京」。
 - 验收：`cargo test -p xwx_engine --lib` **310 passed**、`--workspace` 各套件全绿、
   clippy 0。
+
+## ⑤④ 焦点切换把中/英模式收回中文
+
+- **用户症状**：「切换后只有英文」——在 A 应用按了 Ctrl+空格（进英文），切到 B 应用
+  打出来的全是字母，而顶栏那时**没有任何中/英指示**（只显示输入源名「XWX 拼音」），
+  用户没有任何线索判断自己处在哪个模式，只能怀疑输入法坏了。
+- **改动**：`session/commit.rs::reset_for_focus_change`（IBus 的 `FocusOut`/`Reset`/
+  `Disable` 都走它）在原有复位之后加 `self.english_mode = false;`；`toggle_ascii`
+  的文档同步改掉「中/英状态跨焦点切换保持」的旧说法。
+- **为什么选「收回中文」这一侧**：两种失配的代价不对称——收回之后用户看到中文，
+  再按一次 Ctrl+空格就进英文；不收回则英文态无声存活，用户只能靠试错。
+  上游多数输入法把模式做成**按应用**记忆，那需要每个焦点一份状态（更大的一件事），
+  在**没有指示器**之前先把失配的一侧关掉。
+- **这次没做的**：IBus 中英 Property（顶栏指示）——那才是正解，但需要按
+  `IBusProperty`/`IBusPropList` 的 GVariant 格式上报（`(sa{sv}svvsvbbuuv)` 一族，
+  本仓 `ibus_proto.rs` 目前只实现了 Text/LookupTable/EngineDesc/Component 四种）。
+  等指示器做出来之后，这条「收回中文」可以再讨论是否放宽。
+- 定向用例：`session/tests/basic.rs::focus_change_resets_the_mode_to_chinese`。
+- 验收：单元 **311 passed**、clippy 0；`regression_probe --format v1` 与上一版基线
+  差异仍是**长候选表尾部那 12 行**（A2 缺陷 1 的既有点名差异，与本改动无关）。

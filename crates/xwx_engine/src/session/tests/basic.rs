@@ -350,3 +350,18 @@ fn toggle_during_composition_commits_pinyin_first() {
     assert!(s.english_mode(), "应已进入英文模式");
     assert!(!s.is_active(), "上屏后会话应复位");
 }
+
+#[test]
+fn focus_change_resets_the_mode_to_chinese() {
+    let mut s = session_with_dict();
+    s.handle(InputEvent::ToggleAscii).expect("切换不应失败");
+    assert!(s.english_mode(), "应已进入英文模式");
+
+    let text = s.reset_for_focus_change();
+    assert!(text.is_empty(), "没有已确认段时不该有上屏文本");
+
+    assert!(!s.english_mode(), "焦点切换应收回到中文模式");
+    // 收回后字母重新进拼音串，而不是被英文模式透传掉。
+    let out = s.handle(InputEvent::Char('h')).expect("不应失败");
+    assert!(matches!(out, SessionOutput::Updated(ref u) if u.preedit == "h"));
+}
