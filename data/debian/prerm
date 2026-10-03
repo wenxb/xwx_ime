@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+# 卸载同样刷新一次，避免组件缓存里留着已经不存在的引擎。
+if command -v ibus >/dev/null 2>&1; then
+    ibus write-cache >/dev/null 2>&1 || true
+fi
+exit 0
