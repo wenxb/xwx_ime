@@ -1,0 +1,11 @@
+{"input":"nihaoshij","target":"你好世界","note":"逐键：打到倒数第二个字母，目标词应能被补全召回"}
+{"input":"nihaoshiji","target":"你好世界"}
+{"input":"beijingdax","target":"北京大学"}
+{"input":"zhongguore","target":"中国人"}
+{"input":"womenjintia","target":"我们今天"}
+{"input":"daishixi","target":"待实现"}
+{"input":"nihaobeijin","target":"你好北京","note":"混拼逐键：bei jing 打了一半"}
+{"input":"zmg","target":"怎么改","note":"简拼逐键：第三个音节还没开始"}
+{"input":"wmjtqb","target":"我们今天去吧","note":"已打到 q+b：输入里没有 j，北京要到打 j 才能出"}
+{"input":"womenjtqb","target":"我们今天去吧","note":"同前：b 之后还有个 j 才能出北京"}
+{"input":"shih","target":"时候"}
