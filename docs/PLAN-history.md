@@ -1397,3 +1397,9 @@ rank.rs:14 sort_candidates 排序键第二项=层序(精确→模糊→简拼)�
 needs_abbrev 含 !ranked.any(covered>=len)，而旧通道的整串候选满足它 ⇒ 分支不执行 ⇒ 默认路径的
 20/20 全部来自旧通道。⇒ 切换第一步：让该判据忽略 SpellingKind::Abbrev 候选，两条供给才同场竞争。
 配额(ABBREV_QUOTA=5)只决定谁被截断、不决定排序。
+
+## 2026-10-03 尝试 K：covered_whole 忽略 Abbrev（edits 0.728→0.680，回退）
+
+默认 20 条首位零变化，但 edits 退化 ⇒ 回退。教训：让分支在旧通道在场时跑会同时改变两条供给的
+竞争关系（编辑类输入依赖既有排序）。真正切换必须按输入类别放行（复用 pure_abbrev/leading_abbrev 信号），
+每类单独量四套语料。
