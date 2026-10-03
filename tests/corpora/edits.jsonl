@@ -1,0 +1,6 @@
+{"input":"shanghaai","target":"上海","note":"多打一个 a:字母能整段切开,容错门槛不触发,当前首位是「上哈爱」"}
+{"input":"nihoa","target":"你好","note":"oa 顺序颠倒"}
+{"input":"nihaoq","target":"你好","note":"尾部多一个 q"}
+{"input":"daishix","target":"待实现","note":"尾巴没打完(x 要补成 xian)"}
+{"input":"womenjintian","target":"我们今天","note":"正确串(对照)"}
+{"input":"zhongguoo","target":"中国","note":"尾部多一个 o"}

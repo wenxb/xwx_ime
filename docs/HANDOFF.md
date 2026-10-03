@@ -1800,3 +1800,18 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   `data/abbrev.bin`，把头部关联数改掉，装配后必须 `has_abbrev() == false`
   （旧实现会装上 ⇒ 旧实现必红）。
 - **验收**：workspace **374 全绿**、clippy 0、v1 对拍 0 行、perf 通过。
+
+## ㊶ Q3 第一步：三套固定语料进仓库
+
+- 审查原文：现有 `main/ctx/unbiased` 之外的语料不够，且**答案来自同一份词频**，
+  不能用来证明「换词频更好」。
+- 做法：新增 `tests/corpora/`（**验收资产，进仓库**，此前散在 `/tmp` 不算数）：
+  - `daily.jsonl`（12 条全拼日常：你好世界 / 北京大学 / 我们今天去西安 / 待实现 …）
+  - `mixed.jsonl`（14 条简拼混拼：zmgai / wmjtqbj / womenjintianqbj / shh / zgr …）
+  - `edits.jsonl`（6 条打错与半成品尾巴：shanghaai / nihoa / nihaoq / daishix …，
+    `note` 里写明**已知差距**，不当作通过）
+- 校验：`tests/corpus.rs` 只验语料本身（能解析、每条有 target、条目数下限），
+  **不对行为下断言**——行为验收归指标脚本。
+- 用户已裁定的判定线：目标词在前 **9** 条算首屏命中（与一屏 `page_size` 对齐）。
+- 待做：指标（召回 / MRR / 首屏命中 / 完成所需选择次数，调参与验收分离）、
+  `eval_rank` 显式选生产同款装配。
