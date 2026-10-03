@@ -1516,3 +1516,9 @@ lookup.rs 简拼分支对 freq==0 的链候选回查词库补 freq（WordSpot �
 开关 true 时召回 20/20、首位 15/20；默认配置行为全绿。但破 abbrev_quota（2 个）与
 completion::full_pinyin_first_page_recovers（全拼首页）⇒ 破例必须是"按类"的。
 解法：在 lookup.rs 算好类别传进 sort_key（rank.rs 拿不到 Segmenter）。详见 HANDOFF ⑤⑧②。
+
+## 2026-10-03 侦查：3 个契约测试都用全拼输入(ren 等) ⇒ 按类收窄足够
+
+abbrev_quota 两个用例用 "ren"（全拼可切分）、completion 用例也是全拼 ⇒ 把层序破例收窄到
+pure_abbrev/leading_abbrev 两类即可保住它们，且不影响开关 true 时的 20/20、15/20。
+实现：sort_candidates/sort_key 加 bool 参数（约 5 处调用点传 false，简拼分支传 true）。

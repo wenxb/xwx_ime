@@ -3978,3 +3978,25 @@ v1 对拍 44 输入 **0 变化**；clippy **0**；`--no-fail-fast` **401 passed 
 
 **下一步（明确）**：按做法 1 收窄到两类输入 → 跑 `cargo test -p xwx_engine`（应 327/0）→
 再跑四套语料 + 对拍 + 20 条清单（开关 true 的 20/20 / 15/20 应保持）→ 全绿则提交。
+
+### ⑤⑧② 附录：3 个契约测试的输入已查明 ⇒ **按类收窄足够**（实现路径确认）
+
+| 失败用例 | 用的输入 | 是否属于"纯缩写/开头即缩写" |
+|---|---|---|
+| `abbrev_quota::abbrev_quota_is_floor_not_cap` | **`ren`**（全拼，可切分） | **否** ⇒ 按类收窄后不受影响 |
+| `abbrev_quota::abbrev_layer_survives_full_exact_layer` | 同族（全拼） | **否** |
+| `completion::full_pinyin_first_page_recovers` | 全拼输入（`beijin`/`nihao` 型） | **否** |
+
+⇒ **结论：把层序破例收窄到 `pure_abbrev || leading_abbrev` 两类输入，就能同时保住这三个契约**，
+而开关打开时 20/20 召回 / 15/20 首位的收益**不受影响**（那 20 条全部属于这两类）。
+
+**实现（下次接手直接照做）**：
+1. `lookup.rs` 里在调用 `sort_candidates` 前已有 `pure_abbrev` / `leading_abbrev`（⑤⑥⑥ 的轻量版），
+   把 `let entry_tier_exception = pure_abbrev || leading_abbrev;` 算出来；
+2. 给 `sort_candidates`（`rank.rs:14`）加一个 `bool` 参数，透传给 `sort_key`
+   （`rank.rs:142`），在那里把破例条件改成 `entry_tier_exception && c.spelling == Abbrev
+   && c.freq > 0 && c.covered >= inp.len()`；
+3. 其余调用点（约 5 处）传 `false`（保持现状），只有简拼分支这一处传 `true`；
+4. 验证：`cargo test -p xwx_engine` 应回到 **327 passed / 0 failed**；
+   开关 `true` 时 20 条清单应保持 **20/20（召回）、15/20（首位）**；
+   开关 `false`（默认）时四套语料与 v1 对拍必须与 HEAD 完全一致。
