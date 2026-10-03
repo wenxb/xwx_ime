@@ -1534,3 +1534,8 @@ pure_abbrev/leading_abbrev 两类即可保住它们，且不影响开关 true �
 sort_candidates/sort_key/plain_key 加 entry_tier_exception；lookup.rs 简拼分支传 pure_abbrev||leading_abbrev，
 其余调用点 false。实测：单元 327/0（三个契约恢复）、全量 401/0、clippy 0、对拍 0 变化、四套语料基线；
 开关 true 时首位 15/20、召回 20/20。剩余 5 条为纯排序（zmgai #2、ztai #3、smsh #3、xxn #8、dbq #4）。
+
+## 2026-10-03 尝试 O：格子候选按词条口径重算分数（默认路径退化，回退）
+
+mixed 0.929→0.893、zgr/smsh 首位变错。原因：默认世界里格子与旧通道候选同场竞争，改分即扰动。
+结论：改格子候选分数/序必须挂 DEMOTE_OLD_ABBREV_CHANNEL；剩余 5 条排序应在"开关按类置 true"之后再做。
