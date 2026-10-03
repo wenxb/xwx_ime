@@ -150,6 +150,10 @@ impl ImeEngine {
         let pure_abbrev_lite = self.dict.has_abbrev()
             && !reachable
             && pinyin.len() >= 2
+            // **排除 `zh`/`ch`/`sh` 开头**：`shh`/`zhh` 这类"双字母声母 + 首字母"的
+            // 简写在格子上的读法供给不足（实测开关打开时 `shh`→时候、`zhh`→只会 直接丢召回），
+            // 因此不让它们进降级范围（与 `leading_abbrev_lite` 的同类排除一致）。
+            && !matches!(&pinyin[..2], "zh" | "ch" | "sh")
             && pinyin.char_indices().all(|(i, c)| {
                 c.is_ascii_alphabetic()
                     && !segmenter::abbrev_syllables(&pinyin[i..i + 1]).is_empty()
