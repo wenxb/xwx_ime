@@ -33,3 +33,4 @@ mod prewarm;
 mod query_snapshot;
 mod dag_reachability;
 mod typo_budget;
+mod quota;
