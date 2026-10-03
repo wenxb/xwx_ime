@@ -364,7 +364,7 @@ impl ImeEngine {
         }
         self.filter_blocked(&mut ranked, user_snapshot.as_ref());
         Self::fill_covered(&mut ranked, &input);
-        Ok(ranked)
+        Ok(super::recall::fold_display_candidates(ranked))
     }
 
     /// 把格子**位置 0** 上的每条边打成一个候选:候选分 = 边自身的词频/LM

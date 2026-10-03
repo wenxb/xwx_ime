@@ -18,3 +18,16 @@ fn same_word_and_pinyin_with_different_consumed_are_two_facts() {
     assert_eq!(hits[1].consumed, 3);
     assert_ne!(hits[0].consumed, hits[1].consumed);
 }
+
+/// 折叠按 `(word, pinyin)`：保留**消费范围最大**的那条，完全重复的去掉。
+#[test]
+fn folding_keeps_the_largest_consumed() {
+    let mut prefix = Candidate::new("北京", "bei jing", 1);
+    prefix.covered = 3;
+    let mut whole = Candidate::new("北京", "bei jing", 1);
+    whole.covered = 8;
+
+    let out = crate::engine::recall::fold_display_candidates(vec![prefix, whole]);
+    assert_eq!(out.len(), 1, "同词同音应折叠成一条");
+    assert_eq!(out[0].covered, 8, "保留消费范围更大的那条");
+}

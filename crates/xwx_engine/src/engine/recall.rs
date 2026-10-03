@@ -4,6 +4,8 @@
 //! 后续步骤（见 `docs/recall-hit.md`）。**当前只有简拼路径产出、且不参与任何
 //! 排序与截断**——这一步的验收在于「同词同音、消费范围不同的两条事实都还在」。
 
+use std::collections::HashMap;
+
 use crate::{Candidate, SpellingKind};
 
 /// 候选是从哪条路被召回的。
@@ -50,4 +52,32 @@ pub(super) fn collect_recall_hits(cands: &[Candidate], source: RecallSource) -> 
             edits: 0,
         })
         .collect()
+}
+
+/// 把展示候选按 `(word, pinyin)` 折叠。
+///
+/// 召回事实层**不去重**（同词同音、消费范围不同是两条事实，见
+/// [`collect_recall_hits`]），折叠只发生在展示这一侧，并且保留**消费范围最大**
+/// 的那条——分段上屏要的是「这个词最多能吃掉多少输入」。
+///
+/// 反例（实测）：把去重键加宽成 `(word, pinyin, covered)` 会让同一个词在候选窗里
+/// 出现两次（v1 对拍重复 word 由 4 条涨到 10 条）。
+pub(super) fn fold_display_candidates(cands: Vec<Candidate>) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = Vec::with_capacity(cands.len());
+    let mut index: HashMap<(String, String), usize> = HashMap::new();
+    for c in cands {
+        match index.get(&(c.word.clone(), c.pinyin.clone())) {
+            Some(&i) => {
+                // 同词同音：保留消费范围更大的那条（并列时保留先到的，稳定）。
+                if c.covered > out[i].covered {
+                    out[i] = c;
+                }
+            }
+            None => {
+                index.insert((c.word.clone(), c.pinyin.clone()), out.len());
+                out.push(c);
+            }
+        }
+    }
+    out
 }
