@@ -1581,3 +1581,9 @@ womenjtqbj：我们今天（词条，高频，重算后分高）排 #1，我们�
 旧通道输出：womenjtqbj #1 我们今天去北京 covered=10 > #2 我们今天 covered=7（wmjtqbj/womenjintianqbj 同）。
 开关打开时格子的 #1 我们今天 covered=10 ⇒ 前缀读法谎报整串覆盖、与真整串候选同桶，靠词条分胜出。
 下一步：定位并修正该 covered 的构造点（链候选/词级抽取）。
+
+## 2026-10-03 根因定位：整串条目边把 lookup_abbrev 的"前缀匹配"当成覆盖整串
+
+迹显示 [词级] 我们今天 covered=10（实际只吃 7 个字母）。lookup_abbrev 返回首字母前缀匹配
+（wmjt 是 我们今天 的前缀）⇒ ⑤⑤④ 的边一律写 end=pinyin.len() 于是谎报整串覆盖。
+修法：建边只取真正消费整串的匹配（mixed 的返回可信；lookup_abbrev 需按音节数==输入长度筛）。
