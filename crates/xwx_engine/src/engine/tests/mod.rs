@@ -46,7 +46,7 @@ fn entry_tier_exception(inp: &str, seg: &Segmenter, has_abbrev: bool) -> bool {
     if unreachable_tail(inp, None)[0] == 0 {
         return false; // 精确格可达 ⇒ 走的是 `sort_candidates(.., false)` 那条路
     }
-    pure_abbrev_input(inp, has_abbrev) || leading_abbrev_input(seg, inp, has_abbrev)
+    pure_abbrev_input(inp, has_abbrev, false) || leading_abbrev_input(seg, inp, has_abbrev)
 }
 
 mod input;

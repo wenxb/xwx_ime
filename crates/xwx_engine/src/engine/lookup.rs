@@ -144,28 +144,25 @@ impl ImeEngine {
         // 后面的简拼格就永远不建（实测 wsm/zgr/xxn/dbq/mgx 五条正因此拿不到
         // 词级候选；关掉旧通道时它们只剩输入回声，也是同一个原因）。
         let exact_covers_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
-        // **轻量版类别判据**（只依赖 `reachable`/`segmenter`/`has_abbrev`，**不碰
-        // `ranked`**）：专供上面的切换开关使用。原判据**原地不动**——⑤⑥③ 实测把
-        // 原判据前移会改变 `needs_abbrev` 里 `ranked` 项的求值时机，从而改行为。
-        let pure_abbrev_lite = self.dict.has_abbrev()
+        // **降级范围**（`DEMOTE_OLD_ABBREV_CHANNEL` 的唯一作用域判据，只依赖
+        // `reachable`/`segmenter`/`has_abbrev`，**不碰 `ranked`**）：纯缩写 ∪
+        // 开头即缩写，两者都**排除 `zh`/`ch`/`sh` 开头**。
+        //
+        // 排除它们的理由：`shh`/`zhh` 这类「双字母声母 + 首字母」的简写在格子上
+        // 的读法供给不足（实测开关打开时 `shh`→时候、`zhh`→只会 直接丢召回），
+        // 实测排除后 mixed 0.760 → 0.893。
+        //
+        // **这三件事必须共用这一个判据**：①降级旧通道（下面 `demote_old`）、
+        // ②整串条目边（`build_abbrev_lattice` 的 `demote_scope`）、③词条口径重算
+        // （本函数的 `entry_tier_exception` 分支）。原先行 ②③ 挂的是**更宽**的类别
+        // 判据（`pure_abbrev` 不排除 `zh`/`ch`/`sh`）⇒ `sh`/`zh`/`shenem`/`zhzhzhzh`
+        // 这些**不在降级范围**的输入也被改到，正是 ⑤⑩① 否决②那 13 段漂移里的
+        // 4 段（第 3 步修的就是这个）。
+        let demote_scope = self.dict.has_abbrev()
             && !reachable
-            && pinyin.len() >= 2
-            // **排除 `zh`/`ch`/`sh` 开头**：`shh`/`zhh` 这类"双字母声母 + 首字母"的
-            // 简写在格子上的读法供给不足（实测开关打开时 `shh`→时候、`zhh`→只会 直接丢召回），
-            // 因此不让它们进降级范围（与 `leading_abbrev_lite` 的同类排除一致）。
-            && !matches!(&pinyin[..2], "zh" | "ch" | "sh")
-            && pinyin.char_indices().all(|(i, c)| {
-                c.is_ascii_alphabetic()
-                    && !segmenter::abbrev_syllables(&pinyin[i..i + 1]).is_empty()
-            });
-        let leading_abbrev_lite = self.dict.has_abbrev()
-            && !reachable
-            && pinyin.len() >= 3
-            && self.segmenter.segment(&pinyin[..1]).is_empty()
-            && self.segmenter.segment(&pinyin[..2]).is_empty()
-            && !matches!(&pinyin[..2], "zh" | "ch" | "sh");
-        let demote_old =
-            super::DEMOTE_OLD_ABBREV_CHANNEL && (pure_abbrev_lite || leading_abbrev_lite);
+            && (super::rank::pure_abbrev_input(pinyin, true, true)
+                || super::rank::leading_abbrev_input(&self.segmenter, pinyin, true));
+        let demote_old = super::DEMOTE_OLD_ABBREV_CHANNEL && demote_scope;
         let abbrev = if bounds.is_none() && !demote_old {
             self.abbrev_candidates(pinyin, ctx, &ranked)?
         } else {
@@ -297,7 +294,7 @@ impl ImeEngine {
         // 不能破（见 `engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`），
         // 即使简拼格本身只用主索引。
         let pure_abbrev =
-            !reachable && super::rank::pure_abbrev_input(pinyin, self.dict.has_abbrev());
+            !reachable && super::rank::pure_abbrev_input(pinyin, self.dict.has_abbrev(), false);
         // 「已有整串读法」这条要**忽略原样回显**：纯缩写输入的解不了整串时，
         // 兜底先给的就是回显候选（`covered = 整串`、`echo = true`），
         // 它不算「已经有读法」，否则门槛永远挡住简拼格（实测 wsm/zgr/xxn/dbq/mgx
@@ -341,7 +338,7 @@ impl ImeEngine {
             // "整串命中词条的简拼读法"按精确档参与层序比较。
             let entry_tier_exception = pure_abbrev || leading_abbrev;
             let abbrev_lattice = super::trace::timed("建简拼格", || {
-                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref(), entry_tier_exception)
+                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref(), demote_scope)
             })?;
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），所以整串
@@ -370,8 +367,11 @@ impl ImeEngine {
                         // 状态 freq=503366 被「这台」64585 压到 #3）。
                         // **必须挂开关**：默认世界里格子与旧通道候选同场竞争，直接改分
                         // 会扰动全局排序（⑤⑧④ 实测 mixed 0.929→0.893、zgr/smsh 首位变错）。
+                        // 判据用 `demote_scope`（与①降级②整串条目边**同一个**作用域）：
+                        // 这里重算的是「格子供给的整串条目读法」，只有旧通道被降级
+                        // （= 该读法由格子独家供给）时才需要按词条口径校准。
                         if super::DEMOTE_OLD_ABBREV_CHANNEL
-                            && entry_tier_exception
+                            && demote_scope
                             && c.covered >= pinyin.len()
                         {
                             let total = self.dict.total_freq()?;

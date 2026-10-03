@@ -169,20 +169,31 @@ pub(super) fn effective_layer(
     }
 }
 
-/// **层序收编的输入类别判据**「纯缩写」：每个字母都能起一个音节
+/// **输入类别判据**「纯缩写」：每个字母都能起一个音节
 /// （`wsm`/`zgr`/`xxn`/`renm`）。
 ///
-/// 与 `engine/lookup.rs` 的 `pure_abbrev` 同式，抽到这里是为了让排序与契约
-/// 测试用**同一份**判据——两份判据迟早漂移，而漂移的症状是「测试与实现
-/// 各说各话」。调用方保证 `!reachable`（判据只在「精确格解不出整串」的
-/// 分支里求值，见 `lookup.rs` 的 `needs_abbrev`）。
+/// 与 `engine/lookup.rs` 的 `pure_abbrev` 同式，抽到这里是为了让排序、降级
+/// 范围与契约测试用**同一份**判据——两份判据迟早漂移，而漂移的症状是
+/// 「测试与实现各说各话」。调用方保证 `!reachable`（判据只在「精确格解不出
+/// 整串」的分支里求值，见 `lookup.rs` 的 `needs_abbrev`）。
 ///
 /// `has_abbrev` 这条约束不能省：副索引负责纯首字母简拼这条契约
 /// （见 `engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`），
 /// 即使简拼格本身只用主索引。
-pub(super) fn pure_abbrev_input(inp: &str, has_abbrev: bool) -> bool {
+///
+/// `sibilant_excluded` 是**降级范围**与**层序收编范围**的唯一差别：
+/// `zh`/`ch`/`sh` 是合法双字母声母（`shh`→时候、`zhh`→只会 这类「双字母
+/// 声母 + 首字母」简写），它在格子上的读法供给不足，进降级范围会直接丢召回
+/// （实测 mixed 0.760 → 0.893 就是靠排除它们）。故降级范围传 `true`、
+/// 层序收编传 `false`。
+pub(super) fn pure_abbrev_input(
+    inp: &str,
+    has_abbrev: bool,
+    sibilant_excluded: bool,
+) -> bool {
     has_abbrev
         && inp.len() >= 2
+        && !(sibilant_excluded && matches!(&inp[..2], "zh" | "ch" | "sh"))
         && inp.char_indices().all(|(i, c)| {
             c.is_ascii_alphabetic() && !segmenter::abbrev_syllables(&inp[i..i + 1]).is_empty()
         })

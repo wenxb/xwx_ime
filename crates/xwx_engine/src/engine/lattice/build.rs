@@ -93,12 +93,16 @@ impl ImeEngine {
     /// 只在 [`ImeEngine::lookup_candidates`] 判定「精确格解不出整串」时才构建
     /// (与容错同一个门槛思路),且调用方**只留覆盖整串的候选**——所以打对的
     /// 输入零新边、简拼也不会把单字顶进第一页。
+    ///
+    /// `demote_scope` 是**降级范围**（纯缩写 ∪ 开头即缩写，两者都排除 `zh`/`ch`/`sh`
+    /// 开头）：与「是否降级旧通道」「是否按词条口径重算分数」共用同一个判据
+    /// （见 `lookup.rs` 的 `demote_scope`，⑤⑩③）。
     pub(in crate::engine) fn build_abbrev_lattice(
         &self,
         pinyin: &str,
         bounds: Option<&[usize]>,
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
-        entry_tier: bool,
+        demote_scope: bool,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let mut lattice =
             self.build_lattice_flags(pinyin, bounds, false, true, None, user_entries)?;
@@ -110,7 +114,7 @@ impl ImeEngine {
         // 旧通道保留作回退点，两者按 (词, 音) 去重。
         // **只在切换开关打开时才加**：默认（旧通道仍在供给）下这些边会扰动既有排序
         // （⑤⑦② 实测 keystrokes 0.877→0.794、edits 0.728→0.561），所以必须挂开关。
-        if crate::engine::DEMOTE_OLD_ABBREV_CHANNEL && entry_tier && self.dict.has_abbrev() {
+        if crate::engine::DEMOTE_OLD_ABBREV_CHANNEL && demote_scope && self.dict.has_abbrev() {
             // 与 `ImeEngine::abbrev_candidates` 同一取法：匹配在 `MmapDict` 上。
             let DictStore::Mmap(d) = &self.dict else {
                 return Ok(lattice);
