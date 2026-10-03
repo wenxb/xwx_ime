@@ -123,6 +123,7 @@ fn assert_recognized(s: &InputSession, raw: &str) {
 
 mod basic;
 mod commit;
+mod commit_segment;
 mod punct_verbatim;
 mod coin;
 mod apostrophe;
