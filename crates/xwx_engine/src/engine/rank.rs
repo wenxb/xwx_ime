@@ -206,11 +206,9 @@ pub(super) fn unreachable_tail(inp: &str, bounds: Option<&[usize]>) -> Vec<usize
             if !reach[i + l] {
                 return false;
             }
-            if let Some(b) = bounds {
-                // 跨过 ⇔ 存在边界严格落在 (i, i+l) 内部。
-                if b.iter().any(|&x| i < x && x < i + l) {
-                    return false;
-                }
+            // 跨过 ⇔ 存在边界严格落在 (i, i+l) 内部（共享判据）。
+            if super::input::crosses_boundary(bounds, i, l) {
+                return false;
             }
             // 音节匹配走共享原语(A1):归一化(üe 的 `lue`/`nue`)与合法
             // 性一起做,和格构建/词典层同一口径。旧实现在这里直接查

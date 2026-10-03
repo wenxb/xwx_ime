@@ -30,6 +30,30 @@ pub(super) struct NormalizedInput<'a> {
     bounds: Vec<usize>,
 }
 
+/// 音节 `[pos, pos + len)` 是否**穿过**强制切分点（用户敲的 `\'`）。
+///
+/// 唯一实现：`lattice.rs` 的两个门面、`rank.rs` 的可达性 DP、`NormalizedInput`
+/// 的方法都调它。判据是「分隔符落在音节**内部**（`pos < x < pos + len`）」——
+/// 落在音节边界上合法，那正是 `\'` 想要的切分。
+pub(super) fn crosses_boundary(bounds: Option<&[usize]>, pos: usize, len: usize) -> bool {
+    bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x < pos + len))
+}
+
+/// 一条空格分隔的拼音 key（`xi an`）是否与强制切分点相容。
+pub(super) fn key_respects_boundaries(bounds: Option<&[usize]>, key: &str) -> bool {
+    if bounds.is_none() {
+        return true; // 无 `\'` 输入：恒真，零开销（不扫 key）
+    }
+    let mut pos = 0usize;
+    for syl in key.split(' ') {
+        if crosses_boundary(bounds, pos, syl.len()) {
+            return false;
+        }
+        pos += syl.len() + 1;
+    }
+    true
+}
+
 impl<'a> NormalizedInput<'a> {
     /// 按 B2 分隔符语义归一化:删掉 `'`、记下它落在干净串的哪个位置。
     pub(super) fn new(raw: &'a str) -> Self {

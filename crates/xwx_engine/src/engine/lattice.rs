@@ -33,25 +33,13 @@ fn window_has_vowel(window: &str) -> bool {
     /// 才非法;落在音节边界上合法——那正是用户敲 `'` 想要的切分。
     /// 抽成函数是为了让**兜底路径**用同一条判据。
     pub(super) fn syllable_crosses_boundary(pos: usize, len: usize, bounds: Option<&[usize]>) -> bool {
-        bounds.is_some_and(|b| b.iter().any(|&x| pos < x && x < pos + len))
+        super::input::crosses_boundary(bounds, pos, len)
     }
 
-    /// 一条空格分隔的拼音 key(`xi an`)是否与强制切分点相容。
-    ///
-    /// 用在兜底的前缀联想上:那里拿到的候选只保证「词以输入开头」,
-    /// 音节怎么切是词库说了算——`zh'on` 的 `zhong` 就是一条跨界的 key。
+    /// 一条空格分隔的拼音 key 是否与强制切分点相容（判据见
+    /// [`super::input::key_respects_boundaries`]）。
     pub(super) fn key_respects_boundaries(key: &str, bounds: Option<&[usize]>) -> bool {
-        if bounds.is_none() {
-            return true; // 无 `'` 输入:恒真,零开销(不扫 key)
-        }
-        let mut pos = 0usize;
-        for syl in key.split(' ') {
-            if Self::syllable_crosses_boundary(pos, syl.len(), bounds) {
-                return false;
-            }
-            pos += syl.len();
-        }
-        true
+        super::input::key_respects_boundaries(bounds, key)
     }
 
     /// 候选收口的统一过滤:把被用户 Ctrl+Delete 屏蔽的候选从最终
