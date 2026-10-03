@@ -2964,3 +2964,24 @@ zmgai/ztai/ztailan/wsm/zgr/yij/smsh/nhma/srkl/gxfc/zyaq/gzsl/jttqzenmy/zgdsq/nzg
 
 ⇒ 阶段 3 的"入口"这一步完成：该建格的输入现在都建了。下一步是量格子单独跑的成绩
 （关旧通道 + 指标准入前 10），看缺口的真实剩余量。
+
+## ⑤㊷ 门槛修好之后再量一次：格子单独**仍是 5/20** ⇒ 缺口确实在路径搜索/打分
+
+仪器自检（这次做了）：`wsm` 的 #1 在开关关时是「为什么」、开时是「我是猫」⇒
+`XWX_PROBE_NO_ABBREV` 确实生效，测量可信。
+
+结果：**#1 正确 5/20、正确读法进前 10 也是 5/20**，仍缺 15 条
+（zmgai/ztai/ztailan/wsm/zgr/yij/smsh/nhma/srkl/gxfc/zyaq/gzsl/jttqzenmy/zgdsq/nzgsm）。
+
+⇒ **⑤㊶ 的门槛修复是必要的、但不是充分的**：该建格的输入现在都建格了（10/20 的候选
+列表因此变长），但**正确读法仍产不出来**。所以阶段 3 的剩余缺口确实是**路径搜索与打分**
+（哪些边被展开、状态如何保留、路径分怎么算）——`engine/search.rs`/`scoring.rs` 的活，
+而不是门槛或弧枚举。
+
+**留给下一步的确定事实**（不用再查）：
+- 词库齐备：`zhuang`→状、`tai`→态、`zhuangtai`→状态、`zhuang t`→状态 都正常；
+- 简拼弧机制正常（`zh→z` 规则、`abbrev_syllables` 含 `zhuang`）；
+- 门槛正常（ztai 现在 `needs_abbrev=true`、会建格，成本 0.67~1.31ms）；
+- **n-best 加宽无效**（4→16 仍 5/20）⇒ 不是"排在后面被截断"；
+- ⇒ 只剩一种可能：**beam 在搜索过程中就没有把这条路径展开/保住**（`BEAM_WIDTH = 16`
+  的状态保留策略，或路径分的口径让「状+态」在中途就被剪掉）。
