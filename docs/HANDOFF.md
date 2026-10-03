@@ -2145,3 +2145,46 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   —— **旧实现实测红**（`旧实现报有限分 -57.31241`）、新实现绿。
 - 验收：单元 **313 passed**、clippy **0**、`regression_probe --format v1` 对拍 **28 行（逐条点名见上）**、
   `perf_probe` 通过（max 10.611ms、超线 0）。
+
+## ⑤⑪ 阶段 2A：缩写音节 + 字面尾链的**可穷尽约束匹配**（修 `ztailan`/`ztai`）
+
+- **病了多久**：`ztailan`（z + tai + lan = 状态栏）、`ztai`（= 状态）打不出来，
+  而且不是排序问题——**候选压根没被召回**。阶段 0 的 trace 抓到了首次丢失点：
+  ```
+  [迹] 混合 DFS 提前停止: 剩余步数=0 已收集=0 原因=步数预算耗尽   ← 重复 31 次
+  ```
+  通用混拼 DFS 先去枚举首字母能展开的每个音节的子树，还没走到 `zhuang` 就把
+  20000 步预算烧光了；随后容错层用 `Fuzzy covered=7` 的候选占住整串，
+  简拼格又被 `tolerant_explains` 关掉 ⇒ 任何名次都没有「状态栏」。
+- **改什么**：
+  - `crates/xwx_engine/src/dict/mixed.rs` 新增
+    `initial_plus_literal_tail(input, table) -> Option<(usize, String)>`：
+    识别「开头 1~2 字节是声母（2 字节只认 zh/ch/sh）+ 尾巴**恰好**切成完整音节」
+    的形态，返回（首字母字节数, 尾巴的规范音节键）。
+  - `crates/xwx_engine/src/dict/lookup.rs::lookup_mixed` 在 DFS **之前**跑一遍这条
+    约束匹配：对 `abbrev_syllables(首字母)` 的每个展开拼出完整键，用既有的
+    `MixedDfs::collect(key, mid_syllable=false)`（**只收与键完全相等的词条**）
+    精确查词。规模 = 该首字母的音节数（`z` 约 40）。
+- **三个工程细节（都是实测逼出来的）**：
+  1. **不新建展示通道**：复用 `collect` 与既有的候选构造，出口仍是同一条混拼路
+     （codex 明确要求「放在既有词匹配器内部」）。
+  2. **可穷尽 ≠ 先搜它**：这条形态的枚举是**固定规模**的（不依赖探索顺序、不会
+     饿死），这与「让通用 DFS 先试某个音节」有本质区别——后者正是被数据否掉两次的路。
+  3. **预扫用独立预算**：`collect` 是按词条扣 DFS 步数预算的，不隔离会把
+     「本来能解出的其它形态」挤掉（实测 `nhao`、`womenjintian...` 的候选会跟着变）。
+     所以预扫前后把 `dfs.budget` 存/取一次。
+- **效果（真词库 + 真 .gram）**：`ztailan` → **状态栏 #1**；`ztai` → **状态 #1**（前 5：
+  状态/姿态/正太/展台/……）。已修形态逐字节不变：`zguor`→中国人、`ztl`→（状态栏 #4 仍在）、
+  `zmgai`→怎么改、`wmjtqbj`/`womenjtqbj`→我们今天去北京、`nihao`→你好、`xian`→先、
+  `daishixian`→待实现。
+- **对拍差异逐条点名**（`regression_probe --format v1` **2 行**）：输入 `nhao`
+  的第 13 名新增合法读法 **怒号**（`nu hao`，freq 1760，Abbrev），原「侬好」后移一位。
+  （另有 28 行 `-inf` 差异来自阶段 1 的 `edit_count` 修复，见 ⑤⑩。）
+- **已知副作用（阶段 3B 要收拾）**：`ztailan` 现在只有 1 条候选——因为「已经有一条
+  覆盖整串的读法」这条**存在性否决**会关掉容错/简拼格的后续探索（codex 说的
+  「把某条路径能消费整串当成无需探索其他读法」）。目标词是对的，但候选太少，
+  正是阶段 3B 要删的那道否决。
+- 定向用例：`crates/xwx_engine/src/engine/tests/lookup.rs::initial_plus_literal_tail_is_recalled`
+  —— **旧实现实测红**（`ztailan 前 5 条应出现「状态栏」，实际: ["爱蓝","爱兰","艾岚","摘","宅"]`）。
+- 验收：单元 **314 passed**、clippy **0**、对拍 **2 行（点名见上）**、
+  `perf_probe --repeat 3 --prewarm` 通过（max 11.139ms、超线 0）。

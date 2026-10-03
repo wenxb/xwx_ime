@@ -538,3 +538,42 @@ fn non_ascii_input_returns_an_echo_instead_of_panicking() {
     let ascii = engine.lookup_candidates("nihao", &LmContext::empty()).expect("查询失败");
     assert!(!ascii.is_empty(), "ASCII 路径不该被这次守卫影响");
 }
+
+/// 「开头一个缩写音节 + 后面完整字面音节链」必须被召回。
+///
+/// `z + tai lan`（状态栏）、`z + tai`（状态）：阶段 0 的证据显示通用混拼 DFS
+/// 在这类输入上把 20000 步预算烧光却零收集，于是这两条读法压根不进池子。
+/// 修法是先跑一遍**可穷尽的约束匹配**（缩写音节的每个展开 × 尾巴的完整音节键
+/// 精确查词），规模只有该首字母的音节数。
+#[test]
+fn initial_plus_literal_tail_is_recalled() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let dict_path = root.join("dict.bin");
+    let abbrev_path = root.join("abbrev.bin");
+    let gram = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+        })
+        .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+    let (Some(gram_path), true, true) = (gram, dict_path.is_file(), abbrev_path.is_file()) else {
+        return; // 环境缺文件:跳过
+    };
+    if !gram_path.is_file() {
+        return;
+    }
+    let mut engine =
+        ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+    engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+    for (input, want) in [("ztailan", "状态栏"), ("ztai", "状态")] {
+        let cands = engine
+            .lookup_candidates(input, &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            cands.iter().take(5).any(|c| c.word == want),
+            "{input} 前 5 条应出现「{want}」，实际: {:?}",
+            cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+}

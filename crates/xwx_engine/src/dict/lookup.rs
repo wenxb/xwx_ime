@@ -250,6 +250,26 @@ impl MmapDict {
                 threshold_at: 0,
                 prefix_readings: Some(&mut prefix_readings),
             };
+            // (0) **可穷尽的约束匹配先跑**（阶段 2A）：`z + tai lan` 这种形态
+            // 直接按「缩写音节的每个可能展开 × 尾巴的完整音节键」精确查词。
+            // 它必须**先于** DFS：通用 DFS 会把整条步数预算烧在首字母的
+            // 各条子树上（阶段 0 实测零收集），而这里的规模只有几十次查键。
+            if let Some((k, rest_key)) = super::mixed::initial_plus_literal_tail(input, table) {
+                // 预扫用**独立预算**：它是「固定规模、可穷尽」的枚举，不该挤占
+                // DFS 的步数预算——否则会把本来能解出的其它形态挤掉（实测会改变
+                // `nhao`、`womenjintian...` 这类语料输入的候选）。
+                let dfs_budget = dfs.budget;
+                let mut key = String::with_capacity(k + 1 + rest_key.len());
+                for syl in crate::segmenter::abbrev_syllables(&input[..k]) {
+                    key.clear();
+                    key.push_str(syl);
+                    key.push(' ');
+                    key.push_str(&rest_key);
+                    // 完整音节序列 ⇒ `collect` 走「只收与它完全相等的 key」那条。
+                    dfs.collect(key.as_bytes(), false)?;
+                }
+                dfs.budget = dfs_budget;
+            }
             dfs.dfs(0, &[], false, false)?;
         }
 

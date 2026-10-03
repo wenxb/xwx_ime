@@ -483,6 +483,36 @@ impl MixedDfs<'_> {
     }
 }
 
+/// 识别「**开头一个缩写音节 + 后面一整串完整字面音节**」的形态。
+///
+/// 返回 `(首字母占用字节数, 尾巴的规范音节键)`；不是这个形态时返回 `None`。
+///
+/// 为什么单独识别：通用混拼 DFS 在这个形态上会把整条步数预算烧光却一条都
+/// 收不进来——阶段 0 实测 `ztailan`（z + tai + lan）的
+/// `剩余步数=0 已收集=0 原因=步数预算耗尽` 重复 31 次。而这条形态的规模
+/// 只是「该首字母的音节数 × 一次精确查键」（`z` 约 40 个），可以穷尽。
+///
+/// 判据刻意窄：尾巴必须**恰好**切成完整音节（`tai lan` 可以，`mgai`/`tl` 不行），
+/// 所以不会碰 `zmgai`/`ztl`/`zguor` 这些既有形态。
+pub(super) fn initial_plus_literal_tail(input: &str, table: &[&str]) -> Option<(usize, String)> {
+    // 两字节声母（zh/ch/sh）优先，其余按一字节。
+    for k in [2usize, 1] {
+        if input.len() <= k || !input.is_ascii() {
+            continue;
+        }
+        let head = &input[..k];
+        if k == 2 && !matches!(head, "zh" | "ch" | "sh") {
+            continue;
+        }
+        if let Some(key) = segment_prefix(&input[k..], table) {
+            if !key.is_empty() {
+                return Some((k, key));
+            }
+        }
+    }
+    None
+}
+
 /// 把输入切成「完整音节段 + 残余声母」,枚举前 `MAX_SEGMENTATIONS` 种切法。
 ///
 /// 在每个位置取**最长**合法音节优先递归;走不通时把剩余全部当声母残余。
