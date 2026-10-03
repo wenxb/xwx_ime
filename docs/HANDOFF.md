@@ -1964,5 +1964,10 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 效果：先确认「北京」再打 `daxue`，剩余串的打分会看到上文「北京」。
 - **范围说明**：只补 **LM 上文**；**用户层的学习仍然推迟到组合结束**（那是刻意的设计，
   不改）。所以「个人化补召回」这一半不在本次范围内。
-- 验收：`cargo test -p xwx_engine --lib` **309 passed**、`--workspace` 各套件全绿、
+- 定向用例（`session/tests/commit_segment.rs`）：
+  `confirming_a_segment_feeds_the_language_model_window`——确认「北京」后断言
+  `lm_context().tail` 含「北京」；**旧实现实测红**（`确认段要进 LM 的字符级窗口: ""`）。
+  注：该用例必须先有可解的尾部（dict 里补「大学」），否则剩余串无解时前缀层候选
+  整体不出现，看起来像「找不到北京」。
+- 验收：`cargo test -p xwx_engine --lib` **310 passed**、`--workspace` 各套件全绿、
   clippy 0。

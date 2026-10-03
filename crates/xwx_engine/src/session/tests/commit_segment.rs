@@ -545,3 +545,45 @@ fn immediate_commit_learns_at_once_unlike_the_real_interaction_path() {
         "立即提交接口在返回文本的同一步就学习了"
     );
 }
+
+/// 确认段要进打分的**字符级窗口**:确认「北京」之后,剩余串的候选要看得到它。
+///
+/// 旧实现里 `lm_context()` 的 tail 只有 `committed_tail`(已经上屏的文本),
+/// 方案 b 的确认段不在其中 ⇒ 这条断言在旧实现上必然失败。
+/// 用户层的学习仍推迟到组合结束(那是刻意设计),这里钉的是 LM 上文这一半。
+#[test]
+fn confirming_a_segment_feeds_the_language_model_window() {
+    let engine = Arc::new(
+        crate::ImeEngine::new(None)
+            .expect("内存引擎创建失败")
+            .with_user_lm(crate::UserLM::in_memory()),
+    );
+    engine
+        .dict
+        .upsert("北京", "bei jing", 3000)
+        .expect("插入失败");
+    engine.dict.upsert("大学", "da xue", 300).expect("插入失败");
+    let mut s = InputSession::new(Arc::clone(&engine));
+    for c in "beijingdaxue".chars() {
+        s.handle(InputEvent::Char(c)).expect("按键失败");
+    }
+    assert!(
+        !s.lm_context().tail.contains("北京"),
+        "既没确认也没上屏,上下文里不该有它: {:?}",
+        s.lm_context().tail
+    );
+
+    let idx = s
+        .candidates
+        .iter()
+        .position(|c| c.word == "北京")
+        .expect("应有「北京」");
+    s.handle(InputEvent::CandidateClicked(idx)).expect("确认失败");
+
+    assert_eq!(s.pinyin(), "daxue", "剩余串仍是未上屏的输入");
+    assert!(
+        s.lm_context().tail.contains("北京"),
+        "确认段要进 LM 的字符级窗口: {:?}",
+        s.lm_context().tail
+    );
+}
