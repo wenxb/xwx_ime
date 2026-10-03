@@ -381,6 +381,11 @@ impl Default for WanxiangConfig {
 }
 
 /// 万象 LTS（`.gram` 字符级窗口模型）：mmap 映射 + double-array 查询。
+/// 支持的 `.gram` 格式前缀（万象/Rime 的 `Rime::Grammar/<major>.<minor>`）。
+///
+/// 只认 major=1：minor 变化不影响数组布局，major 变了一定要重新核对解析。
+const SUPPORTED_GRAM_FORMAT_PREFIX: &str = "Rime::Grammar/1.";
+
 #[derive(Debug)]
 pub struct WanxiangLM {
     /// 文件映射；持有映射（数据不读进堆）。
@@ -400,8 +405,14 @@ impl WanxiangLM {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
         let header = Header::parse(&mmap)?;
-        if header.format.is_empty() {
-            return Err(LmError::BadGram("format 字段为空".into()));
+        // **不能只判「非空」**：空只是最没信息的一种坏文件。真正要认的是
+        // 「这个格式我们支持」——上游 octagram 的数组布局随版本变，拿不认识的
+        // format 硬解只会得到静默的乱码分数（Q4）。
+        if !header.format.starts_with(SUPPORTED_GRAM_FORMAT_PREFIX) {
+            return Err(LmError::BadGram(format!(
+                "不支持的 .gram 格式 {:?}（只支持以 {:?} 开头）",
+                header.format, SUPPORTED_GRAM_FORMAT_PREFIX
+            )));
         }
         if header.double_array_size == 0 {
             return Err(LmError::BadGram("double_array_size 为 0".into()));

@@ -1727,3 +1727,15 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 注：根级集成测试的 `CARGO_MANIFEST_DIR` 是**仓库根**，路径就是 `data/`（不用 `../../`）。
 - Q3 剩下三件（`eval_rank` 显式选生产同款装配、独立固定的日常/混拼/逐键编辑集、
   指标补召回与 MRR 等）尚未做，需要先定验收阈值。
+
+## ㉟ Q4 第一步：`.gram` 格式按「支持的版本」校验，而不是「非空」
+
+- **问题**（Q4 原文）：读取端只判 `format` 非空，拿不认识的格式硬解只会得到**静默的
+  乱码分数**，比报错更糟。
+- **实测**：真实模型 `~/.local/share/xwx/wanxiang-lts-zh-hans.gram` 的 format 字段是
+  **`Rime::Grammar/1.0`**。
+- **做法**：新增常量 `SUPPORTED_GRAM_FORMAT_PREFIX = "Rime::Grammar/1."`（只认 major=1：
+  minor 变化不影响数组布局，major 变了一定要重新核对解析），`WanxiangLM::open` 改为
+  校验前缀，否则 `LmError::BadGram("不支持的 .gram 格式 …")`。
+- **验收**：单元 300 全绿、clippy 0、v1 对拍 **0 行**（真实模型照常加载）、真实查询正常。
+- **待补**：构造坏 header 的定向用例（要手工拼 `.gram` 头部，含 OffsetPtr 校验路径）。
