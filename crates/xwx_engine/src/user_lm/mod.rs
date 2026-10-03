@@ -284,6 +284,8 @@ impl UserLM {
     /// 共用同一回写调度,屏蔽表随同一份文件落盘)。
     pub fn block_candidate(&self, word: &str, pinyin_key: &str) -> u32 {
         self.mutate_tables(|t| {
+            // 记住最近一条：撤销上一次屏蔽靠它，免得为一个撤销动作给会话加状态。
+            t.last_blocked = Some(block_key(pinyin_key, word).to_string());
             t.blocklist.insert(block_key(pinyin_key, word));
             if let Some(words) = t.entries.get_mut(pinyin_key) {
                 words.retain(|w| w != word);
@@ -311,6 +313,21 @@ impl UserLM {
         self.mutate_tables(|t| {
             t.blocklist.remove(&block_key(pinyin_key, word));
         })
+    }
+
+    /// **撤销最近一次屏蔽**：把上一条进屏蔽表的 `(拼音, 词)` 移出去，返回是否真移了。
+    ///
+    /// 与 [`Self::unblock`] 的分工只在「目标从哪来」：这个给按键用（用户手上没有
+    /// 候选可点），那个给「指名道姓」的场景（有具体候选/词典管理界面时）。
+    /// 槽位只有一个，撤过之后就空了。
+    pub fn unblock_last(&self) -> bool {
+        let mut moved = false;
+        self.mutate_tables(|t| {
+            if let Some(key) = t.last_blocked.take() {
+                moved = t.blocklist.remove(&key);
+            }
+        });
+        moved
     }
 
     /// 屏蔽表条数(测试/日志用)。

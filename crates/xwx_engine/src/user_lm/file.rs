@@ -61,6 +61,11 @@ pub(super) struct UserTables {
     /// 造出的词同时会进 unigrams(上屏即学),因此它既有候选召回、
     /// 又有用户层打分增益,两条通道一体衰减。
     pub(super) entries: HashMap<String, Vec<String>>,
+    /// **最近一条**进屏蔽表的 key（与 `blocklist` 同源、同一表示）。
+    ///
+    /// 只服务一个动作：Ctrl+Shift+Delete 的「撤销上一次屏蔽」——那时用户手里
+    /// 没有候选可点（被屏蔽的词本来就不在列表里），所以要记住上一条。
+    pub(super) last_blocked: Option<String>,
     /// 屏蔽表:被用户 Ctrl+Delete 删掉的候选,存 `"拼音 key\u{1}词"` 的
     /// 拼接字符串(Ctrl+Delete 删候选)。
     ///
@@ -178,6 +183,7 @@ impl UserLM {
         let mut bigram = BigramLM::new();
         bigram.load(bigram_text.as_bytes())?;
         Ok(UserTables {
+            last_blocked: None,
             unigrams: bigram.unigrams,
             bigrams: bigram.bigrams,
             entries,

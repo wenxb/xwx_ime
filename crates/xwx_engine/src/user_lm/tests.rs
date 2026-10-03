@@ -557,3 +557,31 @@ fn unblock_removes_the_block_and_is_idempotent() {
     lm.unblock("自造短语", "zi zao duan yu");
     assert_eq!(lm.blocklist_len(), 0);
 }
+
+/// **撤销最近一次屏蔽**（Ctrl+Shift+Delete 的引擎侧）：用户手里没有候选可点，
+/// 靠槽位记住上一条；槽位只有一个，撤过就空，更早的要用 `unblock` 指名道姓。
+#[test]
+fn unblock_last_undoes_the_most_recent_block() {
+    let lm = UserLM::in_memory();
+    assert!(!lm.unblock_last(), "没屏蔽过时应返回 false 且不 panic");
+
+    lm.add_entry("自造短语", "zi zao duan yu");
+    lm.block_candidate("自造短语", "zi zao duan yu");
+    lm.block_candidate("词库词", "ci ku ci");
+    assert_eq!(lm.blocklist_len(), 2);
+
+    assert!(lm.unblock_last(), "应撤销最近一条（词库词）");
+    assert!(
+        !lm.snapshot().is_blocked("ci ku ci", "词库词"),
+        "最近一条该被解掉"
+    );
+    assert!(
+        lm.snapshot().is_blocked("zi zao duan yu", "自造短语"),
+        "更早那条不受影响"
+    );
+
+    assert!(!lm.unblock_last(), "槽位已空，再撤返回 false");
+    assert_eq!(lm.blocklist_len(), 1, "更早那条仍在屏蔽表里");
+    lm.unblock("自造短语", "zi zao duan yu");
+    assert_eq!(lm.blocklist_len(), 0);
+}
