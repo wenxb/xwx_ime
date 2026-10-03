@@ -1848,3 +1848,17 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - **修正后基线**：keystrokes 11 条 → 召回 **9/11**、MRR **0.729**、首屏 **8/11**、平均选择 0.82；
   两条未召回正好都是**尾部半成品音节补全**那一类（`daishixi`→待实现、`nihaobeijin`→你好北京）
   ——与 `edits.jsonl` 的 `daishix` 同源，坐实了「修复 1」的优先级。
+
+## ㊹ 尾部补全的范围收窄：只补「半音节尾巴」
+
+- 复核 `nihaobeijin` 时发现：末尾 `jin` 是**完整音节**（「北京」要的是 `jing`），
+  上游 RIME 的 `enable_completion`（`syllabifier.cc`）只在**音节打到一半**时补全，
+  不会把 `jin` 当 `jing`。所以引擎给「你好被禁」**在拼写上是对的**，
+  语料里「你好北京」属人工偏好（已在 note 里写明）。
+- 于是「修复 1」的范围收窄为：**半音节尾巴补全**（`x`→`xian`、`yua`→`yuan`、
+  `beiji`→`beijing` 这类），带完成惩罚（上游 `kCompletionPenalty ≈ −3.0`）。
+- 语料相应调整：`nihaobeijin` 标为人工偏好、新增 `daishix`（x→xian）与
+  `womenjintianqugongyua`（yua→yuan）两条真缺口用例；`daishixi` 那条删除
+  （它是排序偏好，不是能力缺口，见卡片评论）。
+- **教训（第二次同类）**：写语料期望前先确认「输入是否真的编码得出目标」——
+  上次是 `wmjtqb` 缺 `j`，这次是 `jin` ≠ `jing`。

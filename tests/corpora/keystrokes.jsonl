@@ -3,9 +3,10 @@
 {"input":"beijingdax","target":"北京大学"}
 {"input":"zhongguore","target":"中国人"}
 {"input":"womenjintia","target":"我们今天"}
-{"input":"daishixi","target":"待实现"}
-{"input":"nihaobeijin","target":"你好北京","note":"混拼逐键：bei jing 打了一半"}
+{"input":"daishix","target":"待实现","note":"半音节尾巴:x 要补成 xian(真缺口)"}
+{"input":"nihaobeijin","target":"你好北京","note":"人工偏好(超出上游语义):末尾 jin 是完整音节(北京需 jing),RIME 的 enable_completion 只补半音节,引擎给「你好被禁」在拼写上是对的"}
 {"input":"zmg","target":"怎么改","note":"简拼逐键：第三个音节还没开始"}
 {"input":"wmjtqb","target":"我们今天去吧","note":"已打到 q+b：输入里没有 j，北京要到打 j 才能出"}
 {"input":"womenjtqb","target":"我们今天去吧","note":"同前：b 之后还有个 j 才能出北京"}
 {"input":"shih","target":"时候"}
+{"input":"womenjintianqugongyua","target":"我们今天去公园","note":"半音节尾巴:yua 要补成 yuan(真缺口)"}
