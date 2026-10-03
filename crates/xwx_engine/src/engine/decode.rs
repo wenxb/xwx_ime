@@ -20,7 +20,7 @@ impl ImeEngine {
         }
         // 独立算法接口(只被测试/调试调用,见 `decode_paths` 的文档):
         // 这里自取一代快照。生产查询走 `lookup_candidates`,那里一次查询
-        // 只取一代、并把它传给格构建与屏蔽过滤(codex 审查 A3)。
+        // 只取一代、并把它传给格构建与屏蔽过滤。
         let user = crate::user_lm::user_entries_snapshot(&self.lm);
         self.decode_beam_with_lattice_penalized(
             pinyin,
@@ -34,7 +34,7 @@ impl ImeEngine {
     /// 与 [`Self::decode_beam`] 相同，但格子由调用方传入（分层便于
     /// 把「格构建」与「beam 推进」分开看，性能排查/测试用）。
     ///
-    /// **生产查询不再调它**（codex 审查第二批）：`lookup_candidates` 里
+    /// **生产查询不再调它**：`lookup_candidates` 里
     /// 「精确格上有没有覆盖整串的读法」改用 [`ImeEngine::lattice_reachable`]
     /// 的布尔 DP；beam 作为独立算法接口保留，供 `decode_paths` 与解码测试
     /// 使用（两边等价性由 `engine/tests/dag_reachability.rs` 对拍）。
@@ -91,7 +91,7 @@ impl ImeEngine {
                 for (slot, edge) in lattice[pos].iter().enumerate() {
                     if edge.gap {
                         // 空词边:状态不变、无词频/LM 项,只扣编辑惩罚。
-                        // 空词弧本身就吃掉一次编辑预算(codex 审查 D13)。
+                        // 空词弧本身就吃掉一次编辑预算。
                         let used = arena[node_idx].used_edits + 1;
                         if used > MAX_TYPO_EDITS {
                             continue;
@@ -115,7 +115,7 @@ impl ImeEngine {
                     } else {
                         0.0
                     };
-                    // 整条路径的容错编辑预算(codex 审查 D13):预算跟着 beam
+                    // 整条路径的容错编辑预算:预算跟着 beam
                     // 状态走,超预算的分支不再扩展。
                     let used = arena[node_idx].used_edits + edge.edit_count;
                     if used > MAX_TYPO_EDITS {
@@ -236,7 +236,7 @@ impl ImeEngine {
         // 只在枚举路径置 true,其余路径为 false,去重行为与旧版一致。
         let mut enum_expand_used = false;
 
-        // **强制切分点同样约束兜底**(codex 审查 D9):旧实现把清洗串当普通串
+        // **强制切分点同样约束兜底**:旧实现把清洗串当普通串
         // 重新切分,`xi'anq` 于是切出 `xian`(跨了 `'`)→ 召回「先/现/显/线」,
         // `'` 在整串解不出时形同不存在。这里用**与格构建逐字相同**的判据
         // (`ImeEngine::key_respects_boundaries`)筛切法:穿界的音节一律不要。
@@ -323,7 +323,7 @@ impl ImeEngine {
         //
         // **同一条 retain 兼管强制切分点**:前缀联想拿到的候选只保证「词以输入
         // 开头」,音节怎么切由词库决定——`zh'on` 的 `zhong` 就是一条穿界的 key
-        // (codex 审查 D9)。`bounds` 为 None 时该判据恒真、不扫 key。
+        // 。`bounds` 为 None 时该判据恒真、不扫 key。
         merged.retain(|c| {
             c.pinyin.split(' ').count() <= pinyin.len()
                 && Self::key_respects_boundaries(&c.pinyin, bounds)

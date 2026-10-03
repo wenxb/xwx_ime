@@ -256,7 +256,7 @@ fn ctrl_delete_passthrough_when_idle() {
     assert!(matches!(out, SessionOutput::Noop), "空闲时 Ctrl+Delete 应透传");
 }
 
-// ——— codex 审查 D5:翻页之后「显示的是谁」必须等于「上屏的是谁」 ———
+// ——— D5:翻页之后「显示的是谁」必须等于「上屏的是谁」 ———
 //
 // 旧实现里 `page` 与 `cursor` 是两份独立状态:翻页只动 `page`(光标仍指
 // 第 1 页首项),数字选词又直接取 `candidates[n-1]`(全局下标,与页面无关),
@@ -435,7 +435,7 @@ fn every_visible_candidate_is_committed_by_digit_space_and_click() {
 }
 
 /// 只移动光标(翻页、数字/点击选词)时不重建候选表:两次刷新共享同一份
-/// `Arc`(codex 审查 P2 第三条)。旧实现每次 `update()` 都克隆整表——
+/// `Arc`。旧实现每次 `update()` 都克隆整表——
 /// `Candidate` 带三个 `String`,500 条的简拼层就是 1500 次分配,而翻页
 /// 这种操作根本不动候选内容。
 #[test]

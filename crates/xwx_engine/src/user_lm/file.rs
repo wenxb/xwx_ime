@@ -47,7 +47,7 @@ enum Section {
 
 /// 计数表本体。共享由 [`UserLM`] 的 `RwLock<Arc<..>>` 承担:写路径独占时
 /// 原地改(`Arc::make_mut`),打分线程持有旧快照时才深拷贝一份——因此需要
-/// `Clone`(2026-10-03,codex 审查 D1)。
+/// `Clone`。
 #[derive(Debug, Default, Clone)]
 pub(super) struct UserTables {
     /// 一元计数:词 -> 上屏次数。
@@ -97,7 +97,7 @@ impl UserLM {
                 }
                 Err(e) => {
                     // 文件损坏:不 panic、不截断原文件。**进入只读恢复态**
-                    // (codex 审查 D11):旧实现继续用空模型 + 保留写路径,
+                    // :旧实现继续用空模型 + 保留写路径,
                     // 下一次 flush 就把唯一副本覆盖成空文件。现在只读,
                     // 直到显式 [`Self::recover_corrupt_file`]。
                     lm.read_only.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -110,7 +110,7 @@ impl UserLM {
             }
             Err(e) => {
                 // 打不开(权限等)同样进只读态:否则 flush 会把读不出来的
-                // 文件截断成空模型(codex 审查 D11)。
+                // 文件截断成空模型。
                 lm.read_only.store(true, std::sync::atomic::Ordering::Relaxed);
                 warn!(error = %e, path = %path.display(),
                     "用户语言模型打开失败:进入只读恢复态,不再回写");
@@ -194,7 +194,7 @@ impl UserLM {
     /// - 没有任何新学习时直接跳过(空写只会徒增 SSD 磨损)。
     pub fn flush(&self) -> Result<(), LmError> {
         // **串行化**:两次 flush 并发会交错写同一个临时文件、rename 顺序也
-        // 无法保证(codex 审查 D4)。
+        // 无法保证。
         let _serial = self.flush_lock.lock().unwrap_or_else(|p| p.into_inner());
         if self.read_only.load(std::sync::atomic::Ordering::Relaxed) {
             if !self.read_only_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -209,7 +209,7 @@ impl UserLM {
         // **先认领这一代**:swap 之后发生的学习会重新累加 dirty,不会被本次
         // 落盘清零。旧实现是「写完无条件 `store(0)`」,把「快照之后、落盘
         // 期间」发生的学习一起抹掉——它们还在内存表里,但定时器不会再保存
-        // (`flush` 见 `dirty == 0` 直接返回),进程一退就丢(codex 审查 D4)。
+        // (`flush` 见 `dirty == 0` 直接返回),进程一退就丢。
         let taken = self.dirty.swap(0, std::sync::atomic::Ordering::Relaxed);
         if taken == 0 {
             return Ok(());
@@ -228,7 +228,7 @@ impl UserLM {
     }
 
     /// 显式从损坏文件恢复:把原件**改名留档**,再允许回写(新文件由下一次
-    /// `flush` 写出)。这是唯一的解除只读态的方式(codex 审查 D11)。
+    /// `flush` 写出)。这是唯一的解除只读态的方式。
     ///
     /// 返回留档路径(`None` = 本来就不是只读态,或原文件已不在)。
     pub fn recover_corrupt_file(&self) -> Result<Option<PathBuf>, LmError> {
@@ -333,7 +333,7 @@ impl UserLM {
         let tmp = path.with_file_name(tmp_name);
         let write_result = (|| -> Result<(), LmError> {
             // 0600:用户词频/造词/屏蔽是个人输入历史,不给同机其它用户读
-            // (codex 审查 D11)。
+            // 。
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)

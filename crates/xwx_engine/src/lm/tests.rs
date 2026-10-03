@@ -422,7 +422,7 @@ fn real_gram_path() -> Option<std::path::PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// `score_only` 必须与 `score(..).0` **逐位相同**(codex 审查第二批)。
+/// `score_only` 必须与 `score(..).0` **逐位相同**。
 ///
 /// 它省的是分配,不是精度:`score` 要为被丢弃的状态付一次 `String`/`Box`,
 /// `score_only` 不建状态,但**两边算出来的分数必须一模一样**。

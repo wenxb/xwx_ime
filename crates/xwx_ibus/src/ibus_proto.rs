@@ -212,7 +212,7 @@ pub fn ibus_text(text: &str) -> Result<OwnedValue, ProtoError> {
 /// - `cursor`：高亮候选在**当前页内**的下标（0..`page_size`）；
 /// - `page_size`：每页候选数。
 ///
-/// **坐标系（codex 审查 D5）**：发「当前页 + 页内下标」时，两种面板口径
+/// **坐标系**：发「当前页 + 页内下标」时，两种面板口径
 /// 会得到同一个点击下标——面板若按 `page = cursor / page_size` 推页码，
 /// 页内 cursor < page_size ⇒ page = 0 ⇒ 点击回传 `0*page_size + 按钮序号`
 /// = 按钮序号；面板若把 cursor 当页内下标，结论一样。于是面板回传的
@@ -237,7 +237,7 @@ pub fn ibus_lookup_table(
         page_size as u32,
         cursor as u32,
         true,  // cursor_visible
-        false, // round：不循环翻页，与会话的钳位导航一致（codex 审查 D5）
+        false, // round：不循环翻页，与会话的钳位导航一致
         0i32,  // orientation：IBUS_ORIENTATION_HORIZONTAL
         candidates,
         Vec::<Value<'static>>::new(), // labels

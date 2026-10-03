@@ -1,8 +1,8 @@
-//! D-Bus 层性能入口(codex 审查第二批):一次 `ProcessKeyEvent` 往返要多久。
+//! D-Bus 层性能入口:一次 `ProcessKeyEvent` 往返要多久。
 //!
 //! 引擎/会话层的逐键延迟由 `examples/perf_probe.rs` 量(不经 IPC);这里量的是
 //! **真实总线往返**——私有 `dbus-daemon` + 真引擎进程,也就是实机上 GNOME Shell
-//! 每按一个键要等的那段时间。两者相减就是 IPC + 调度开销,补上审查指出的
+//! 每按一个键要等的那段时间。两者相减就是 IPC + 调度开销,补上
 //! 「`decode_bench`/`lookup_bench` 都没测总线响应」这块空白。
 //!
 //! 注意:集成测试拉起的是 **debug** 引擎(与 `just verify` 同一装配),

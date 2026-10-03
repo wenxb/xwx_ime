@@ -516,7 +516,7 @@ fn tolerant_pass_leaves_exactly_typed_inputs_alone() {
     }
 }
 
-/// 公开查询入口必须挡住非拼音文本(codex 审查 D12,P2):
+/// 公开查询入口必须挡住非拼音文本:
 /// 中文/emoji/混合串过去会直接进按字节切片的排序代码并 panic。
 /// 非 ASCII 一律返回**原文回声**(原样上屏的既有出口),绝不 panic。
 #[test]

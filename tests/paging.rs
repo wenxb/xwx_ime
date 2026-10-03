@@ -2,7 +2,7 @@
 //! `CandidateClicked` 是 D-Bus 方法(`engine.rs:273-310`),单测摸不到——
 //! 会话层的等价物走的是**按键**(`InputEvent::PageDown`)而不是面板方法。
 //!
-//! **线上坐标系(codex 审查 D5 定稿)**:`UpdateLookupTable` 只带**当前页**
+//! **线上坐标系**:`UpdateLookupTable` 只带**当前页**
 //! (≤ `page_size` 条),`cursor` 是**页内**下标(0..page_size);面板据此渲染,
 //! 点击回传的也是页内序号,会话用 `page_start + index` 映射回全局
 //! (`InputEvent::CandidateClicked` 的契约)。会话内部只有**一个**权威全局
@@ -266,7 +266,7 @@ fn candidate_clicked_commits_within_the_current_page() {
 
 /// 第 2 页上的点击带的是**页内**下标:点第 1 条(霓)必须上屏霓,不是第 1 页的泥。
 ///
-/// 这就是 codex 审查 D5 的集成层见证:旧实现把面板回传的页内下标直接当全局
+/// 这就是 D5 的集成层见证:旧实现把面板回传的页内下标直接当全局
 /// 下标用,点第 2 页第 1 条会上屏「泥」——面板显示与上屏文本分叉。
 ///
 /// Wrong-behaviour witness: 会话里 `CandidateClicked` 不做 `page_start + index`

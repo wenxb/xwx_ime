@@ -89,7 +89,7 @@ fn update_preedit_text_carries_pinyin_and_caret() {
 /// `UpdateLookupTable` must contain the expected candidates, in order, for the
 /// current page, with the page-local `cursor` and the page geometry.
 ///
-/// 线上坐标系(codex 审查 D5 定稿):表 = **当前页**切片(≤ page_size),
+/// 线上坐标系:表 = **当前页**切片(≤ page_size),
 /// `cursor` = **页内**下标;面板点击回传的也是页内下标,会话用
 /// `page_start + index` 映射回全局。旧缺陷不是这个坐标系本身,而是会话
 /// 少做了那条映射(见 `tests/paging.rs::candidate_clicked_on_page_two_...`)。

@@ -86,7 +86,7 @@ fn missing_and_corrupt_files_degrade_gracefully() {
     std::fs::write(&bad, "好\t不是数字\n两\t个\t字段\t太多\n").unwrap();
     let lm = UserLM::open_or_create(&bad);
     assert_eq!(lm.unigram_len(), 0, "损坏文件应退化为空模型");
-    // **契约变更(codex 审查 D11)**:损坏文件进只读恢复态,不再被下次 flush
+    // **契约变更**:损坏文件进只读恢复态,不再被下次 flush
     // 自动覆盖——空模型覆盖唯一副本才是真正的数据丢失。旧断言就是
     // 「损坏后 flush 能重写」,那正是要修的行为。
     assert!(lm.is_read_only(), "损坏文件应进只读恢复态");
@@ -326,7 +326,7 @@ fn legacy_file_with_blocklist_section_loads() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 写路径必须是「取表—改—发布」的**原子**操作(codex 审查 D1,P0)。
+/// 写路径必须是「取表—改—发布」的**原子**操作。
 ///
 /// 旧实现用 `mem::take` 把共享表换成空表再释放锁:窗口里别的线程读到空模型
 /// (屏蔽项、计数全消失),两个写者还会互相覆盖。这里让 4 个写者并发 learn
@@ -386,7 +386,7 @@ fn concurrent_writes_never_publish_an_empty_table() {
     assert_eq!(lm.blocklist_len(), 1);
 }
 
-/// 落盘后再载入必须完整(codex 审查 D4 的基本面)。
+/// 落盘后再载入必须完整。
 #[test]
 fn flush_then_reload_keeps_every_count() {
     let dir = std::env::temp_dir().join(format!("xwx_userlm_rt2_{}", std::process::id()));
@@ -446,7 +446,7 @@ fn failed_flush_keeps_the_generation_dirty() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 损坏的用户文件绝不能被「空模型 + 回写」覆盖掉(codex 审查 D11,P1)。
+/// 损坏的用户文件绝不能被「空模型 + 回写」覆盖掉。
 ///
 /// 三张表各自的坏行都要进只读恢复态:计数区(坏 count)、造词区、屏蔽区
 /// (后两者是缺制表符的坏行)。只读态下 learn/flush 都不许改动原文件。

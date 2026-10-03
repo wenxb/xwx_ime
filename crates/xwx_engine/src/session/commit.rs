@@ -214,7 +214,7 @@ impl InputSession {
         }
         // 3. 总长 ≤ [`MAX_COIN_CHARS`]——超过上限时 [`Self::check_coin_limit`]
         //    会调 `break_coin_run` 来**丢弃**,如果这里仍判够格,就会反过来
-        //    造出一条 25+ 字的用户词条(codex 审查 D10)。上限与「像不像
+        //    造出一条 25+ 字的用户词条。上限与「像不像
         //    一个想复用的短语」是两件事,但**够格**必须同时满足两者。
         let chars: usize = self.coin_buffer.iter().map(|(w, _)| w.chars().count()).sum();
         chars <= MAX_COIN_CHARS
@@ -252,7 +252,7 @@ impl InputSession {
     }
 
     /// **立即提交**第 `index` 个候选（全局下标，跨页有效）——测试/探针的
-    /// 快捷接口，**不等价于真实交互**（codex 审查 A4 要求的命名）。
+    /// 快捷接口，**不等价于真实交互**。
     ///
     /// 与正式路径（[`InputEvent::CandidateClicked`] / [`InputEvent::Space`]
     /// 走 [`Self::handle`]）的差别就在「立即」二字：
@@ -299,7 +299,7 @@ impl InputSession {
         self.confirmed.clear();
         self.recognized = None;
         // 「被翻页吃掉的那个点」是**当前串**的属性,串都没了就作废
-        // (codex 审查 D8)。
+        // 。
         self.pending_url_dot = None;
     }
 
@@ -317,7 +317,7 @@ impl InputSession {
         let text = self.confirmed_text();
         self.replay_confirmed();
         self.break_coin_run();
-        // **焦点切换同时是 LM 上下文边界**(codex 审查 D10):不复位的话,
+        // **焦点切换同时是 LM 上下文边界**:不复位的话,
         // 复用同一个会话实例时下一个焦点会继承前一个焦点的 `last_word`,
         // 并据此学习跨焦点 bigram(在微信里选完词、切到浏览器继续打字,
         // 两边不该互为上文)。`reset()` 本身**刻意**不清上下文(同一次
@@ -343,7 +343,7 @@ impl InputSession {
             SessionOutput::Commit(text)
         } else {
             self.english_mode = !self.english_mode;
-            // **模式切换也是造词边界**(codex 审查 D10):空闲时切走再切回来,
+            // **模式切换也是造词边界**:空闲时切走再切回来,
             // 缓冲里上一段的字不该和下一段的字粘成一个词。`reset()` 刻意
             // 不清缓冲(分段上屏要跨多次上屏累积),所以这里显式结算。
             self.break_coin_run();

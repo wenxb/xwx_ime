@@ -439,7 +439,7 @@ fn recognized_state_char_fallthrough_when_not_recognized() {
     assert!(!s.is_active());
 }
 
-/// 识别态下**数字**必须按原文进串,不能被当成「选第 N 个候选」(codex 审查 D7)。
+/// 识别态下**数字**必须按原文进串,不能被当成「选第 N 个候选」。
 ///
 /// `http://x1.com` 的 `1` 在 ibus 层被折成 `Select(1)`;旧实现接不住,
 /// 于是它选中那条回声候选 → **地址被提前提交**。
@@ -467,7 +467,7 @@ fn digit_inside_a_recognized_url_extends_the_text_instead_of_selecting() {
     assert!(s.recognized.is_some());
 }
 
-/// 识别态下**大写字母**必须按原文进串,不能结束组合(codex 审查 D7)。
+/// 识别态下**大写字母**必须按原文进串,不能结束组合。
 #[test]
 fn capital_letter_inside_a_recognized_url_extends_the_text() {
     let mut s = session_with_dict();
@@ -483,7 +483,7 @@ fn capital_letter_inside_a_recognized_url_extends_the_text() {
     assert_eq!(s.pinyin(), "http://x/A", "大写及其大小写都要保留");
 }
 
-/// 非识别态行为不变:数字仍是数字选词,大写仍结束组合(codex 审查 D7 的回归线)。
+/// 非识别态行为不变:数字仍是数字选词,大写仍结束组合。
 #[test]
 fn digit_select_and_capital_keep_their_normal_meaning_while_composing() {
     let mut s = session_with_dict();

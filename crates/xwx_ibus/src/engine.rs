@@ -129,7 +129,7 @@ impl XwxEngineServer {
 
         // 候选窗：只发标准 UpdateLookupTable，渲染由 GNOME Shell 负责。
         //
-        // **只发当前页 + 页内 cursor**（codex 审查 D5）。这里刻意不走
+        // **只发当前页 + 页内 cursor**。这里刻意不走
         // 「发整表 + 绝对 cursor」那条路：实测整表构造+序列化
         // 9 条 = 146µs / 500 条 = 7.5ms（`ibus_lookup_table` 后转
         // `OwnedValue`，每键一次），单这一项就吃掉 12ms 热路径预算的一半以上。
@@ -344,7 +344,7 @@ impl XwxEngineServer {
     ///
     /// 我们发出去的 `UpdateLookupTable` 只含当前页、`cursor` 也是页内下标
     /// （见 `refresh_ui`），面板因此按页内坐标系回传；会话负责映射回全局
-    /// （codex 审查 D5）。旧注释写的「全局下标（跨页）」正是当初那个缺口。
+    /// 。旧注释写的「全局下标（跨页）」正是当初那个缺口。
     ///
     /// TODO: `button`/`state` 目前忽略，后续支持右键翻页、Shift+点击等。
     #[zbus(name = "CandidateClicked")]
@@ -436,7 +436,7 @@ impl EngineFactory {
         // 留下一个永远不应答的路径。非法源头只有一个字符——D-Bus 对象路径
         // 的分段只允许 `[A-Za-z0-9_]`,旧实现的 `{ENGINE_PATH}-{n}`(连字符)
         // 会被 zvariant 拒绝,于是**第二次 CreateEngine 必定失败**
-        // (codex 审查 D6)。
+        // 。
         let path = OwnedObjectPath::try_from(engine_object_path(n))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         if n > 1 {
@@ -455,7 +455,7 @@ impl EngineFactory {
 /// 第 `n` 个引擎实例的对象路径(`n = 1` 即预导出的那个)。
 ///
 /// 单独成函数是为了能被单测钉住:序号部分必须是合法路径分段
-/// (`[A-Za-z0-9_]`),不能用连字符(codex 审查 D6)。
+/// (`[A-Za-z0-9_]`),不能用连字符。
 pub(crate) fn engine_object_path(n: u32) -> String {
     if n <= 1 {
         ENGINE_PATH.to_string()
@@ -468,7 +468,7 @@ pub(crate) fn engine_object_path(n: u32) -> String {
 mod tests {
     use super::*;
 
-    /// 第 2 个及之后的实例路径必须能被 D-Bus 接受(codex 审查 D6):
+    /// 第 2 个及之后的实例路径必须能被 D-Bus 接受:
     /// 旧实现用连字符(`.../xwx-2`),zvariant 直接拒绝,于是第二次
     /// `CreateEngine` 必定失败。
     #[test]

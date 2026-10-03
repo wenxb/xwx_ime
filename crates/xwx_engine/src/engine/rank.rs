@@ -42,8 +42,7 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
     // 但不再出现裸 u 硬键的「生僻组合词淹没高频单字」。
     // `inp` 是排序时的查询串。排序首键 u_min 桶要与格构建/beam/后向 DP
     // 用**同一份**「不许跨 `'`」的可达性,故在这里归一化成干净串 + 边界
-    // 表——归一化本身走共享的 [`super::input::NormalizedInput`](codex 审查
-    // A1:原先 `lookup.rs`、本文件、`lattice.rs` 各写一份);无 `'` 时它
+    // 表——归一化本身走共享的 [`super::input::NormalizedInput`];无 `'` 时它
     // 零分配,`unreachable_tail` 也走原有零开销路径。
     let normalized = super::input::NormalizedInput::new(inp);
     let inp: &str = normalized.clean();
@@ -55,7 +54,7 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
     // × 2 键 × 2 次过滤,release 下实测 zhongg 从 0.99ms 涨到 1.23ms。
     // 预计算成 `PlainKey` 后比较是 O(1),延迟回到 1.0ms 量级。
     //
-    // **只排下标(codex 审查 P2)**:旧实现把候选本身克隆进 `keyed`、排完再
+    // **只排下标**:旧实现把候选本身克隆进 `keyed`、排完再
     // `clone_from_slice` 写回,一次排序克隆两遍整个候选表(`Candidate` 带
     // 三个 `String`,500 条 ≈ 1500 次分配)。改成「键 + 下标」后按下标置换
     // 就地交换,零克隆——省的是分配,不是毫秒(与 `score_only` 同一结论)。

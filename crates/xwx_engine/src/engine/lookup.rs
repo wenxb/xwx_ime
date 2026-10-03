@@ -39,7 +39,7 @@ impl ImeEngine {
         if pinyin.is_empty() {
             return Ok(Vec::new());
         }
-        // **非拼音文本在这里就挡住**(codex 审查 D12):这些字符会进到按
+        // **非拼音文本在这里就挡住**:这些字符会进到按
         // **字节**切片的排序代码(`rank.rs` 的 `inp[..cp_len]`),调用
         // `lookup_candidates("你")` 直接 panic——库调用方与探针可以击穿进程。
         // 返回**原文回声**:与识别态/回声候选同一出口(内核只做拼音,
@@ -66,12 +66,11 @@ impl ImeEngine {
         // 归一化在这里做(而不是会话层):让「展示给用户的串」与
         // 「查词典的串」解耦——会话/preedit 保留用户敲的 `xi'an`,
         // 引擎内部只认干净拼音。三套坐标(原文 / 干净串 / 候选规范拼音)
-        // 由 [`super::input::NormalizedInput`] 一处收口(codex 审查 A1);
+        // 由 [`super::input::NormalizedInput`] 一处收口;
         // 无 `'` 输入零分配,既有路径**逐字节不变**(判退化的硬约束)。
         let input = super::input::NormalizedInput::new(pinyin);
         // 原文(含 `'`)从这里起一直留着:回显/逃生口这类**要展示给
-        // 用户**的文本只能来自它(codex 审查 D9:旧实现回显清洗串,
-        // `zz'zz` 上屏成 `zzzz`)。
+        // 用户**的文本只能来自它。
         let raw = input.raw();
         let pinyin: &str = input.clean();
         if input.is_empty() {
@@ -80,17 +79,17 @@ impl ImeEngine {
         }
         let bounds: Option<&[usize]> = input.bounds();
 
-        // **一次查询取一代用户数据(codex 审查 A3)**:格构建、容错重枚举、
+        // **一次查询取一代用户数据**:格构建、容错重枚举、
         // 简拼合并、屏蔽过滤全部复用这一份快照。`UserLmSnapshot` 是
         // `Arc<UserTables>` 的克隆(O(1)),所以「同一代」既便宜又天然一致;
         // 各阶段各自取快照时,并发学习/删除会让同一次查询前后看到不同的表。
         // LM 打分那一侧的快照由 `MixedLM` 在查询开始建状态时取
         // (`lm/mod.rs` 的 `state_from_context`);把用户存储访问从
-        // `LmStore::Mixed` 内部也抽出来是审查说的后一步。
+        // 把用户存储访问也从 `LmStore::Mixed` 内部抽出来是后续工作。
         let user_snapshot = crate::user_lm::user_entries_snapshot(&self.lm);
 
         let lattice = self.build_lattice(pinyin, bounds, user_snapshot.as_ref())?;
-        // **布尔 DAG 可达性替代 beam(codex 审查第二批 P1)**:这里只需要
+        // **布尔 DAG 可达性替代 beam**:这里只需要
         // 知道「精确格上存在覆盖整串的读法吗」,旧实现为此跑完整 beam
         // (每位置最多 `BEAM_WIDTH` 个状态 × 逐边 LM 打分 + 剪枝 + 路径重建)。
         // 布尔 DP 每条边只碰一次、0 次 LM 调用,语义等价(都问「有没有从 0
@@ -175,7 +174,7 @@ impl ImeEngine {
             // 只碰一次,`result[0]` 有限 ⟺ 存在覆盖整串的读法,语义等价。
             let tolerant_suffix =
                 self.backward_completion(pinyin, ctx, tolerant_lattice, MAX_TYPO_EDITS)?;
-            // 「走到底」必须**在编辑预算内**成立(codex 审查 D13):预算这一维
+            // 「走到底」必须**在编辑预算内**成立:预算这一维
             // 的最后一行就是「整条路径最多 MAX_TYPO_EDITS 次编辑」。
             tolerant_explains = tolerant_suffix[MAX_TYPO_EDITS as usize][0].is_finite();
             if tolerant_explains {
@@ -328,7 +327,7 @@ impl ImeEngine {
         // (词、覆盖范围、层都一样,分数是回声的 0),补了反而改掉它的分数,
         // 让 `zhzhzhzh` 这类输入的对拍出现无意义差异。
         if !explained && !ranked.is_empty() {
-            // 逃生口的**文本是原文**(codex 审查 D9):它代表「原样上屏」,
+            // 逃生口的**文本是原文**:它代表「原样上屏」,
             // 而用户敲的是 `zz'zz` 不是清洗后的 `zzzz`。
             let mut escape = Self::echo_candidate(raw);
             escape.score = ESCAPE_HATCH_SCORE;
@@ -411,7 +410,7 @@ impl ImeEngine {
             // 边终点必有完整补全:beam 已确认整串可解,且任何有出边的
             // 位置都能沿格走到串尾(边严格前进、终点不超串长),
             // 故 best_suffix[edge.end] 必为有限值。
-            // 补全只能用**剩下的**预算(codex 审查 D13):首边自己用掉的编辑数
+            // 补全只能用**剩下的**预算:首边自己用掉的编辑数
             // 必须先扣掉,否则「首边错一处 + 补全再错一处」就凑出超预算读法。
             // `best_suffix.len() - 1` 就是这次 DP 的预算上界。
             let remaining = (best_suffix.len() - 1).saturating_sub(edge.edit_count as usize);

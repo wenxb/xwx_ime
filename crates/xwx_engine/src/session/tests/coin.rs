@@ -435,7 +435,7 @@ fn coin_buffer_cap_drops_overlong_run() {
         "超限应触发结算: entry_len={} buffered={buffered}", user.entry_len());
 }
 
-/// 组合中打标点也是造词边界(codex 审查 D10)。
+/// 组合中打标点也是造词边界。
 ///
 /// 既有 `coining_does_not_cross_punctuation` 只覆盖了**空闲时**打标点;
 /// 拼音非空(还有候选高亮)时走的是另一条分支——那条以前只 `push_tail`,
@@ -471,7 +471,7 @@ fn punctuation_while_composing_also_breaks_the_coin_run() {
     );
 }
 
-/// 中英模式切换也是造词边界(codex 审查 D10):空闲切走再切回来,
+/// 中英模式切换也是造词边界:空闲切走再切回来,
 /// 两边的单字不许粘成一个词。
 #[test]
 fn toggling_mode_breaks_the_coin_run() {
@@ -496,7 +496,7 @@ fn toggling_mode_breaks_the_coin_run() {
     );
 }
 
-/// 超长缓冲必须**丢弃**,不能反过来造出一条 25+ 字的用户词条(codex 审查 D10)。
+/// 超长缓冲必须**丢弃**,不能反过来造出一条 25+ 字的用户词条。
 #[test]
 fn over_long_coin_buffer_is_discarded_not_coined() {
     let (engine, mut s) = session_for_coin(&[("甲", "jia", 100)]);

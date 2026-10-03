@@ -26,7 +26,7 @@ impl InputSession {
             // 识别态下候选窗只有一条「原样上屏」回声候选,拼音候选
             // 消失——这是 recognizer 生效的可观测标志。
             //
-            // **数字与大写字母也要在这里接住**(codex 审查 D7):ibus 层
+            // **数字与大写字母也要在这里接住**:ibus 层
             // 先把它们折成 `Select`/`Verbatim`(见 `translate_keyval`),
             // 若只挡 `Char`,逐键打 `http://x1.com` 时 `1` 会变成「选第 1 个
             // 候选」(就是那条回声)从而**提前提交地址**;`http://x/A` 的 `A`
@@ -183,7 +183,7 @@ impl InputSession {
                             // 记下「真的敲过这个点」(位置 = 当前串长)。
                             // `www.` 的点被翻页吃掉,下一个字母到来时
                             // refresh 只有凭这条记录才允许把它补回串里
-                            // ——不靠串形状猜(codex 审查 D8)。
+                            // ——不靠串形状猜。
                             if c == '.' {
                                 self.pending_url_dot = Some(self.pinyin.len());
                             }
@@ -204,7 +204,7 @@ impl InputSession {
                     // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
                     // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
                     // (段留在组合里),标点就没地方落地了。
-                    // **标点/大写是造词段的边界**(codex 审查 D10):逐字选
+                    // **标点/大写是造词段的边界**:逐字选
                     // 「张」「三」后打标点、再选「丰」,不结算的话三段的单字会
                     // 跨标点粘成「张三丰」——标点两侧不是同一段。
                     // 位置在提交之前:标点这一刻的候选属于**新一段**(它跟着
@@ -212,7 +212,7 @@ impl InputSession {
                     self.break_coin_run();
                     let out = match self.candidates.get(self.cursor).cloned() {
                         Some(c) => {
-                            // **后缀守恒(codex 审查 D2)**:候选只覆盖输入的一部分时,
+                            // **后缀守恒**:候选只覆盖输入的一部分时,
                             // 没被解释的字母必须**原样跟上**,不能被随后的 `reset()`
                             // 静默丢掉——`womenjintian` 高亮「我们」时,旧实现只上屏
                             // 「我们，」,`jintian` 人间蒸发。这里**不**替用户选余串
@@ -253,7 +253,7 @@ impl InputSession {
                     // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
                     // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
                     // (段留在组合里),标点就没地方落地了。
-                    // 同标点分支:大写结束组合也是造词边界(codex 审查 D10),
+                    // 同标点分支:大写结束组合也是造词边界,
                     // 且在提交之前划。
                     self.break_coin_run();
                     let out = match self.candidates.get(self.cursor).cloned() {
@@ -295,7 +295,7 @@ impl InputSession {
             // 数字是**当前页内**的序号:全局下标 = 页首 + 页内偏移
             // (`0` 仍是第 10 项,librime selector 的口径)。旧实现直接
             // 用 `candidates[n-1]`,翻到第 2 页后按 `1` 上屏的是**第 1 页**
-            // 的首项——面板显示与上屏文本分叉(codex 审查 D5)。
+            // 的首项——面板显示与上屏文本分叉。
             InputEvent::Select(n) if !self.pinyin.is_empty() => {
                 let offset = if n == 0 { 9 } else { (n - 1) as usize };
                 let idx = self.page_start() + offset;
@@ -308,7 +308,7 @@ impl InputSession {
 
             // —— 候选面板点击(页内下标) ——
             // 面板看到的表是**当前页**,所以它回传的是页内序号;映射回全局
-            // 与数字选词同一条规则(`page_start + index`,codex 审查 D5)。
+            // 与数字选词同一条规则(`page_start + index`,D5)。
             // 与空格/数字同一出口:分段上屏语义、失败回滚都在
             // `commit_candidate` 里,IBus 层不需要另写一遍。
             InputEvent::CandidateClicked(index) if !self.pinyin.is_empty() => {
@@ -426,7 +426,7 @@ impl InputSession {
             // —— 翻页 ——
             // 翻页 = 移动**权威全局高亮下标**到目标页首项;页码是它的函数
             // (见 `InputSession::page`),这样面板高亮、空格、数字、点击
-            // 四个出口永远指同一条候选(codex 审查 D5)。末页/首页不 wrap,
+            // 四个出口永远指同一条候选。末页/首页不 wrap,
             // 与既有「多按一下无效果」一致。
             InputEvent::PageUp | InputEvent::PageDown if !self.pinyin.is_empty() => {
                 if matches!(event, InputEvent::PageUp) {
@@ -477,7 +477,7 @@ impl InputSession {
     /// 识别态(邮箱/网址)的**原文直通**:把字符插到 caret 处并重判。
     ///
     /// `Char`/`Select`(数字)/`Verbatim`(大写)三条入口共用,保证
-    /// 「识别态下任何可打印字符都只是原文的一部分」(codex 审查 D7)。
+    /// 「识别态下任何可打印字符都只是原文的一部分」。
     fn insert_recognized_char(&mut self, c: char) -> Result<(), EngineError> {
         self.pinyin.insert(self.caret, c);
         self.caret += c.len_utf8();
@@ -523,7 +523,7 @@ impl InputSession {
         }
         // 补点**必须凭真实敲过的那个点**:`pending_url_dot` 只能是 `.` 键
         // 被翻页吃掉时留下的,且位置要正好落在 `www`/`ftp` 之后。旧实现
-        // 只看串形状,于是 `wwwx`(没敲点)也被补成 `www.x`(codex 审查 D8)。
+        // 只看串形状,于是 `wwwx`(没敲点)也被补成 `www.x`。
         if self.recognized.is_none() && !self.pinyin.contains('.') {
             for bare in ["www", "ftp"] {
                 if self.pending_url_dot != Some(bare.len()) {
@@ -569,7 +569,7 @@ impl InputSession {
             );
         }
         // 只收敛**那一个**权威下标:页码是它的函数,不再有第二份状态
-        // 需要各自钳位(codex 审查 D5)。
+        // 需要各自钳位。
         self.cursor = self.cursor.min(self.candidates.len().saturating_sub(1));
         Ok(())
     }

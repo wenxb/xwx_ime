@@ -219,7 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(path = %user_lm_path.display(), "用户学习模型已接入");
     let engine = Arc::new(engine);
 
-    // 启动期确定性初始化(codex 审查第二批 P1):词频总量线性扫描 + 纠错变体表。
+    // 启动期确定性初始化:词频总量线性扫描 + 纠错变体表。
     // 两笔都是懒初始化,不搬走就由用户的前几个按键/第一次打错来付;这里同步
     // 做完,而且早于下面的总线连接与 `request_name`,所以服务名可见时已经付清。
     let prepare_started = std::time::Instant::now();
@@ -292,7 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut flush_tick = tokio::time::interval(std::time::Duration::from_secs(30));
     flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // **SIGTERM 也要兜底**:`just dev` 停引擎用的是普通 `kill`(SIGTERM),
-    // 旧实现只监听 Ctrl+C,开发期的学习尾巴永远不会落盘(codex 审查 D4)。
+    // 旧实现只监听 Ctrl+C,开发期的学习尾巴永远不会落盘。
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     loop {
         tokio::select! {
@@ -324,7 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// 用户模型落盘放到**阻塞线程**上:序列化 + `sync_data` 是同步 IO,
-/// 直接在 tokio 运行时里跑会卡住定时器与信号处理(codex 审查 D4)。
+/// 直接在 tokio 运行时里跑会卡住定时器与信号处理。
 async fn flush_user_lm(engine: &Arc<ImeEngine>) {
     let engine = Arc::clone(engine);
     let _ = tokio::task::spawn_blocking(move || {

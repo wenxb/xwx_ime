@@ -118,7 +118,7 @@ impl ImeEngine {
         if !pinyin.is_ascii() {
             return Ok(lattice);
         }
-        // 造词条目快照由调用方给(codex 审查 A3):一次查询只取一代,
+        // 造词条目快照由调用方给:一次查询只取一代,
         // 与 LM 打分使用的用户计数快照同源。引擎没挂用户层时为 None,
         // 下面的合并一次都不发生。
         let mut cache: HashMap<String, Vec<Candidate>> = HashMap::new();

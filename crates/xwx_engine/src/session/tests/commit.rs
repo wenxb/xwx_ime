@@ -299,7 +299,7 @@ fn segmented_commits_of_whole_words_do_not_coin_a_phrase() {
     );
 }
 
-/// 标点结束组合时,**没被候选解释的字母原样跟上**(codex 审查 D2)。
+/// 标点结束组合时,**没被候选解释的字母原样跟上**。
 ///
 /// 契约变更:旧断言是 `我们，`——`jintian` 被静默丢掉(测试把「丢字母」
 /// 固化成了正确行为)。现在上屏文本 = 确认段 + 候选 + 未覆盖后缀 + 标点,
@@ -483,7 +483,7 @@ fn committed_tail_is_bounded_on_char_boundary() {
     );
 }
 
-/// 大写/Verbatim 结束组合时同样不许丢后缀(codex 审查 D2)。
+/// 大写/Verbatim 结束组合时同样不许丢后缀。
 #[test]
 fn verbatim_after_a_segment_keeps_the_uncovered_suffix() {
     let mut s = session_with_segments();
@@ -525,7 +525,7 @@ fn covered_candidate_keeps_the_punctuation_immediately_after_it() {
     }
 }
 
-/// codex 审查 A4:确认一段**既不上屏也不学习**,两者都推迟到组合结束。
+/// 确认一段**既不上屏也不学习**,两者都推迟到组合结束。
 ///
 /// 这条钉的是交互语义,不是接口名字:同一步用「立即提交」接口
 /// (`commit_immediately`)会立刻学习并返回文本,所以它在旧语义下必然失败。
@@ -603,7 +603,7 @@ fn confirming_a_segment_defers_commit_and_learning_until_the_combination_ends() 
 
 /// 反面对照(见证):同一个输入、同一步用**立即提交**接口,行为完全不同——
 /// 它立刻返回文本、立刻学习。这正是 `commit_immediately` 不能冒充真实
-/// 交互路径的原因(codex 审查 A4),两条接口的差别由这两条用例分别钉住。
+/// 交互路径的原因,两条接口的差别由这两条用例分别钉住。
 #[test]
 fn immediate_commit_learns_at_once_unlike_the_real_interaction_path() {
     let engine = Arc::new(

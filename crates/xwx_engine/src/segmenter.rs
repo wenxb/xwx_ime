@@ -184,7 +184,7 @@ pub(crate) fn canonical_syllable(syl: &str) -> &str {
 /// 输入切片 `input[pos..pos + len]` 是不是一个合法音节;是则返回**规范
 /// 写法**(查词库用的形式),不是则 `None`。
 ///
-/// 这是「拿输入切片去查音节表」的唯一原语(codex 审查 A1):归一化与
+/// 这是「拿输入切片去查音节表」的唯一原语:归一化与
 /// 合法性一起做完,调用方不再各写一份「先 `canonical_syllable` 再
 /// `SYLLABLES.contains`」。漏掉归一化的一方会把合法的 `lue`/`nue`
 /// 当成「解释不了的字母」——[`crate::engine::rank::unreachable_tail`]
