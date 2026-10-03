@@ -578,20 +578,9 @@ impl InputSession {
         if self.pinyin.is_empty() {
             std::sync::Arc::make_mut(&mut self.candidates).clear();
         } else if self.recognized.is_some() {
-            // 识别态:候选 = 原文本身(回声形态)。借回声候选的既有
-            // 语义:它是「词库解不出的原始输入串」,上屏按 commit_raw
-            // 处理——邮箱/网址同样不是词、不该进 UserLM/造词。
-            self.candidates = std::sync::Arc::new(vec![Candidate {
-                word: self.pinyin.clone(),
-                pinyin: self.pinyin.clone(),
-                score: 0.0,
-                freq: 0,
-                spelling: crate::SpellingKind::Exact,
-                echo: true,
-                // 识别态(邮箱/网址)的回声候选整串上屏:它就是要原样
-                // 上屏整串输入,剩余串按定义为空。
-                covered: self.pinyin.len(),
-            }]);
+            self.candidates = std::sync::Arc::new(vec![Self::recognized_echo_candidate(
+                &self.pinyin,
+            )]);
         } else {
             self.candidates = std::sync::Arc::new(
                 self.engine
