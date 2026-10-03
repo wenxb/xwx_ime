@@ -1629,3 +1629,9 @@ entry_tier_len 贯穿失败（plain_key 签名未接），其后数据来自旧�
 dict/lookup.rs:104 用 idx.lookup_prefix(variant) + retain(音节数<=字母数) ⇒ 返回值不保证消费整串，
 且 Candidate 无"匹配长度"信息 ⇒ ⑤⑤④ 建边只能猜。最小改法：让 lookup_prefix 带出被匹配的 key，
 写进 Candidate::covered（该字段恒 0、无其它语义），建边时用真值。
+
+## 2026-10-03 最后一步的施工单（已核到行）
+
+lookup_prefix 内已有被匹配 key `s` ⇒ 构造候选时写 covered = s.chars().count()；
+build.rs 建整串条目边时按 covered == 输入字母数 过滤 lookup_abbrev 的返回（lookup_mixed 全收）。
+风险：其它消费者/测试可能钉 covered==0，改完先跑 -p xwx_engine。验收：20 条 20/20、mixed≥0.929、默认逐字节不变。

@@ -4473,3 +4473,31 @@ out.retain(|c| c.pinyin.split(' ').count() <= letters);          // 一字一字
 **验收**（与之前一致）：开关 true 时 20 条 **20/20** 保持（这是当前 HEAD 的成绩），
 且 `womenjtqbj` 的「我们今天」不再带 cov10 ⇒ mixed 从 0.893 回到 **≥0.929**；
 默认配置（开关 false）逐字节不变（四套语料 + v1 对拍 + 401 passed/0 failed + clippy 0）。
+
+### ⑤⑨⑨ 附录：最后一步的完整施工单（已核到行，风险点已列）
+
+**改动就三处**（都在 `dict/lookup.rs` / `dict/abbrev.rs` / `engine/lattice/build.rs`）：
+
+1. **`dict/abbrev.rs` 的 `lookup_prefix`**（`MmapDict::lookup_prefix`，`abbrev.rs` 内）：
+   迭代里已经有被匹配到的 key `s`（源码里 `if !s.starts_with(pb) { break; }` 那个 `s`）
+   ⇒ 构造候选时写 **`covered: s.chars().count()`**（字母数，不是字节数）。
+   **风险点**：`lookup_prefix` 还有别的消费者（`lookup_mixed_full_pinyin` 等）与词典侧测试
+   可能钉着 `covered == 0` ⇒ 改完先跑 `cargo test -p xwx_engine`（
+   `grep -rn "covered" crates/xwx_engine/src/dict/` 可先看有没有断言）。
+
+2. **`dict/lookup.rs::lookup_abbrev`**：现在有
+   `out.retain(|c| c.pinyin.split(' ').count() <= letters);`
+   ⇒ 在其后加一句 **`out.retain(|c| c.covered <= letters);`** hmm ✗ —— hmm：
+   注意"匹配长度 ≤ 输入长度"**不等于**"消费整串"，这里**什么也不要加**；
+   真正的筛选留给第 3 处（那里才有"要消费整串"的语义）。
+
+3. **`engine/lattice/build.rs` 建"整串条目边"处**：
+   把 `lookup_abbrev` 的返回按 **`c.covered == pinyin.chars().count()`** 过滤
+   （`lookup_mixed` 的返回仍旧全收，它本身按位消费整串）。
+   —— 这一步替换的正是 ⑤⑨②/⑤⑨③/⑤⑨⑦ 三次都想"从拼音反推"而失败的那个判据，
+   现在用的是**索引自己报出来的真值**。
+
+**验收**：开关 true ⇒ 20 条清单 **20/20 保持**、`womenjtqbj` 的「我们今天」不再带 cov10、
+mixed 从 0.893 → **≥0.929**；开关 false ⇒ 四套语料基线、v1 对拍 0 变化、
+`cargo test --workspace --no-fail-fast` 401 passed/0 failed、clippy 0。
+**回退点**：三处改动都很小，任一处出问题 `git checkout` 对应文件即可。
