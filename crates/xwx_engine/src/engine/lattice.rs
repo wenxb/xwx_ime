@@ -645,12 +645,19 @@ fn window_has_vowel(window: &str) -> bool {
                 for (typo_syl, cost) in typo {
                     readings.push((typo_syl, cost, 1, false));
                 }
-            } else if abbrev && len == 1 {
-                // **简拼弧**:单字母窗口不是任何完整音节,但它是若干音节的
-                // 首字母(`j` → `ji`/`jin`/`jing`…)。旧实现只认「窗口本身是
-                // 合法音节」,于是 `wmjtqbj` 这种全首字母串在每个位置都走不动,
-                // 整串一个字都解不出来(实测:候选只剩原样回显);`zmgai` 的
-                // `z`/`m` 同理,只剩 `gai`→「改」。
+            } else if abbrev
+                && (len == 1 || (len == 2 && matches!(syl, "zh" | "ch" | "sh")))
+            {
+                // **简拼弧**:窗口不是完整音节时,把整段当成音节的首字母。
+                //
+                // **两条规则都按上游(RIME 的简拼代数)实现**:
+                // - `abbrev/^(\l).+$/$1/`:首字母 ∵ `j` → `ji`/`jin`/`jing`…
+                // - `abbrev/^([zcs]h).+$/$1/`:**`zh`/`ch`/`sh` 作为一个声母**,
+                //   一个音节吃**两个**输入字母。
+                // 只做前者会漏掉真正的双字母声母:`shh`(时候)被读成三个音节
+                // `社(she)会(hui)化(hua)`——实测候选第一是「社会化」而不是「时候」。
+                // (第三条 `derive/^([zcs])h(.*)$/$1$2/` 即 `zh` 可写成 `z`,
+                //  由 len==1 的分支覆盖。)
                 //
                 // 代价 `ABBREV_PENALTY` 逐弧累加后扣在 `typo_penalty` 上
                 // (同一对数域,量纲一致),「走没走简拼」另由 `abbrev` 标记,

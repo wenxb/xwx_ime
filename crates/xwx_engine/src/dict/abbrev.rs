@@ -34,6 +34,51 @@ pub struct AbbrevIndex {
     entries_off: usize,
 }
 
+/// 简拼查询的**写法变体**：把每个 `zh`/`ch`/`sh` 的 `h` 要么保留、要么去掉。
+///
+/// 上游（RIME 的简拼代数）两条规则**并存**：
+/// - `abbrev/^(\l).+$/$1/`：每个音节取首字母（`shi hou` → `sh`）
+/// - `abbrev/^([zcs]h).+$/$1/`：`zh`/`ch`/`sh` 作为一个声母整体（`shi hou` → `shh`）
+///
+/// 副索引是**按「每音节一个字母」建的 key**，所以用户敲的 `shh`（3 个字母、
+/// 2 个音节）在表里对应的是 `sh`：多出来的 `h` 是「整体声母」写法留下的。
+/// 因此查询要把所有写法都查一遍再合并——`shh` → {`shh`, `sh`}，`zgr` 不变。
+///
+/// 变体数 2^k（k = 命中的 `zh`/`ch`/`sh` 个数），k 超过 4 就只保留原串——
+/// 病态输入（`zhzhzhzh`）不该把一次查询放大成几十次二分。
+pub fn abbrev_variants(abbrev: &str) -> Vec<String> {
+    let bytes = abbrev.as_bytes();
+    let mut marks: Vec<usize> = Vec::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if matches!(bytes[i], b'z' | b'c' | b's') && bytes[i + 1] == b'h' {
+            marks.push(i + 1); // 这是要被「去掉」的那个 h
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    if marks.is_empty() || marks.len() > 4 {
+        return vec![abbrev.to_string()];
+    }
+    let mut out = Vec::with_capacity(1 << marks.len());
+    for bits in 0..(1u32 << marks.len()) {
+        let drop: Vec<bool> = (0..marks.len()).map(|k| bits & (1 << k) != 0).collect();
+        let mut s = String::with_capacity(abbrev.len());
+        for (idx, ch) in abbrev.char_indices() {
+            let is_h = marks.contains(&idx);
+            if is_h && drop[marks.iter().position(|&m| m == idx).unwrap_or(0)] {
+                continue;
+            }
+            s.push(ch);
+        }
+        out.push(s);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 impl AbbrevIndex {
     /// 打开并 mmap 映射一个 abbrev.bin 副索引文件。
     ///

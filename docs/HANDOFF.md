@@ -1585,3 +1585,22 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   (连续 zh、无元音的病态串:以前只出原样回显,现在多一条覆盖整串的读法)。
   28 条电池 6 个变化,5 个改善、1 个不理想(`womenjtqbjgy`);`yij`/`wsm`/`zgr`/
   `meiy`/`xian`/`nihao`/`zhongguo` 等既有形态逐字节不变。
+
+## ㉖ 简拼双字母声母(zh/ch/sh):两种写法都认
+
+- **症状**:`shh` 的候选第一是「社会化」而不是「时候」;`zh`/`zhh`/`chh` 一类同样偏。
+- **根因**:副索引(`data/abbrev.bin`)的 key 是**每个音节取一个字母**(`shi hou` → `sh`),
+  用户敲的 `shh` 里多出来的那个 `h` 是「整体声母」写法留下的,字面串因此匹配不到
+  时候。上游 RIME 的简拼代数里两条规则**并存**:
+  `abbrev/^(\l).+$/$1/` 与 `abbrev/^([zcs]h).+$/$1/`(见 `/usr/share/rime-data/pinyin.yaml:124-126`、
+  `librime/test/algebra_test.cc:19-20`)。
+- **修法**:`AbbrevIndex::abbrev_variants` 枚举查询的写法变体(`shh` → {`shh`,`sh`},
+  `zgr` 不变),`MmapDict::lookup_abbrev` 逐个查、按 (word,pinyin) 去重取高频。
+  变体数 2^k,`k > 4` 时只留原串(病态输入不放大)。
+- **引擎侧同时补上**:简拼格的缩写弧支持 `len == 2` 的 `zh`/`ch`/`sh` 窗口
+  (`MIN_ABBREV_INPUT_LEN=4` 以下的纯首字母串仍走副索引)。
+- **实测**:`shh`→时候/上海/生活、`zhh`→只会/最后/之后、`chh`→策划/称号/才会、
+  `shhzh`→生活中;`zgr`→中国人、`wsm`→为什么、`zmgai`→怎么改 逐字节不变。
+- **门槛**:workspace 全绿、clippy 0、perf 通过(max 11.27ms);
+  v1 对拍 137 行差异,构成为「长候选表第 95 名以后的尾部漂移」+「原串回显变整串读法」
+  一类改善(`zho` → 在欧洲/中欧),28 条电池无新增回归。

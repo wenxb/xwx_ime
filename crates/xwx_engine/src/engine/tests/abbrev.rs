@@ -363,3 +363,32 @@ fn engine_without_abbrev_index_degrades_gracefully() {
         mixed.iter().take(5).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
     );
 }
+
+/// **双字母声母的两种简拼写法都要认**(上游 RIME 的 `abbrev/^([zcs]h).+$/$1/`
+/// 与 `abbrev/^(\l).+$/$1/` 并存)。
+///
+/// 副索引的 key 是「每个音节取一个字母」,所以 `shh`(时候 = shi hou)在表里对应
+/// `sh`——用户敲的第三个字母 `h` 是「整体声母」写法留下的。只查字面串时
+/// `shh` 的候选里**根本没有「时候」**(实测第一是「社会化」,靠 `s h h` 三个
+/// 单字母读法命中),这正是用户报的「zh 这种需要特殊处理」。
+#[test]
+fn real_dict_two_letter_initial_abbreviations_hit_the_side_index() {
+    let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+    let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
+    if !dict_path.is_file() || !abbrev_path.is_file() {
+        return;
+    }
+    let dict = crate::dict::MmapDict::open(&dict_path)
+        .expect("词库加载失败")
+        .with_abbrev(&abbrev_path);
+    assert!(dict.has_abbrev(), "副索引应已装配");
+
+    for (input, want) in [("shh", "时候"), ("zhh", "只会"), ("chh", "策划")] {
+        let got = dict.lookup_abbrev(input).expect("简拼查询失败");
+        assert!(
+            got.iter().any(|c| c.word == want),
+            "`{input}` 应能命中 `{want}`(整体声母写法),实际前 5: {:?}",
+            got.iter().take(5).map(|c| (&c.word, c.freq)).collect::<Vec<_>>()
+        );
+    }
+}

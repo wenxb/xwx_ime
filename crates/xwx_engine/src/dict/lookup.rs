@@ -105,7 +105,25 @@ impl MmapDict {
         let Some(idx) = &self.abbrev else {
             return Ok(Vec::new());
         };
-        let mut out = idx.lookup_prefix(abbrev)?;
+        // **双字母声母的两种写法都要查**（见 [`abbrev_variants`]）：副索引按
+        // 「每音节一个字母」建 key，`shh`（时候）在表里对应 `sh`，
+        // 只查字面串会漏掉它——实测 `shh` 的候选里根本没有「时候」。
+        let mut out: Vec<Candidate> = Vec::new();
+        for variant in super::abbrev::abbrev_variants(abbrev) {
+            for c in idx.lookup_prefix(&variant)? {
+                if let Some(e) = out
+                    .iter_mut()
+                    .find(|e| e.word == c.word && e.pinyin == c.pinyin)
+                {
+                    // 同一词条经不同写法命中：保留词频更高的一条。
+                    if c.freq > e.freq {
+                        *e = c;
+                    }
+                } else if out.len() < MAX_LOOKUP_RESULTS as usize {
+                    out.push(c);
+                }
+            }
+        }
         // **一字一字母**(2026-10-02):副索引按 key 前缀匹配,`wsm` 会连带命中
         // key 更长的 `wsmy`(为什么要/为什么会……实测 356 条里 276 条如此),
         // 候选比输入字母还多字,按用户口径排除。判据用候选自带的**全拼音节数**
