@@ -34,11 +34,19 @@ const MAX_CANDIDATES: usize = 100;
 ///   不白留空位。
 const ABBREV_QUOTA: usize = 5;
 
-/// **逐类切换的回退点**（阶段 3）：`true` 时，纯缩写输入（`pure_abbrev`）与
-/// 「开头即缩写」（`leading_abbrev`）这两类**不再让旧简拼通道出候选**，
-/// 改由简拼格独立供给；旧通道代码保留，一键切回。
-/// 默认 `false` = 两条供给同场竞争（⑤⑥② 的状态）。
-pub(crate) const DEMOTE_OLD_ABBREV_CHANNEL: bool = false;
+/// **逐类切换的回退点**（阶段 3）：`true` 时，「纯缩写」与「开头即缩写」这两类
+/// （且**排除 `zh`/`ch`/`sh` 开头**，见 `lookup.rs::demote_scope`）**不再让旧简拼
+/// 通道出候选**，改由简拼格独立供给；旧通道代码保留，一键切回。
+///
+/// **2026-10-03 第 5 步置为默认 `true`**，验收数据（真实词库 + 万象 gram）：
+/// 401 passed/0 failed、clippy 0、v1 对拍 90 段**首位变化 0**（9 段漂移逐条点名，
+/// 见 `docs/VERIFY.md`）、daily 1.000 / mixed 0.929 / keystrokes 0.876 / edits 0.728、
+/// 20 条清单首位 20/20 与前十 20/20、perf 同条件 A/B 不可区分
+/// （8 轮交替：p95 两版各 ≈4.5ms；逐场景最重的 `full:womenjintianquxian`
+/// p95 10.673ms → 10.791ms，噪声级）。
+///
+/// 置 `false` 即回到「两条供给同场竞争」（⑤⑥② 的状态），对拍会回到逐字节 0 差异。
+pub(crate) const DEMOTE_OLD_ABBREV_CHANNEL: bool = true;
 
 /// 容错层在截断中的保底名额。
 ///
