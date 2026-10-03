@@ -107,7 +107,9 @@ impl ImeEngine {
         // 新年快乐/状态…都是词条级命中），而格子原先只会逐词拼链。
         // 复用现成匹配语义（`lookup_abbrev` 纯首字母 + `lookup_mixed` 的 MixedDfs），
         // 只取 `covered == 整串` 的结果；旧通道保留作回退点，两者按 (词, 音) 去重。
-        if self.dict.has_abbrev() {
+        // **只在切换开关打开时才加**：默认（旧通道仍在供给）下这些边会扰动既有排序
+        // （⑤⑦② 实测 keystrokes 0.877→0.794、edits 0.728→0.561），所以必须挂开关。
+        if crate::engine::DEMOTE_OLD_ABBREV_CHANNEL && self.dict.has_abbrev() {
             // 与 `ImeEngine::abbrev_candidates` 同一取法：匹配在 `MmapDict` 上。
             let DictStore::Mmap(d) = &self.dict else {
                 return Ok(lattice);
@@ -115,9 +117,8 @@ impl ImeEngine {
             let mut whole: Vec<Candidate> = d.lookup_abbrev(pinyin)?;
             whole.extend(d.lookup_mixed(pinyin)?);
             for c in whole {
-                if c.covered != pinyin.len() {
-                    continue;
-                }
+                // `covered` 对这两个查表函数的返回**恒为 0**（⑤⑦③ 实测），
+                // 不能拿它判"是否覆盖整串"——它们本来就是整串查询的结果。
                 if lattice[0]
                     .iter()
                     .any(|e| e.word == c.word && e.end == pinyin.len())
