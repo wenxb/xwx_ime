@@ -45,8 +45,32 @@ use support::{fingerprint, keyval, last_table, real_user_paths, shared_fixture, 
 /// `Harness::start_engine_with` makes the real file appear/change → the
 /// fingerprint assertion goes red. Also verified by pointing the override at the
 /// repo root instead of the temp dir and watching the assertion fire.
+/// 真实引擎在跑吗（用户在用实机输入法时，它会持续写自己的用户模型）。
+///
+/// 这条用例比的是「目录指纹前后一致」，用来证明**测试套件**没有写真实数据；
+/// 但用户本人正在打字时，真实引擎每敲几个字就会写一次 `user_bigram.txt`
+/// ——那不是测试泄漏，而是别人的正常写入。这种情况跳过比对并打印提示，
+/// 而不是报一个永远修不好的红。
+fn real_engine_is_running() -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        std::fs::read_to_string(e.path().join("comm"))
+            .map(|s| s.trim() == "xwx_ime")
+            .unwrap_or(false)
+    })
+}
+
 #[test]
 fn real_user_data_is_untouched_by_a_full_learning_run() {
+    if real_engine_is_running() {
+        eprintln!(
+            "跳过：检测到真实 xwx_ime 引擎在运行——它会持续写 ~/.local/share/xwx，\n\
+             目录指纹比对在这种环境下不成立（要严格跑这条请先停掉实机输入法）。"
+        );
+        return;
+    }
     // Fingerprint the real paths *before* anything is spawned.
     let paths = real_user_paths();
     let before: Vec<_> = paths.iter().map(|p| fingerprint(p)).collect();
