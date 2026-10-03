@@ -1464,3 +1464,10 @@ mixed 0.929→0.503、keystrokes 0.877→0.795。⇒ 格子供给（整串条目
 ## 2026-10-03 尝试 N：去掉 covered 过滤致 keystrokes/edits 退化，回退
 
 去掉过滤会混进不覆盖整串的读法 ⇒ 修法 2 否掉；先打印 covered 真值确定量纲（对照 srkl/ztai 长 4、wsm 长 3）。
+
+## 2026-10-03 定性收口：covered 恒为 0（判据写错，非边写错）
+
+探针显示 lookup_abbrev/lookup_mixed 返回的候选 covered 全为 0，且第一条就是正确答案
+（生日快乐 f58750 / 状态 f503366 / 为什么 f500907）。⇒ ⑤⑤④ 的 covered==len 过滤把全部正确读法挡掉。
+下一步：把这批边挂到 DEMOTE_OLD_ABBREV_CHANNEL 开关上（默认不加，开关开时才加），
+用开关 true 量「正确读法在候选表里」的比例（当前 6/20）。
