@@ -1481,3 +1481,9 @@ mixed 0.929→0.503、keystrokes 0.877→0.795。⇒ 格子供给（整串条目
 ## 2026-10-03 ⑤⑦④ 后精确缺口：4 条召回（zmgai/ztai/ztailan/nhma，全为"缩写+字面尾链"）+ 3 条排序（smsh #3/xxn #8/dbq #4）
 
 探针显示 lookup_mixed("ztai") 首条就是「状态」⇒ 匹配存在，丢失在"边→候选"这一段。下一步用 ⑤⑦⓪ 的迹确认 kept 里是否有状态。
+
+## 2026-10-03 新线索：开关打开时 ztai/nhma 的简拼分支没跑（迹无输出）
+
+开关 true 下跑 ztai/nhma，迹里连「简拼段前五」都没有 ⇒ 分支未执行，而非"产出不了状态"。
+可疑点：covered_whole_real 忽略 Abbrev 层，而开关打开后 ranked 里只剩其它 Abbrev 候选
+⇒ needs_abbrev=false。下一步用门槛迹对比两种开关取值。

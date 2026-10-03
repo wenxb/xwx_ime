@@ -3819,3 +3819,31 @@ wsm (len=3) 返回 80 条: 为什么|cov0|f500907 | 为生命|cov0|f12305 | 玩�
   查 `pinyin` 形态与窗口切分的对应关系）；
 - `kept` 里**没有**（⇒ 这条输入没进那段代码，查 `has_abbrev`/`DEMOTE` 开关的求值）。
 两种情况都很容易再收一步。
+
+## ⑤⑦⑥ 新线索：开关打开时，`ztai`/`nhma` 的**简拼分支似乎没跑**（迹无输出）
+
+按 ⑤⑦⑤ 的下一步加了"链候选"迹（打印 `best_chain_candidates` 的返回），
+把开关置 `true` 后跑 `printf 'ztai\nnhma\n' | XWX_TRACE=1 recall_trace`：
+
+**结果：迹里连同一分支既有的「简拼段前五」一行都没有输出** ⇒ 对这一对输入，
+（开关打开时）简拼分支**压根没有执行**，而不是"跑了但没产出状态"。
+（对照：默认开关 false 时，`ztai` 的「简拼段前五」是正常打印的——见 ⑤⑥⑦ 的自检。）
+
+**这修正了 ⑤⑦⑤ 的推断**：4 条缺口不是"边→候选接不上"，而可能是**门槛在开关打开时
+把这两类输入挡在了分支之外**。可疑点是 ⑤⑥② 的按类放行条件：
+
+```rust
+&& if pure_abbrev || leading_abbrev { !exact_covers_whole && !covered_whole_real } else { !covered_whole }
+```
+其中 `covered_whole_real` 忽略 `Abbrev` 层候选——而开关打开时**旧通道不出候选了**，
+`ranked` 里可能只剩**其它 Abbrev 候选**（例如简拼层自己的）⇒ `covered_whole_real` 为 true
+⇒ `needs_abbrev = false` ⇒ 分支不跑。**这正好能解释"开关一开，这 4 条反而更糟"的现象。**
+
+**下一步（一次探针即可，注意这次要看门槛迹）**：
+```bash
+printf 'ztai\nnhma\nwsm\n' | XWX_TRACE=1 recall_trace 2>&1 | grep 门槛
+```
+分别跑开关 false / true 两种二进制，比较 `pure_abbrev` / `leading_abbrev` /
+`exact_covers_whole` / `covered_whole_real` / `needs_abbrev` 各字段——
+若开关 true 时 `needs_abbrev=false`，则要修的是**门槛里那两个快照的取法**
+（例如在"旧通道被降级"时不应把简拼层候选算作"已有整串读法"）。
