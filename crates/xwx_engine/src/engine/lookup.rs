@@ -293,6 +293,14 @@ impl ImeEngine {
                     // 前插 n-best 句子）判的都是「覆盖」这个布尔事实,分数只
                     // 决定谁排第几。这条分支本来就只在「精确格解不出整串」时
                     // 才走到,不存在「本来有更好答案却被整句顶掉」的情况。
+                    super::trace::note(|| {
+                        let t: Vec<String> = ranked
+                            .iter()
+                            .take(5)
+                            .map(|c| format!("{}|freq={}|cov={}|{:?}|{:.4}", c.word, c.freq, c.covered, c.spelling, c.score))
+                            .collect();
+                        format!("简拼段前五: {}", t.join("  "))
+                    });
                     if let Some(idx) = ranked.iter().position(|c| c.covered >= pinyin.len()) {
                         if idx != 0 {
                             let c = ranked.remove(idx);
