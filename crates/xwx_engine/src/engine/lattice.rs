@@ -6,6 +6,97 @@ use super::*;
 mod build;
 
 impl ImeEngine {
+    /// 把候选的拼音 key 按**词库条目**切成词串，取「Σ log10 词频」最大的切法；
+    /// 覆盖不了整串时返回 `None`（单词条也返回，即长度 1 的词串）。
+    ///
+    /// 只服务投影层那个比较（见 `lookup_candidates`）：填充档词条往往是
+    /// 「真短语但词频缺失」，把它按词串拆开才谈得上与组合候选同口径比。
+    pub(super) fn chain_words(&self, key: &str) -> Option<Vec<(usize, u64)>> {
+        let syllables: Vec<&str> = key.split(' ').collect();
+        let n = syllables.len();
+        if n == 0 || n > 12 {
+            return None;
+        }
+        let mut best = vec![f64::NEG_INFINITY; n + 1];
+        let mut back: Vec<Option<(usize, u64)>> = vec![None; n + 1];
+        best[0] = 0.0;
+        let mut seg = String::new();
+        for i in 0..n {
+            if best[i].is_infinite() {
+                continue;
+            }
+            seg.clear();
+            for j in i..n {
+                if j > i {
+                    seg.push(' ');
+                }
+                seg.push_str(syllables[j]);
+                let Ok(entries) = self.dict.lookup(&seg) else {
+                    continue;
+                };
+                let Some(top) = entries.iter().max_by_key(|e| e.freq) else {
+                    continue;
+                };
+                let lp = (top.freq.max(1) as f64).log10();
+                if best[i] + lp > best[j + 1] {
+                    best[j + 1] = best[i] + lp;
+                    back[j + 1] = Some((i, top.freq));
+                }
+            }
+        }
+        if best[n].is_infinite() {
+            return None;
+        }
+        // 只回**切分边界**（每段几个音节）与词频：词面必须用候选自己的汉字。
+        // 否则拼音相同的两个候选（`出在哪` 与 `杵在那` 的 key 都是 `chu zai na`）
+        // 会切出同一组词，比较退化成恒等。
+        let mut out: Vec<(usize, u64)> = Vec::new();
+        let mut at = n;
+        while at > 0 {
+            let (i, freq) = back[at].take()?;
+            out.push((at - i, freq));
+            at = i;
+        }
+        out.reverse();
+        Some(out)
+    }
+
+    /// 词串的合计分：`Σ log10(freq_i/总词频) + lm_weight × [floor + Σ(logp_i - floor)]`。
+    ///
+    /// **基线每候选只付一次**（`floor +`），不按词复付——按词复付正是
+    /// 「单词条目 vs 多词组合」score 不可比的原因（实测 `chuzaina`：
+    /// 组合「出+在+哪」因此低于单词条「杵在那」）。
+    pub(super) fn chain_score(
+        &self,
+        ctx: &LmContext<'_>,
+        word: &str,
+        spans: &[(usize, u64)],
+    ) -> f32 {
+        let total_freq = self.dict.total_freq().unwrap_or(0);
+        let log10_total = (total_freq as f64).log10();
+        let floor = self.lm.floor_log10();
+        let mut st = self.lm.state_from_context(ctx);
+        let mut logp_sum = 0.0f32;
+        let mut evidence = 0.0f32;
+        let mut rest = word;
+        for (syllables, freq) in spans {
+            // 每个音节对应一个汉字：按音节数从候选词面切出这一段。
+            let mut cut = rest.char_indices().nth(*syllables).map(|(i, _)| i);
+            if cut.is_none() {
+                cut = Some(rest.len());
+            }
+            let (piece, tail) = rest.split_at(cut.unwrap_or(rest.len()));
+            rest = tail;
+            let (s, next) = self.lm.score(&st, piece);
+            evidence += s - floor;
+            st = next;
+            if total_freq > 0 {
+                logp_sum += ((*freq).max(1) as f64).log10() as f32 - log10_total as f32;
+            }
+        }
+        logp_sum + (floor + evidence) * self.lm_weight
+    }
+
     /// 窗口里是否含元音(`v` 记 ü,也算)。
 ///
 /// **每个拼音音节都含元音**(音节表里没有 `m`/`n`/`ng` 这类成音节),

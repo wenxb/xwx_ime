@@ -1195,3 +1195,10 @@ nihaobeijin→你好北京、womenjintianqugongyua→我们今天去公园；两
 5 处打分改用 logp-floor ⇒ wmjtqbj/womenjtqbj 变「我们就提前北京」、chuzaina 变「杵在那」、
 daily 11/12、mixed 11/14、edits MRR 0.645。原因：减基线等于逐词奖励，放大了 LM 权重；
 正确形状是每候选只付一次基线（floor + Σ证据量）。
+
+## 2026-10-03 投影层按词串口径比（每候选一次基线）
+
+填充档分支改成两边都按词串重算（词面用候选自己的汉字），基线每候选一次。
+zaodianxiuxi→早点休息、womashangdao→我马上到、jintiantianqizenmeyang→今天天气怎么样、
+nizaiganshenme→你在干什么、nihaoshijie→你好世界；daily MRR 0.958→1.000；
+chuzaina/shanghaai/简拼形态与 mixed/keystrokes/edits 全部不变；对拍 44 输入 0 变化。

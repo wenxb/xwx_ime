@@ -398,7 +398,27 @@ impl ImeEngine {
                 ranked.iter().position(|c| c.covered >= pinyin.len())
             };
             if let Some(idx) = target {
-                if idx != 0 {
+                // 首位**不是**填充档词条时保持原行为（无条件换位）；只有
+                // 「首位是填充档」这一支才需要按词串口径重新判断谁更该在首位。
+                let wins = idx != 0
+                    && (!top_is_filler_entry
+                        || ranked.get(idx).zip(ranked.first()).is_some_and(|(cand, top)| {
+                        // **两边都按词串口径比**（同一口径才可比）：填充档词条
+                        // 常常是「真短语但词频缺失」（早点休息 freq=100、我马上到
+                        // freq=100），按词拆开后 LM 明确偏好它（休息 -7.17 vs
+                        // 修鞋 兜底、到 -8.02 vs 道 兜底）——旧规则只看词频档，
+                        // 一律把组合候选提上来，把对的挤成 #2。而 `chuzaina`
+                        // （杵在那 freq=100 vs 组合「出+在+哪」）本来就该换位，
+                        // 靠的是组合读法**证据更强**。判据是分数本身，不拍阈值。
+                        match (self.chain_words(&cand.pinyin), self.chain_words(&top.pinyin)) {
+                            (Some(a), Some(b)) => {
+                                self.chain_score(ctx, &cand.word, &a)
+                                    > self.chain_score(ctx, &top.word, &b)
+                            }
+                            _ => cand.score > top.score,
+                        }
+                    }));
+                if wins {
                     let c = ranked.remove(idx);
                     ranked.insert(0, c);
                 }
