@@ -551,3 +551,28 @@ fn corrupt_section_offsets_are_rejected_at_open() {
     assert!(msg.contains("区段") || msg.contains("越界"), "报错应点名区段问题: {msg}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 副索引的区段顺序非法同样必须拒绝（与主索引同一套判据）。
+#[test]
+fn corrupt_abbrev_section_offsets_are_rejected_at_open() {
+    use std::io::Write;
+    let dir = std::env::temp_dir().join(format!("xwx-bad-abbrev-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    let path = dir.join("bad-abbrev.bin");
+    let mut hdr = Vec::new();
+    hdr.extend_from_slice(super::ABBREV_MAGIC);
+    hdr.extend_from_slice(&super::ABBREV_VERSION.to_le_bytes());
+    hdr.extend_from_slice(&1u64.to_le_bytes()); // key_count
+    hdr.extend_from_slice(&0u64.to_le_bytes());
+    hdr.extend_from_slice(&400u64.to_le_bytes()); // records_off（跑过头）
+    hdr.extend_from_slice(&200u64.to_le_bytes()); // strings_off
+    hdr.extend_from_slice(&300u64.to_le_bytes()); // entries_off
+    hdr.resize(600, 0);
+    std::fs::File::create(&path)
+        .and_then(|mut f| f.write_all(&hdr))
+        .expect("写坏文件");
+    let err = super::AbbrevIndex::open(&path).expect_err("副索引区段非法必须被拒绝");
+    let msg = format!("{err}");
+    assert!(msg.contains("区段") || msg.contains("越界"), "报错应点名区段: {msg}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

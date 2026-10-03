@@ -1775,3 +1775,12 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   「records 起点跑到 strings 之后」的头（临时文件 + `MmapDict::open`），断言必须报错
   且信息点名区段问题——旧实现会**照常返回 Ok**，所以这条在旧实现上是红的。
 - **待做**：`dict/abbrev.rs` 套用同一套；主副索引同源标识/哈希（发布契约）。
+
+## ㊴ Q4 第五步：副索引读取端校验
+
+- `dict/abbrev.rs::AbbrevIndex::open` 套用主索引同一套判据：`header ≤ records ≤
+  strings ≤ entries ≤ 文件长`，并对 `key_count × RECORD_LEN` 做 checked 乘法、
+  证明记录数组落在 strings 区之前。
+- 用例 `dict/tests.rs::corrupt_abbrev_section_offsets_are_rejected_at_open`：
+  构造 records 起点跑过头的副索引头，`AbbrevIndex::open` 必须报错并点名区段。
+- 验收：workspace 全绿、clippy 0、v1 对拍 0 行、perf 通过。

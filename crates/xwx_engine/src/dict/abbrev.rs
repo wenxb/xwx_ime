@@ -100,6 +100,26 @@ impl AbbrevIndex {
         let records_off = read_u64(bytes, 28)? as usize;
         let strings_off = read_u64(bytes, 36)? as usize;
         let entries_off = read_u64(bytes, 44)? as usize;
+        // **区段顺序与范围校验（Q4）**：与主索引 `MmapDict::from_bytes` 同一套判据。
+        // 头部只报三个起点，查询靠加法定位；不先证明顺序与范围，越界只能靠切片
+        // 兜底，报错离谱且可能悄悄读到别的区段。
+        if !(ABBREV_HEADER_LEN <= records_off
+            && records_off <= strings_off
+            && strings_off <= entries_off
+            && entries_off <= bytes.len())
+        {
+            return Err(DictError::Corrupt(
+                "副索引区段顺序/范围不合法: records/strings/entries 起点须递增且落在文件内",
+            ));
+        }
+        let records_len = key_count
+            .checked_mul(MMAP_RECORD_LEN)
+            .ok_or(DictError::Corrupt("副索引记录数溢出"))?;
+        if records_off + records_len > strings_off {
+            return Err(DictError::Corrupt(
+                "副索引记录数组越界: key_count × 记录长度超出 strings 区",
+            ));
+        }
         Ok(Self { map, key_count, records_off, strings_off, entries_off })
     }
 
