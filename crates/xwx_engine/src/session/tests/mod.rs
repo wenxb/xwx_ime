@@ -131,3 +131,4 @@ mod paging_delete;
 mod prefix_mixed;
 mod url_dot;
 mod recognizer;
+mod caret_edit;

@@ -1938,3 +1938,15 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   `UserLM` 的路径（是 `crate::UserLM`，不是 `crate::user_lm::UserLM`）、
   `is_blocked` 的宿主（在 `snapshot()` 上，不在 `UserLM` 上）都是**猜的**，
   每次都编译失败。**规矩：写用例前先用一条命令把签名抓出来。**
+
+## ⑤② 第三批第 2 项（基础编辑/标点）：查证结论——**覆盖已存在，无需改动**
+
+- 实查：引擎侧 `session/input.rs:54-59` 早已支持**在 `caret` 处插入**（不是追加），
+  `@`/`:` 等同理；`session/tests/basic.rs` 已覆盖左右移动、退格（含 caret=0 安全）、
+  上屏取整串；`apostrophe.rs` 覆盖 `'` 与光标/退格的交互。
+- 本轮补的两条**窄边界**（新增 `session/tests/caret_edit.rs`，**均通过、无需改代码**）：
+  1. `mid_caret_insert_refreshes_candidates_for_the_whole_string`：打 `niho` → 光标左移 → 插 `a`
+     得 `nihao` → 候选里出现「你好」（证明按整串重查，而不是按光标前的片段）；
+  2. `space_after_mid_caret_insert_commits_the_whole_string`：同样的插入后按空格 →
+     `Commit("你好")`（证明上屏取整串）。
+- **不做无谓改动**：这一项没有可修的缺陷，结论是「已覆盖」；为做而做地改代码只会引入风险。
