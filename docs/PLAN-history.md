@@ -1379,3 +1379,8 @@ build_abbrev_lattice 追加整串条目边（lookup_abbrev+lookup_mixed 的 cove
 best_chain_candidates 写死 freq:0 ⇒ 无法从候选分辨条目级/链。绕法：分支内先用
 lookup_abbrev+lookup_mixed 的 covered==len 集合(word,pinyin)，置顶时优先认领该集合内的候选，
 集合空则退回现规则。验收口径已预先写死。
+
+## 2026-10-03 尝试 J（置顶认领条目级候选）无收益，回退
+
+默认路径零变化、格子单独仍 5/20。原因：分支内置顶被尾部最终 sort_candidates/merge_with_abbrev
+按层序桶重排撤销。⇒ 杠杆点在最终排序/合并口径（层序桶），不在分支内置顶；这解释了 ⑤⑤①/⑤⑤②/⑤⑤⑥ 三次失败。
