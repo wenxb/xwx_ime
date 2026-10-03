@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// 保底名额(原 `engine::ABBREV_QUOTA`,第 8 步删通道后生产侧已无消费者,
+/// 语义由 ky 腿的「简拼层填满 100」与桶序断言继承)。
+const ABBREV_QUOTA: usize = 5;
+
 /// 钉住桶内层序契约（**唯一出处**：[`crate::engine::rank::effective_layer`]）：
 ///
 /// 1. `(u_min 桶, 有效层序)` 整体非降——`Exact` → `Fuzzy` → `Abbrev`；
@@ -124,10 +128,23 @@ fn abbrev_layer_survives_full_exact_layer() {
             .iter()
             .filter(|c| c.spelling == SpellingKind::Abbrev)
             .count();
-        assert!(
-            n_abbrev >= ABBREV_QUOTA,
-            "{input} 简拼层应至少保底 {ABBREV_QUOTA} 条(实际 {n_abbrev})"
-        );
+        if input == "xian" {
+            // **⑤⑩⑯ 裁决(2026-10-03,第 8 步删通道)**:可达输入的跨界读法
+            // (xian→xia+nian 下年度、e+nuo 婀娜多姿 一族)随旧通道删除——
+            // 可达输入走精确格,结构上没有简拼层;钉住 0 防止配额机制
+            // 以任何形式回潮。
+            assert_eq!(
+                n_abbrev, 0,
+                "可达输入 xian 不该再有简拼层(跨界读法已按 ⑤⑩⑯ 删除)"
+            );
+        } else {
+            // ky:精确层为空、简拼层(格子链)填满 100——「保底不是封顶」
+            // 在格子世界的对应面。
+            assert!(
+                n_abbrev >= ABBREV_QUOTA,
+                "{input} 简拼层应至少保底 {ABBREV_QUOTA} 条(实际 {n_abbrev})"
+            );
+        }
         assert_bucket_layer_order(input, &cands, &seg, has_abbrev);
     }
 }
@@ -227,14 +244,19 @@ fn abbrev_quota_is_floor_not_cap() {
     let ren = engine
         .lookup_candidates("ren", &LmContext::empty())
         .expect("查询失败");
-    assert_eq!(ren.len(), MAX_CANDIDATES, "ren 应补满 100: {}", ren.len());
+    // **⑤⑩⑯ 裁决(2026-10-03,第 8 步删通道)**:ren 是可达输入,旧通道的
+    // 跨界补全读法(re+n... 一族,原占 100 行里的 79 行)随通道删除——
+    // 可达输入的页面回到纯精确补全。配额机制本身已删;「保底不是封顶」
+    // 的格子世界对应面由上面 `abbrev_layer_survives_full_exact_layer`
+    // 的 ky 腿钉住。
+    assert!(!ren.is_empty(), "ren 候选非空");
     let n_abbrev = ren
         .iter()
         .filter(|c| c.spelling == SpellingKind::Abbrev)
         .count();
-    assert!(
-        n_abbrev > ABBREV_QUOTA,
-        "ren 的简拼层应远超配额(保底不是封顶): {n_abbrev}"
+    assert_eq!(
+        n_abbrev, 0,
+        "可达输入 ren 不该再有简拼层(跨界读法已按 ⑤⑩⑯ 删除)"
     );
     // 排序键未被破坏:(u_min 桶, 层序) 整体非降(三段式:原断言
     // 「(未解释字母数, 层序) 整体非降」;改为 (u_min 桶, 层序) 整体
@@ -269,89 +291,6 @@ fn abbrev_quota_is_floor_not_cap() {
         "前 10 名应仍是精确层(配额只影响简拼层,不挤占精确层): {:?}",
         zhongguo.iter().take(10).map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
     );
-}
-
-/// `merge_with_abbrev` 的合成单元测试(不依赖真实词库):
-/// 覆盖「head 装满 / 简拼层为 0 / 两层都短 / 层序收尾」四个分支。
-/// 本测试所有候选的 `pinyin` 字段都是空串:空 `cp` 是任何输入的
-/// 前缀 ⇒ 「未解释字母数」首键恒 0(补全),整体排序退化为
-/// 「层序 + 分数 + …」,配额截取后拼接即终态——同键(同覆盖度)
-/// 下简拼层仍整体排在精确层之后(分层降为第二键,不是拆掉)。
-#[test]
-fn merge_with_abbrev_quota_branches() {
-    let mk = |word: String, freq: u64, kind: SpellingKind| Candidate {
-        word,
-        pinyin: String::new(),
-        score: 0.0,
-        freq,
-        spelling: kind,
-        echo: false,
-        covered: 0, // 本测试只关心分层/配额,覆盖范围不参与
-        matched_len: 0,
-    };
-    let head: Vec<Candidate> = (0..100u64)
-        .map(|i| mk(format!("e{i}"), 10_000 - i, SpellingKind::Exact))
-        .collect();
-    let abbrev: Vec<Candidate> = (0..10u64)
-        .map(|i| mk(format!("a{i}"), 100 - i, SpellingKind::Abbrev))
-        .collect();
-
-    // head 装满 100 + 简拼 10 → 95 + 5,简拼层保底 5 条且排在最后
-    let (total, out) = merge_with_abbrev("", head.clone(), abbrev.clone());
-    assert_eq!(total, 110);
-    assert_eq!(out.len(), MAX_CANDIDATES);
-    assert_eq!(
-        out.iter().filter(|c| c.spelling == SpellingKind::Abbrev).count(),
-        ABBREV_QUOTA
-    );
-    assert_eq!(out[95].word, "a0", "简拼层第 1 名应落在第 96 位");
-    assert!(out[..95].iter().all(|c| c.spelling == SpellingKind::Exact));
-    // head 的前 95 条逐位保留(被挤掉的是第 96~100 名)
-    assert!(out[..95].iter().zip(head.iter()).all(|(a, b)| a.word == b.word));
-
-    // 简拼层为 0 → head 用满 100,一个名额不浪费
-    let (_, out) = merge_with_abbrev("", head.clone(), Vec::new());
-    assert_eq!(out.len(), MAX_CANDIDATES);
-    assert!(out.iter().all(|c| c.spelling == SpellingKind::Exact));
-
-    // 两层都短(总条数 ≤100)→ 原样拼接,简拼层不被配额截断
-    let (_, out) = merge_with_abbrev("", head[..20].to_vec(), abbrev.clone());
-    assert_eq!(out.len(), 30, "总数不足 100 时不许截断");
-    assert_eq!(
-        out.iter().filter(|c| c.spelling == SpellingKind::Abbrev).count(),
-        10
-    );
-
-    // head 短 + 简拼层长(总数 >100)→ 简拼层补满 100,不按配额封顶
-    let big_abbrev: Vec<Candidate> = (0..90u64)
-        .map(|i| mk(format!("b{i}"), 100 - i, SpellingKind::Abbrev))
-        .collect();
-    let (total, out) = merge_with_abbrev("", head[..20].to_vec(), big_abbrev);
-    assert_eq!(total, 110);
-    assert_eq!(out.len(), MAX_CANDIDATES);
-    assert_eq!(
-        out.iter().filter(|c| c.spelling == SpellingKind::Abbrev).count(),
-        80,
-        "head 20 条时简拼层应补满到 100(保底不是封顶)"
-    );
-    assert!(out[..20].iter().all(|c| c.spelling == SpellingKind::Exact));
-
-    // 首键跨层生效(合成锚):同分时「只覆盖前缀的精确候选」必须排在
-    // 「覆盖整串的简拼候选」之后——pinyin 非空时 u_min 桶不再恒 0
-    // (inp=abcdef:「只覆盖前缀」cp=abc,从 3 起 "def" 不可切,
-    // u_min>0 桶),简拼层(恒 0 桶)压过段内精确候选。
-    let cover_head = vec![
-        Candidate { word: "只覆盖前缀".into(), pinyin: "abc".into(),
-            score: 0.0, freq: 1, spelling: SpellingKind::Exact, echo: false, covered: 0 , matched_len: 0 },
-    ];
-    let cover_abbrev = vec![
-        Candidate { word: "覆盖整串".into(), pinyin: "abc def".into(),
-            score: 0.0, freq: 1, spelling: SpellingKind::Abbrev, echo: false, covered: 0 , matched_len: 0 },
-    ];
-    let (_, out) = merge_with_abbrev("abcdef", cover_head, cover_abbrev);
-    assert_eq!(out.len(), 2);
-    assert_eq!(out[0].word, "覆盖整串", "0 桶简拼应压过段内(u_min>0 桶)精确: {out:?}");
-    assert_eq!(out[1].word, "只覆盖前缀");
 }
 
 /// `z`/`c`/`s` 双前缀(玩具词库):它们既是 z/c/s 系音节的声母,

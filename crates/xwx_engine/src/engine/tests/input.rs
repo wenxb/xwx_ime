@@ -154,13 +154,14 @@ fn separator_blocks_syllables_but_not_words() {
     }
 }
 
-/// 冻结的旧例外:`en` 是合法音节,补全语义下
-/// 「当前音节可以补足,但不能凭空增加未输入的音节」;而 `en` 这条路上
-/// 旧实现会连后续音节一起召回(「婀娜多姿」= e nuo duo zi)。本用例把
-/// 现状**钉住**,避免改排序时被顺手改掉而又无人知晓;要修就是一次
-/// 独立的行为修订(改 `en` 的候选,需单独批准)。
+/// **旧例外已按预定路径修订(⑤⑩⑯,2026-10-03)**:`en` 是合法音节,补全语义
+/// 本该是「当前音节可以补足,但不能凭空增加未输入的音节」;旧通道曾连后续
+/// 音节一起召回(「婀娜多姿」= e nuo duo zi),本用例当年把它作为已知例外
+/// 冻结,并写明「要修就是一次独立的行为修订」。第 8 步删除旧通道即该次
+/// 修订:跨界读法随配额机制一并退场(首位 恩/嗯 不变,edits 语料 0.728→0.841),
+/// 现在钉住修订后的语义——候选里不再有凭空引入的未输入音节。
 #[test]
-fn frozen_outlier_en_recalls_words_with_untyped_syllables() {
+fn en_no_longer_recalls_words_with_untyped_syllables() {
     let Some(engine) = real_engine() else {
         return;
     };
@@ -169,8 +170,13 @@ fn frozen_outlier_en_recalls_words_with_untyped_syllables() {
         .expect("查询失败");
     let words: Vec<&str> = cands.iter().map(|c| c.word.as_str()).collect();
     assert!(
-        words.contains(&"婀娜多姿"),
-        "旧例外已被改动:en 的候选里不再有「婀娜多姿」,若是有意修订请同步本用例与文档"
+        words.contains(&"恩"),
+        "en 的候选应仍有「恩」: {:?}",
+        cands.iter().take(8).map(|c| &c.word).collect::<Vec<_>>()
+    );
+    assert!(
+        !words.contains(&"婀娜多姿"),
+        "en 不该再召回 e+nuo 跨界读法(⑤⑩⑯ 已删)"
     );
     // 对照:完整音节输入时不会凭空引入后续音节。
     let nihao = engine

@@ -214,8 +214,7 @@ pub(super) fn leading_abbrev_input(seg: &Segmenter, inp: &str, has_abbrev: bool)
         && seg.segment(&inp[..2]).is_empty()
 }
 
-/// 候选的完整排序键,供 [`sort_candidates`] 与 [`merge_with_abbrev`]
-/// 的配额位置换算共用(两处用同一个函数,键定义不可能漂移)。
+/// 候选的完整排序键,供 [`sort_candidates`] 使用。
 /// 各字段含义见 `sort_candidates` 函数内注释。分数字段包成
 /// [`ScoreDesc`] 表达「降序」语义(高分排前),与旧实现的
 /// `b.score.partial_cmp(&a.score)` 等价;引擎分数域不会出现 NaN
@@ -383,37 +382,6 @@ pub(super) fn unexplained_letters(inp: &str, c: &Candidate) -> usize {
     } else {
         0 // 非前缀关系:解释数取保守下界 0(见函数级注释)
     }
-}
-
-/// 合并简拼层并按 [`MAX_CANDIDATES`] 收尾,给简拼层留
-/// [`ABBREV_QUOTA`] 个保底名额。
-///
-/// 结构不变(配额语义逐字保留):`ranked`(head,非简拼)与 `abbrev`
-/// 仍各自排序、各自截取、再按序拼接——截取边界是「head 允许的长度」,
-/// 与新排序键无关,因此配额算法不需要知道简拼候选在全局排第几。
-/// 变化只在拼接之后:对拼接结果**整体重排一次**
-/// [`sort_candidates`](排序首键是 u_min 桶:简拼层恒 0 桶,与同桶的
-/// 精确补全/全覆盖候选按层序、罚后分混排——「中国人」(0 桶) 由此
-/// 能排在只覆盖 `zhong` 的单字(段内,u_min>0 桶)之前,这正是本次
-/// 要修的行为;排序是稳定全序,重排不打乱两层内部各自的相对次序)。
-/// 设简拼层 `n` 条:
-/// - 总条数 ≤ `MAX_CANDIDATES` 时两层原样拼接,不截断;
-/// - 总条数超限时,简拼层取 `max(min(ABBREV_QUOTA, n), 100 − head 条数)`
-///   条——保底 ABBREV_QUOTA 条,但不封顶:head 很短时简拼层照旧
-///   补满 100(head ≤ 100 时与旧「合并截 100」逐位一致,全拼无退化);
-/// - head 截到 `100 − 简拼层实取条数`(`n = 0` 时照旧用满 100,
-///   不白留空位)。
-///
-/// 配额只影响「谁被截断」,不影响排序。返回值 = (合并后总条数,
-/// 截断并重排后的列表);`abbrev` 必须未经截断,总条数才真实
-/// (供断言「简拼层装满时被配额截断」——截断后的前 5 条分不出
-/// 「恰好 5 条」与「被截到 5 条」)。
-pub(super) fn merge_with_abbrev(
-    inp: &str,
-    ranked: Vec<Candidate>,
-    abbrev: Vec<Candidate>,
-) -> (usize, Vec<Candidate>) {
-    merge_layer(inp, ranked, abbrev, SpellingKind::Abbrev, ABBREV_QUOTA)
 }
 
 /// **分层合并 + 保底配额**（简拼层与容错层共用同一套机制）。

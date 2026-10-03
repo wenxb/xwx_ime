@@ -5260,3 +5260,44 @@ mixed 13/14·0.929 / keystrokes 0.877 / edits 6/6·0.841（↑ 自 0.728）**；
 你去）。**首位答案全部不变**，四套语料全基线或更好。裁决二选一：
 接受消失（改写 3 条契约 + probe 点名，删除落地）；或保读法（把 T2 跨界补全
 挪进条目边路径——额外工程，非零成本）。
+
+## ⑤⑩⑯ 第 8 步落地：删除 `abbrev_candidates` 通道（裁决=接受配额长尾消失）
+
+**裁决依据**：用户常设指示「后续需要澄清的按我推荐走」+ 实测面——通道关闭态
+首位答案全部不变（仅 nihoa 拟好→你好、womenjinxtianqugongyuan 我们尽享→我们
+今天两条，均为改善向）；四套语料全部基线或更好（**edits 6/6·0.841，↑ 自
+0.728**）；`frozen_outlier_en` 当年就写明「要修就是一次独立的行为修订」——本次
+即该次修订。若要回退：git revert 本提交即可（通道代码在历史里）。
+
+**代码删除**：
+- `lookup.rs`：通道调用块（`abbrev`/debug_assert/`merge_with_abbrev` 调用）删除；
+  **关键补回**：旧流程里 `merge_layer` 顺带承担可达输入路径的**终排+截断**——
+  删合并调用必须就地补 `sort_candidates + truncate(MAX_CANDIDATES)`（内存词库的
+  fuzzy/beam/ue 契约当场抓住过这遗漏，恢复后全绿）。
+- `rank.rs`：删 `merge_with_abbrev`（`merge_layer` 保留——容错合并 :256 仍在用，
+  传 `TOLERANT_QUOTA`）。
+- `lattice.rs`：删 `abbrev_candidates`（~90 行）。
+- `mod.rs`：`ABBREV_QUOTA` 移入测试文件（生产侧无消费者）；`DEMOTE_OLD_ABBREV_
+  CHANNEL` 文档改写为「格子世界总开关」——**从此没有回退点**，行为对照靠
+  git/VERIFY 逐字节基线。
+- 契约改写 3 条：`abbrev_layer_survives_full_exact_layer`（xian 腿改钉「可达输入
+  简拼层=0」，ky 腿保住「格子链填满 100」）、`abbrev_quota_is_floor_not_cap`
+  （ren 腿改钉「可达输入纯精确」——原 100 行里 79 行是通道跨界读法）、
+  `frozen_outlier_en`→`en_no_longer_recalls_words_with_untyped_syllables`（按测试
+  自留的修订路径改写）。另删两个直接调用已删机制的合成单元测试
+  （`merge_with_abbrev_quota_branches`、`tests/quota.rs` 整文件）。
+- `collect_recall_hits` 标 `#[cfg(test)]`（召回事实模块现为纯诊断面）。
+
+**门槛（删除态）**：398 passed / 0 FAILED · clippy 0 · 对拍 exit 0（点名例外
+sh/zh/nihoa/womenjin* 四条）· daily 1.000 / mixed 13/14·0.929 / keystrokes 0.877 /
+**edits 0.841↑** · 清单 20/20+20/20 · 形态 10/10 · perf p95 6.889ms、超线 0
+（p50 0.284ms 反而下降；load 波动下与之前 5.5ms 档同量级）。
+
+**残余点名（长尾类，无首位变化）**：xian −下年度/下能/侠女（跨界补全）、
+zho −中欧/中欧城/兆欧表（补全洪流挤出）、beijin −北极鲶鱼/被激怒、
+niqhao −你却/你去/你强、meiy 95→100 尾部换血。
+
+**8b/8c（待后续）**：三条存在性否决（covered_whole/tolerant_explains/
+exact_covers_whole）与「从拼音长度猜消费范围」排序支仍在（needs_abbrev 与
+排序还依赖它们）；dict 层 `lookup_mixed`/`lookup_abbrev` 保留为建边纯匹配
+原语（build.rs:148-149）。删除它们的时机 = 再动排序/搜索时。

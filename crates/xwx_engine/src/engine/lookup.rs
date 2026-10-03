@@ -131,7 +131,7 @@ impl ImeEngine {
         // 精确路能解 → 格边候选(含整串读法);解不了 → **原有**的兜底联想。
         // 兜底不能因为有了容错就省掉:它给的「最长可切分前缀 + 首音节」
         // 候选正是分段上屏要选的第一步(见 commit_candidate)。
-        let ranked: Vec<Candidate> = if !reachable {
+        let mut ranked: Vec<Candidate> = if !reachable {
             self.fallback_candidates(pinyin, ctx, bounds)?
         } else {
             self.lattice_candidates(pinyin, ctx, &lattice)?
@@ -169,18 +169,12 @@ impl ImeEngine {
             && !reachable
             && (super::rank::pure_abbrev_input(pinyin, true)
                 || super::rank::leading_abbrev_input(&self.segmenter, pinyin, true));
-        let demote_old = super::DEMOTE_OLD_ABBREV_CHANNEL && demote_scope;
-        let abbrev = if bounds.is_none() && !demote_old {
-            self.abbrev_candidates(pinyin, ctx, &ranked)?
-        } else {
-            Vec::new()
-        };
-        debug_assert_eq!(
-            super::recall::collect_recall_hits(&abbrev, super::recall::RecallSource::Abbrev).len(),
-            abbrev.len(),
-            "召回事实与候选一一对应"
-        );
-        let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
+        // **旧通道已删（第 8 步，⑤⑩⑯）**：这里曾是「简拼层合并 + 配额 +
+        // 终排截断」。合并没了，但可达输入的终排/截断原来由 merge_layer
+        // 顺带承担，必须就地补回（needs_abbrev 输入的终排仍在下面
+        // needs_abbrev 块尾，那里还要追加条目边与链候选）。
+        sort_candidates(pinyin, &mut ranked, false);
+        ranked.truncate(MAX_CANDIDATES);
 
         // **第二个门槛(分数)**:已经有一个「覆盖整串」的读法、而且它比容错
         // 读法更自信时,**不动它**。

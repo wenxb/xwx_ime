@@ -25,6 +25,12 @@ import sys
 APPROVED_FIRST_CHANGE = {
     "A:sh": ("所", "是"),
     "A:zh": ("在", "这"),
+    # ⑤⑩⑯（2026-10-03，第 8 步删通道）：nihoa 的旧首位 拟好(ni hao) 与 你好
+    # 同读法，你好词频高得多——通道删除后按词条口径自然登顶；用户当年报的
+    # 正是 nihoa 想要「你好」。womenjinxtianqugongyuan：我们尽享(通道前缀读法,
+    # 沃米尔一族) → 我们今天(格子真词链)。
+    "A:nihoa": ("拟好", "你好"),
+    "A:womenjinxtianqugongyuan": ("我们尽享", "我们今天"),
 }
 
 

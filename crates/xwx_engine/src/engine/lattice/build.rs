@@ -115,7 +115,7 @@ impl ImeEngine {
         // **只在切换开关打开时才加**：默认（旧通道仍在供给）下这些边会扰动既有排序
         // （⑤⑦② 实测 keystrokes 0.877→0.794、edits 0.728→0.561），所以必须挂开关。
         if crate::engine::DEMOTE_OLD_ABBREV_CHANNEL && demote_scope && self.dict.has_abbrev() {
-            // 与 `ImeEngine::abbrev_candidates` 同一取法：匹配在 `MmapDict` 上。
+            // 与旧 `ImeEngine::abbrev_candidates`（第 8 步已删）同一取法：匹配在 `MmapDict` 上。
             let DictStore::Mmap(d) = &self.dict else {
                 return Ok(lattice);
             };

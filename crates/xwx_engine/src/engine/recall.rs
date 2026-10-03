@@ -42,6 +42,7 @@ pub(super) struct RecallHit {
 ///
 /// **不去重**：同词同音、消费范围不同的两条是两条事实——分段上屏要靠 `consumed`
 /// 区分，折叠成展示候选是后面的事。
+#[cfg(test)]
 pub(super) fn collect_recall_hits(cands: &[Candidate], source: RecallSource) -> Vec<RecallHit> {
     cands
         .iter()

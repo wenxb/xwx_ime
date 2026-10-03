@@ -22,21 +22,10 @@ pub enum EngineError {
 const MAX_CANDIDATES: usize = 100;
 /// 简拼层的保底名额(不是封顶):总条数超 `MAX_CANDIDATES` 时,
 /// 简拼层至少留这么多个候选位,不被精确/模糊/兜底层整层挤掉。
-///
-/// 理由(实测依据,见 PLAN.md 第三节「混合简拼被截断」):
-/// - 缺口输入(`zhongguor`/`nih`/`renm`)的目标词清一色落在简拼层
-///   第 1 名,保底 5 个绰绰有余;
-/// - 代价侧:head 装满 100 条时被挤掉的只是第 96~100 名(局部切分
-///   出的碎片单字/兜底长尾),翻 10 页才到,代价可忽略;
-/// - 只是保底,不是上限:head 很短时简拼层照旧补满 100(与旧
-///   「合并排序截 100」逐位一致,见 `merge_with_abbrev`);
-/// - 简拼层不足 5 条时按实际条数预留;为 0 时 head 照旧用满 100,
-///   不白留空位。
-const ABBREV_QUOTA: usize = 5;
-
-/// **逐类切换的回退点**（阶段 3）：`true` 时，「纯缩写」与「开头即缩写」这两类
-/// （且**排除 `zh`/`ch`/`sh` 开头**，见 `lookup.rs::demote_scope`）**不再让旧简拼
-/// 通道出候选**，改由简拼格独立供给；旧通道代码保留，一键切回。
+/// **格子世界的总开关**（阶段 3 引入为逐类切换，第 8 步起成为唯一路径）：
+/// `true` 时简拼/混拼/残缺尾各类输入都由简拼格 + 条目边供给（旧简拼通道
+/// `abbrev_candidates` 已随第 8 步删除，没有回退点——行为的历史对照在
+/// `docs/VERIFY.md` 的逐字节基线与 git）。
 ///
 /// **2026-10-03 第 5 步置为默认 `true`**，验收数据（真实词库 + 万象 gram）：
 /// 401 passed/0 failed、clippy 0、v1 对拍 90 段**首位变化 0**（9 段漂移逐条点名，
@@ -460,7 +449,7 @@ pub struct ImeEngine {
     pub fuzzy_enabled: bool,
 }
 
-use rank::{merge_with_abbrev, ordered_candidates, prune_beam, sort_candidates};
+use rank::{ordered_candidates, prune_beam, sort_candidates};
 
 mod api;
 mod decode;
