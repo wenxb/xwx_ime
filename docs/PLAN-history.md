@@ -1415,3 +1415,9 @@ pure_abbrev/leading_abbrev 忽略简拼层候选 ⇒ 首位零变化、10/20 候
 needs_abbrev 对 pure_abbrev/leading_abbrev 忽略 Abbrev 层候选 ⇒ 两类输入在旧通道在场时也跑简拼格分支，
 两条供给同场竞争。实测：首位零变化、10/20 候选变长、四套语料基线、对拍 0 变化、clippy 0、401 passed/0 failed
 （392/1 那次是负载抖动，--no-fail-fast 复跑全绿）。纪律：测试红且总数少于基线时先 --no-fail-fast 复跑。
+
+## 2026-10-03 尝试 L：逐类切换开关 + 判据前移（前移动了行为，回退）
+
+为在 merge 处用类别判据而前移 pure_abbrev/leading_abbrev：开关默认 false 却让 edits 0.728→0.680
+⇒ 是"前移"改变了行为（判据所在表达式依赖 ranked 的求值时机）。已回退。正解：不移动原判据，
+在 merge 处复制一份只依赖 reachable/segmenter/has_abbrev 的轻量版判据供开关使用。
