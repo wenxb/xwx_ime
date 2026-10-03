@@ -86,6 +86,7 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| dict.with_file_name("abbrev.bin"));
     engine.dict = engine.dict.with_abbrev(&abbrev);
+    engine.dict = engine.dict.with_syllable_graph(abbrev.with_file_name("syllable_graph.bin"));
     // 保险:引擎对坏文件会静默退回空实现,这里核对加载结果不是空壳。
     if engine.dict_count() == 0 {
         eprintln!("词库加载后词条数为 0:{}(疑似损坏)", dict.display());

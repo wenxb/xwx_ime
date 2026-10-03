@@ -132,6 +132,7 @@ fn open_engine(
     let mut engine =
         ImeEngine::new_with_lm(Some(&dict), Some(&gram)).map_err(|e| format!("打开引擎失败:{e}"))?;
     engine.dict = engine.dict.with_abbrev(&abbrev);
+    engine.dict = engine.dict.with_syllable_graph(abbrev.with_file_name("syllable_graph.bin"));
     // 注意:规模要在**挂用户层之前**读——`with_user_lm` 之后 lm 变成
     // `LmStore::Mixed`,从外面再 `match` 只会得到「不是万象」。
     let lm_units = match &engine.lm {

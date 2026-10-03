@@ -46,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut engine = ImeEngine::new_with_lm(Some(&dict_path), Some(&lm_path))?;
     engine.dict = engine.dict.with_abbrev(&abbrev_path);
+    engine.dict = engine.dict.with_syllable_graph(abbrev_path.with_file_name("syllable_graph.bin"));
 
     let corpora: Vec<PathBuf> = if std::env::args().len() > 1 {
         std::env::args().skip(1).map(PathBuf::from).collect()

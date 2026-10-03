@@ -47,7 +47,7 @@ impl ImeEngine {
                 self.collect_chain_edges(
                     pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
                     user_entries, bounds, true, Some(stalls), 0, 0.0, true, false, false,
-                    &mut key_buf,
+                    &mut key_buf, Some(0),
                 )?;
             }
         }
@@ -163,7 +163,7 @@ impl ImeEngine {
                 self.collect_chain_edges(
                     pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
                     user_entries, bounds, tolerant, stalls, 0, 0.0, false, abbrev, false,
-                    &mut key_buf,
+                    &mut key_buf, Some(0),
                 )?;
                 // 这一步到达的位置 = 从 `start` 建出的所有边的终点，它们才需要
                 // 继续枚举（下一个词的起点）。
@@ -188,7 +188,7 @@ impl ImeEngine {
             self.collect_chain_edges(
                 pinyin, start, start, &mut chain, &mut lattice, &mut cache, &mut budget,
                 user_entries, bounds, tolerant, stalls, 0, 0.0, false, abbrev, false,
-                &mut key_buf,
+                &mut key_buf, Some(0),
             )?;
         }
         Ok(lattice)
@@ -216,8 +216,12 @@ impl ImeEngine {
         abbrev: bool,
         used_abbrev: bool,
         key_buf: &mut String,
+        node: Option<u32>,
     ) -> Result<(), EngineError> {
         let n = pinyin.len();
+        // 音节级转移索引：只有装配了 `syllable_graph.bin` 的词库才有。
+        // `None` 时下面所有判断原样退回旧的主索引二分（功能等价、每次一次跨页二分）。
+        let graph = self.dict.syllable_graph();
         if chain.len() >= MAX_EDGE_SYLLABLES || *budget == 0 {
             return Ok(());
         }
@@ -320,8 +324,25 @@ impl ImeEngine {
             // 三态：`None` 剪子树；`Prefix` 只继续往下走、**不查词条**（省掉每个
             // 链节点一次 `parse_entries` 分配——实测 22K 链就是 5~7ms 的来源）；
             // `Exact` 才是本级真有词，去查。
+            // 链在索引里的节点：一次内存子表二分（子表 ≤412 项）就答完
+            // 「这条链还有没有更长的词条」，替掉旧路径那条跨页 mmap 二分
+            // （实测 1.2 万次 ≈10.5ms，是简拼格几乎全部成本）。
+            let child_node = match (graph, node) {
+                (Some(g), Some(n)) => g.child(n, syl)?,
+                _ => None,
+            };
             let prefix_state = if arc_abbrev {
-                self.dict.key_prefix_state(joined)?
+                match graph {
+                    Some(g) => match (node, child_node) {
+                        // 链本身已不是任何词条的 key 前缀 ⇒ 它的任何延长也不是，
+                        // 整棵子树剪掉。旧路径在这里同样得到 `None`，只是要先付
+                        // 一次主索引二分才发现。
+                        (None, _) | (Some(_), None) => crate::dict::KeyPrefix::None,
+                        (Some(_), Some(c)) if g.node(c)?.exact => crate::dict::KeyPrefix::Exact,
+                        (Some(_), Some(_)) => crate::dict::KeyPrefix::Prefix,
+                    },
+                    None => self.dict.key_prefix_state(joined)?,
+                }
             } else {
                 crate::dict::KeyPrefix::Exact
             };
@@ -413,7 +434,7 @@ impl ImeEngine {
                 self.collect_chain_edges(
                     pinyin, start, end, chain, lattice, cache, budget, user_entries, bounds,
                     tolerant, stalls, typo_edits + arc_edits, arc_penalty, only_typo_edges,
-                    abbrev, past_abbrev, key_buf,
+                    abbrev, past_abbrev, key_buf, child_node,
                 )?;
                 chain.pop();
                 key_buf.truncate(key_mark);
@@ -461,7 +482,7 @@ impl ImeEngine {
                     self.collect_chain_edges(
                         pinyin, start, pos + gap, chain, lattice, cache, budget, user_entries,
                         bounds, tolerant, stalls, typo_edits + 1, cost, only_typo_edges,
-                        abbrev, used_abbrev, key_buf,
+                        abbrev, used_abbrev, key_buf, node,
                     )?;
                 }
             }

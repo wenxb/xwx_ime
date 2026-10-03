@@ -128,6 +128,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let abbrev_path = std::env::var("XWX_ABBREV_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| dict_path.with_file_name("abbrev.bin"));
+    // 音节级转移索引:`XWX_SYLLABLE_GRAPH_PATH` 覆盖,默认与 dict.bin 同目录的
+    // `syllable_graph.bin`(由 `scripts/build_syllable_graph.py` 生成)。缺失/
+    // 损坏/不同代只告警,缩写弧回退到逐次主索引二分(功能不变、每次多一次跨页二分)。
+    let graph_path = std::env::var("XWX_SYLLABLE_GRAPH_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| dict_path.with_file_name("syllable_graph.bin"));
     // 语言模型:`XWX_LM_PATH` 显式覆盖(原样尊重,即使文件不存在,后续
     // 逻辑优雅退化为空模型);未设置时按优先级探测数据目录里的
     // .gram / bigram.txt(详见 resolve_lm_path 注释)。
@@ -140,6 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ImeEngine::new(Some(&dict_path))?
     };
     engine.dict = engine.dict.with_abbrev(&abbrev_path);
+    engine.dict = engine.dict.with_syllable_graph(&graph_path);
     if engine.dict.has_abbrev() {
         tracing::info!(path = %abbrev_path.display(), "简拼副索引已装配");
     } else {

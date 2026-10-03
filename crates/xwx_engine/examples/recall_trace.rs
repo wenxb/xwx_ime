@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = ImeEngine::new_with_lm(Some(&dict), gram.as_deref())?;
     if abbrev.is_file() {
         engine.dict = engine.dict.with_abbrev(&abbrev);
+    engine.dict = engine.dict.with_syllable_graph(abbrev.with_file_name("syllable_graph.bin"));
     }
     let engine = Arc::new(engine);
     println!(

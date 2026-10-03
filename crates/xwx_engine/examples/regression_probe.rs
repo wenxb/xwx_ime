@@ -239,6 +239,7 @@ impl Backend {
 fn open_engine(backend: &Backend) -> Result<Arc<ImeEngine>, Box<dyn std::error::Error>> {
     let mut engine = ImeEngine::new_with_lm(Some(&backend.dict), Some(&backend.gram))?;
     engine.dict = engine.dict.with_abbrev(&backend.abbrev);
+    engine.dict = engine.dict.with_syllable_graph(backend.abbrev.with_file_name("syllable_graph.bin"));
     let engine = Arc::new(engine);
 
     // 注意:`LmStore::vocab_size()` 对万象变体返回 0(它自己统计在
