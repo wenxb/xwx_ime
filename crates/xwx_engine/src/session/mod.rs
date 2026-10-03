@@ -167,6 +167,12 @@ pub enum InputEvent {
     /// 若是用户造词条目则连同词条删掉)。见 [`crate::UserLM::block_candidate`];
     /// 仅在候选窗有候选时有意义。
     DeleteCandidate,
+    /// 撤销最近一次屏蔽（Ctrl+Shift+Delete）。
+    ///
+    /// 引擎侧与会话分支已完成，**IBus 按键分派是下一步**；在那之前它只被测试与
+    /// 引擎内部构造，先标注免得留「看起来没接线」的告警。
+    #[allow(dead_code)]
+    UnblockCandidate,
     /// Ctrl+空格：切换中英文模式。
     ToggleAscii,
 }

@@ -452,6 +452,18 @@ impl InputSession {
                 Ok(SessionOutput::Updated(self.update()))
             }
             InputEvent::DeleteCandidate => Ok(SessionOutput::Noop),
+
+            // —— Ctrl+Shift+Delete:撤销最近一次屏蔽 ——
+            // 被屏蔽的候选本来就不在列表里,所以这个动作不看高亮、也不要求
+            // 拼音串非空:删错了随时能撤回。撤到了就重查一次,让列表多回来一条。
+            InputEvent::UnblockCandidate => {
+                if self.engine.unblock_last_candidate() {
+                    self.refresh()?;
+                    Ok(SessionOutput::Updated(self.update()))
+                } else {
+                    Ok(SessionOutput::Noop)
+                }
+            }
         }
     }
 

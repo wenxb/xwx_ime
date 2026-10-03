@@ -456,6 +456,7 @@ fn describe(key: &InputEvent) -> String {
         InputEvent::PageUp => "key PageUp".to_owned(),
         InputEvent::PageDown => "key PageDown".to_owned(),
         InputEvent::DeleteCandidate => "key DeleteCandidate".to_owned(),
+        InputEvent::UnblockCandidate => "key UnblockCandidate".to_owned(),
         InputEvent::ToggleAscii => "key ToggleAscii".to_owned(),
     }
 }

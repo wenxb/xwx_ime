@@ -196,6 +196,14 @@ impl ImeEngine {
         user.block_candidate(word, pinyin_key);
     }
 
+    /// **撤销最近一次屏蔽**（`Ctrl+Shift+Delete` 用）。返回是否真的撤了一条。
+    ///
+    /// 与「指名道姓」的解屏蔽分工不同：被屏蔽的候选本来就不在列表里，用户手上
+    /// 没有可点的东西，所以这里只认槽位里的最近一条（见 `UserLM::unblock_last`）。
+    pub(crate) fn unblock_last_candidate(&self) -> bool {
+        self.user_lm().is_some_and(|u| u.unblock_last())
+    }
+
     /// 当前词库词条总数（启动日志/统计用；内存空词库时为 0）。
     pub fn dict_count(&self) -> u64 {
         match &self.dict {
