@@ -2748,3 +2748,23 @@ LM 的「无证据基线分」按词复付（每个词各付一次 -11.605767）
 **下一步**：把纯缩写输入的**门槛**放开（`MIN_ABBREV_INPUT_LEN = 4` 挡住了
 `wsm`/`zgr`/`xxn`/`dbq`/`mgx` 这类 3 字母输入，它们连简拼格都不建），
 再用 20 条清单比较「旧通道候选 vs 格子候选」的胜负，决定哪一类可以让旧通道让位。
+
+## ⑤㉜ 阶段 3 第 2 步第二步：纯缩写输入豁免 `MIN_ABBREV_INPUT_LEN`
+
+**根因（两处，都是"门槛评估时机"的问题）**：
+1. `MIN_ABBREV_INPUT_LEN = 4` 把 `wsm`/`zgr`/`xxn`/`dbq`/`mgx` 这类 3 字母纯缩写输入
+   挡在门外（它们连简拼格都不建，这正是关掉旧通道后只剩输入回声的原因）；
+2. 更隐蔽的一处：「已有整串读法」这个判据是在**合并旧简拼通道之后**评估的，
+   而旧通道的候选本身就覆盖整串（为什么要/中国人）⇒ 判据恒真、简拼格永远不建。
+   修法：在合并**之前**取快照 `exact_covers_whole`。
+
+**判据**：纯缩写 = 每个字母都能起一个音节（`abbrev_syllables(单字母)` 非空）且精确格不可达；
+**仍受副索引约束**（`self.dict.has_abbrev()`）——副索引负责纯首字母简拼这条降级契约
+不能破（`engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`）。
+
+**实测**：5 条 3 字母输入开始建简拼格（0.668~1.312ms，成本便宜）；
+**7/20** 输入新增**词级**候选（nhma/srkl/xnkl/gxfc/jttqzenmy/zgdsq/nzgsm，各 4~9 条 → 10 条），
+**全部首位不变**、无候选消失；四套语料不变（daily 12/12·1.000、mixed 13/14·0.929、
+keystrokes 12/12·0.877、edits 6/6·0.728）；v1 对拍 44 输入 **0 变化**；
+clippy 0；测试 **401 passed / 0 failed**；perf 同条件不可区分。
+顺带把 `XWX_TRACE=1` 的门槛迹扩成 `pure_abbrev/exact_covers_whole`（默认关闭，便于下次排查）。

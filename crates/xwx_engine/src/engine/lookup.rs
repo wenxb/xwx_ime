@@ -139,6 +139,11 @@ impl ImeEngine {
         // 全拼切分,`lookup_abbrev`/`lookup_mixed` 会把干净串当简拼
         // 前缀重新查出 `[xian]` 系的字(先/现/显),把刚消掉的歧义
         // 又灌回来——含 `'` 的查询语义上不是简拼,跳过简拼层。
+        // 「精确/兜底路是否已经解释整串」——**必须在合并旧简拼通道之前取快照**：
+        // 旧通道的候选也覆盖整串（为什么要/中国人），拿合并后的池子当判据，
+        // 后面的简拼格就永远不建（实测 wsm/zgr/xxn/dbq/mgx 五条正因此拿不到
+        // 词级候选；关掉旧通道时它们只剩输入回声，也是同一个原因）。
+        let exact_covers_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
         let abbrev = if bounds.is_none() {
             self.abbrev_candidates(pinyin, ctx, &ranked)?
         } else {
@@ -261,13 +266,40 @@ impl ImeEngine {
         // 真实存在的整串键（`dai shi xian` = 待实现）。早前整体拆掉
         // `!tolerant_explains` 试过：390 行漂移、零改善——所以只在
         // [`Self::ends_one_letter_short`] 成立的形状上放行。
+        // **纯缩写输入**：每个字母都能起一个音节（`wsm`/`zgr`/`xxn`/`dbq`/`mgx`）。
+        // 它们此前被 `MIN_ABBREV_INPUT_LEN = 4` 挡在门外——连简拼格都不建，
+        // 于是只剩「输入原样回声」（实测：关掉旧简拼通道后 20 条里有 5 条如此）。
+        // 判据是**结构**的：每个字母都必须能作为某个音节的首字母，且整串在精确格
+        // 上不可达（可达的就是普通全拼输入，走上面那条路）。
+        // 仍**受副索引约束**（`has_abbrev`）：副索引负责纯首字母简拼这条契约
+        // 不能破（见 `engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`），
+        // 即使简拼格本身只用主索引。
+        let pure_abbrev = self.dict.has_abbrev()
+            && !reachable
+            && pinyin.len() >= 2
+            && pinyin
+                .char_indices()
+                .all(|(i, c)| {
+                    c.is_ascii_alphabetic()
+                        && !segmenter::abbrev_syllables(&pinyin[i..i + 1]).is_empty()
+                });
+        // 「已有整串读法」这条要**忽略原样回显**：纯缩写输入的解不了整串时，
+        // 兜底先给的就是回显候选（`covered = 整串`、`echo = true`），
+        // 它不算「已经有读法」，否则门槛永远挡住简拼格（实测 wsm/zgr/xxn/dbq/mgx
+        // 五条因此一条简拼候选都拿不到）。
+        let covered_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
         let needs_abbrev = !reachable
-            && (!tolerant_explains || self.ends_one_letter_short(pinyin))
-            && pinyin.len() >= MIN_ABBREV_INPUT_LEN
-            && !ranked.iter().any(|c| c.covered >= pinyin.len());
+            && (pure_abbrev
+                || ((!tolerant_explains || self.ends_one_letter_short(pinyin))
+                    && pinyin.len() >= MIN_ABBREV_INPUT_LEN))
+            && if pure_abbrev {
+                !exact_covers_whole
+            } else {
+                !covered_whole
+            };
         super::trace::note(|| {
             format!(
-                "门槛: reachable={reachable} tolerant_explains={tolerant_explains} len={} needs_abbrev={needs_abbrev}",
+                "门槛: reachable={reachable} tolerant_explains={tolerant_explains} len={} pure_abbrev={pure_abbrev} covered_whole={covered_whole} exact_covers_whole={exact_covers_whole} needs_abbrev={needs_abbrev}",
                 pinyin.len()
             )
         });
