@@ -334,17 +334,25 @@ impl ImeEngine {
             // 真实依据，整句（条件概率与词频证据都更强）该占首位。判据取数据
             // 自身的最低档、等价于上游 `has_reliable_phrase`，不是拍出来的阈值；
             // **不动分数**，所以不会出现「抬多词读法压坏 womenjintianquxian」。
-            let has_reliable_cover = ranked
-                .iter()
-                .any(|c| c.covered >= pinyin.len() && c.freq > FILLER_FREQ_TIER);
-            let target = if has_reliable_cover {
-                ranked.iter().position(|c| c.covered >= pinyin.len())
-            } else {
+            // **只在首位是「垃圾档词条」时才换**：`nihaoshijie` 的首位本来
+            // 就是组合候选（「你好世界」，`freq = 0` 表示分数驱动、不是词库
+            // 条目），那种情况一个字都不该动——早先按「有没有 freq 高于最低档
+            // 的覆盖者」判断，会把整句块自己产出的「你好时节」顶上去（实测
+            // daily 的 MRR 因此从 1.000 掉到 0.958）。
+            //
+            // `freq == 0` 是「分数驱动」的标记（组合候选与用户造词都用它），
+            // 只有 `1..=FILLER_FREQ_TIER` 才是词库里没有真实依据的填充条目。
+            let top_is_filler_entry = ranked.first().is_some_and(|c| {
+                c.covered >= pinyin.len() && c.freq > 0 && c.freq <= FILLER_FREQ_TIER
+            });
+            let target = if top_is_filler_entry {
                 ranked.iter().position(|c| {
                     sentence_keys
                         .iter()
                         .any(|(w, p)| *w == c.word && *p == c.pinyin)
                 })
+            } else {
+                ranked.iter().position(|c| c.covered >= pinyin.len())
             };
             if let Some(idx) = target {
                 if idx != 0 {
