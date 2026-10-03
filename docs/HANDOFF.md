@@ -2074,3 +2074,23 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   「按当前模式取反」而不是读 `state`（否则点一下只能切到英文关）。
 - 定向用例：`session/tests/basic.rs::focus_change_keeps_the_mode`——
   **旧实现实测红**（`焦点切换不应改变中/英模式`，即用户报的现象）。
+
+## ⑤⑧ `just dev` 为什么可能跑的不是新二进制（已修）
+
+- **真相**：`just dev` 的 recipe 里第一步就是 `cargo build -p xwx_ime`，跑的也是
+  `{{target_dir}}/debug/xwx_ime`——**不存在「没重编译」的问题**（实测：调试二进制
+  时间戳比提交还新）。坑在**名字之争**：会话里的 ibus-daemon 是按 component XML
+  拉起引擎的，而 XML 指向的是 `~/.local/bin/xwx_ime`（安装版）。于是 `just dev`
+  把调试引擎拉起来时，谁先拿到 `org.freedesktop.IBus.Engine.xwx` 就看时序：
+  daemon 抢先拉起 release 引擎时，调试引擎 `request_name` 失败、**直接以
+  `NameTaken` 退出**，打字仍然落到旧二进制上——现象就是「`just dev` 不是新二进制」。
+  （我在自己的私有总线 e2e 里踩过同一条：`Error: NameTaken`。）
+- **修法**：`src/main.rs` 占名改成
+  `request_name_with_flags(ENGINE_SERVICE, ReplaceExisting | AllowReplacement)`
+  ⇒ 后来者接管名字，旧持有者收到 `NameLost` 后不再被 daemon 使用。
+  这样 `just dev` 一定服务新构建，不必先 `just install`。
+- **验证**（私有总线，同一条总线上起两个实例）：第二个实例**活着**且日志里
+  `NameTaken` 计数为 **0**（旧实现下它必然带着 `NameTaken` 退出）。
+- `just dev` 另外加了一行提示，打印它要 exec 的调试二进制路径。
+- 注意：`just install` 仍然是「装到系统、给 GNOME 输入源用」的那条路；
+  **调试验证不需要它**。

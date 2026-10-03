@@ -62,6 +62,10 @@ dev:
     if ! pgrep -x ibus-daemon >/dev/null; then ibus-daemon -rdx; sleep 2; fi
     -for pid in $(pgrep -x xwx_ime); do kill "$pid"; done
     sleep 0.5
+    # 调试引擎用「可接管」的方式占名（见 src/main.rs），所以即使 daemon
+    # 抢先按 component XML 拉起了 release 引擎，这里也会把它顶掉——
+    # 这正是「just dev 跑的不是新二进制」那个坑的解法。
+    @echo "调试引擎  {{target_dir}}/debug/xwx_ime"
     exec {{target_dir}}/debug/xwx_ime --ibus
 
 # 输出 component XML 到 stdout（打 deb 时用 --exec 指 /usr/bin/xwx_ime）

@@ -275,7 +275,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     conn.object_server().at(ibus_proto::ENGINE_PATH, first).await?;
 
     // 占用引擎服务名（对象已就绪，从这里起保证「可见即可服务」）
-    conn.request_name(ibus_proto::ENGINE_SERVICE).await?;
+    // **用「可接管」的方式占名**：dev 跑的调试引擎必须能顶掉 daemon 按
+    // component XML 拉起的 release 引擎，否则调试引擎会因 `NameTaken`
+    // 直接退出、打字仍然落到旧二进制上（实测过的坑：`just dev` 看起来在跑，
+    // 实际服务的还是安装版）。AllowReplacement + ReplaceExisting 让后来者
+    // 接管；旧持有者会收到 NameLost，不再被 daemon 使用。
+    conn.request_name_with_flags(
+        ibus_proto::ENGINE_SERVICE,
+        zbus::fdo::RequestNameFlags::ReplaceExisting
+            | zbus::fdo::RequestNameFlags::AllowReplacement,
+    )
+    .await?;
     tracing::info!(
         service = ibus_proto::ENGINE_SERVICE,
         "服务名已占用（对象服务已先行就绪）"
