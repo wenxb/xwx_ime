@@ -331,3 +331,33 @@ justfile                    任务入口：build / dev / install / deb
 
 > 无法识别的 `XWX_FUZZY` 取值会记一条 warning 后按默认值处理，
 > **不会**让引擎启动失败——输入法起不来比模糊音没开严重得多。
+
+## 离线交付与数据放置（Q5）
+
+装完**不依赖在线重建**即可用；完整清单与验证步骤见 `docs/offline-install.md`。
+
+**数据文件放哪**
+| 文件 | 用户级（默认） | 系统级（deb 使用） | 环境变量覆盖 |
+|---|---|---|---|
+| 词库 `dict.bin` | `$XDG_DATA_HOME/xwx/dict.bin`（默认 `~/.local/share/xwx/`） | `/usr/share/xwx/dict.bin` | `XWX_DICT_PATH` |
+| 简拼副索引 `abbrev.bin` | 同目录 | `/usr/share/xwx/abbrev.bin` | `XWX_ABBREV_PATH` |
+| 语言模型 `*.gram` | 同目录 | 同目录 | `XWX_LM_PATH` |
+| 用户学习数据 `user_bigram.txt` | 同目录（**只写这里**，不进包） | 不用 | `XWX_USER_LM_PATH` |
+
+查找顺序是「用户级优先 → 系统级回退 → 都没有时报缺文件并告警」。词库与副索引
+**必须同代**（副索引的关联数等于词库词条数），否则副索引不会被装配、简拼退化。
+
+**语言模型为什么不随包分发**：万象 `.gram` 体积大且授权独立，请自行放到上表位置；
+**没有模型也能用**，但候选排序会退化为纯词频（日志里会有提示）。
+
+**注册输入源**（装完一次即可）
+1. 确认组件文件在位：`/usr/share/ibus/component/xwx.xml`；
+2. 刷新缓存：`ibus write-cache`（`just install`/deb 已自动做，失败也无妨）；
+3. 把 `xwx` 加进输入源：GNOME 设置 → 键盘 → 输入源 → `+` → 中文（中国）→ **XWX 拼音**；
+   命令行等价：`gsettings set org.gnome.desktop.input-sources sources "[('xkb','us'),('ibus','xwx')]"`；
+4. 验证：`ibus list-engine | grep xwx` 应出现 `xwx - XWX 拼音`。
+
+**排查**
+- 看到的是旧行为 / 完全没有候选：先确认跑的是新二进制（`just dev` 用 debug 构建、
+  `just install` 用 release），以及 `--ibus` 进程路径（`pgrep -af xwx_ime`）；
+- 简拼不工作：多半是副索引缺失或不同代，看日志里有没有「副索引…不装配」的告警。
