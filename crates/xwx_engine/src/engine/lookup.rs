@@ -90,7 +90,9 @@ impl ImeEngine {
         let user_snapshot = crate::user_lm::user_entries_snapshot(&self.lm);
 
         super::trace::begin();
-        let lattice = self.build_lattice(pinyin, bounds, user_snapshot.as_ref())?;
+        let lattice = super::trace::timed("建精确格", || {
+            self.build_lattice(pinyin, bounds, user_snapshot.as_ref())
+        })?;
         // **布尔 DAG 可达性替代 beam**:这里只需要
         // 知道「精确格上存在覆盖整串的读法吗」,旧实现为此跑完整 beam
         // (每位置最多 `BEAM_WIDTH` 个状态 × 逐边 LM 打分 + 剪枝 + 路径重建)。
@@ -250,8 +252,9 @@ impl ImeEngine {
             )
         });
         if needs_abbrev {
-            let abbrev_lattice =
-                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref())?;
+            let abbrev_lattice = super::trace::timed("建简拼格", || {
+                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref())
+            })?;
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），所以整串
             // 读法必须自己重建（见 `best_chain_candidate`）。

@@ -2188,3 +2188,26 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   —— **旧实现实测红**（`ztailan 前 5 条应出现「状态栏」，实际: ["爱蓝","爱兰","艾岚","摘","宅"]`）。
 - 验收：单元 **314 passed**、clippy **0**、对拍 **2 行（点名见上）**、
   `perf_probe --repeat 3 --prewarm` 通过（max 11.139ms、超线 0）。
+
+## ⑤⑫ 阶段 2B 的成本模型：钱花在「建简拼格」上
+
+- **加了什么**（默认关闭、零行为差异）：`engine/trace.rs` 新增 `timed(label, f)`
+  （只在 `XWX_TRACE=1` 下计时并记一条诊断；关闭时直接执行闭包、不加计时开销），
+  `engine/lookup.rs` 在「建精确格 / 建简拼格 / 建容错格」三处包上它。
+- **实测（真词库 + 真 .gram，`examples/recall_trace`）**：
+  ```
+  == womenjintqubeij  候选 24 条
+     [迹] 耗时 建精确格: 1.550ms
+     [迹] 门槛: reachable=false tolerant_explains=false len=15 needs_abbrev=true
+     [迹] 耗时 建简拼格: 10.458ms
+  ```
+  ⇒ 重载场景的 ~12ms 里 **10.5ms 全是简拼格建格**（精确格只占 1.55ms）。
+  这解释了阶段 3A 那次实验为什么加宽 beam 会破线（26ms）：瓶颈本来就在建格，
+  而搜宽只会把下游也一起放大。
+- **对阶段 2B 的含义**：要「让词匹配变便宜」，唯一有量级意义的目标就是
+  `build_abbrev_lattice`（`collect_chain_edges` 的索引探查：约 1.2 万次
+  `key_prefix_state`，每次在 1.86M 条 key 上做 ~21 步 mmap 二分 ≈ 1µs）。
+  方向就是 codex 说的**持久化音节级词典转移索引**（离线生成、运行时 mmap），
+  把「每次扩展都重新二分」换成「查一次转移表」。
+- 验收：`regression_probe --format v1` 对拍 **0 行**（计时只在 `XWX_TRACE` 下开）、
+  单元 314 passed、clippy 0。

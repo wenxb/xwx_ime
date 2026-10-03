@@ -41,3 +41,18 @@ pub fn take() -> Vec<String> {
         Vec::new()
     }
 }
+
+/// 量一段代码的耗时并记成诊断（关闭时只执行闭包本身，不加计时开销）。
+///
+/// 阶段 2B 要「让词匹配变便宜」，前提是先知道钱花在哪；与其继续猜预算，
+/// 不如每次查询都把各阶段耗时打出来。
+pub(crate) fn timed<T>(label: &'static str, f: impl FnOnce() -> T) -> T {
+    if !enabled() {
+        return f();
+    }
+    let t0 = std::time::Instant::now();
+    let out = f();
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    NOTES.with(|n| n.borrow_mut().push(format!("耗时 {label}: {ms:.3}ms")));
+    out
+}
