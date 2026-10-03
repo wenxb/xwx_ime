@@ -11,7 +11,7 @@
 
 布局（小端，见 data/README.md「syllable_graph.bin 二进制格式」）：
     header 60B: 8s magic | I version | Q n_nodes | Q n_syllables
-                | Q node_off | Q edge_off | Q syl_off | Q flags
+                | Q node_off | Q edge_off | Q syl_off | Q n_keys
     node 16B:   I children_off | H children_len | B flags(b0=完整词条) | B pad
                 | I ent_off | H ent_len | H pad
     edge  6B:   H syllable_id | I child_node
@@ -108,7 +108,7 @@ def serialize(nodes, keys):
         node_off,
         edge_off,
         syl_off,
-        0,
+        len(keys),
     )
     for n in nodes:
         out += struct.pack(
@@ -129,13 +129,15 @@ def serialize(nodes, keys):
 
 def validate(blob, keys, names, sid):
     """产物自检：头自洽、逐条 key 都能走到底且完整词条标记一致。"""
-    magic, version, n_nodes, n_syl, node_off, edge_off, syl_off, _ = struct.unpack_from(
+    magic, version, n_nodes, n_syl, node_off, edge_off, syl_off, n_keys = struct.unpack_from(
         "<8sIQQQQQQ", blob, 0
     )
     if magic != MAGIC or version != VERSION:
         raise SystemExit("产物魔数/版本不符")
     if not (HEADER_LEN <= node_off <= edge_off <= syl_off <= len(blob)):
         raise SystemExit("区段顺序/范围不合法")
+    if n_keys != len(keys):
+        raise SystemExit(f"头部记录数 {n_keys} 与实际 {len(keys)} 不符")
 
     def node(idx):
         off, clen, flags, _pad, ent_off, ent_len, _ = struct.unpack_from(

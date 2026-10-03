@@ -24,8 +24,10 @@ mod lookup;
 mod mixed;
 mod mmap;
 mod sqlite;
+mod syllable_graph;
 pub use abbrev::AbbrevIndex;
 pub use sqlite::SqliteDict;
+pub use syllable_graph::{GraphNode, NO_ENTRY, SyllableGraph};
 
 use std::sync::OnceLock;
 use std::path::Path;
