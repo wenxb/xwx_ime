@@ -4298,3 +4298,26 @@ womenjintianqbj #1 我们今天去北京 covered=15  #5 我们 covered=5
 **验证方法（先做）**：把这三条候选分别打印 `(词, 音节数, 首字母串)`，与输入对照，
 确认「我们今天」的"首字母串"确实是输入的前缀而非全部；然后按 3 实现。
 **验收**：mixed 0.893 → ≥0.929；20 条清单 20/20 不变；其余三套语料与默认配置逐字节不变。
+
+## ⑤⑨③ 尝试 Q（建边只收整串匹配）：**打坏一条、且没修好，已回退** ⇒ 真正的来源在别处
+
+**做法**（按 ⑤⑨② 的修法 3）：建边时 `lookup_mixed` 的返回直接收，
+`lookup_abbrev` 的返回按"**音节数 == 输入字母数**"筛后再收。
+
+**结果**：
+- 默认配置四套语料**仍在基线** ✓；
+- 但开关打开时 **20 条从 20/20 掉到 19/20** ✗（筛掉了一条本该保留的整串匹配）；
+- `womenjtqbj` **没修好**：仍是 `#1 我们今天 covered=10` ✗
+  ⇒ **那条 `covered=10` 不是来自我筛掉的那批边**，来源另有其处。
+- ⇒ 已回退。
+
+**下一步（一次探针就能定位，注意上次的锚点失败）**：这次要把**两条来源**都打出来——
+①`best_chain_candidates` 的返回（链候选）；②`lattice_candidates(abbrev_lattice)` 的返回（词级抽取，
+已确认会打）；③**旧通道**合并进来的候选（`abbrev_candidates` 的返回）。
+④还有一个此前忽略的可能：`merged`/`sort` 之后 `covered` 被**后续步骤改写**（例如
+`merge_with_abbrev` 或容错合并里对"整串"的再标注）——所以打印要放在**最终排序之后**，
+打出 `(word, covered, spelling, score)`，看 `我们今天` 的 `covered` 到底在哪一步变成 10。
+
+**锚点提示**：链候选循环的实际写法不是 `for c in self.best_chain_candidates(`，
+上次的正则没匹配到（说明它是 `for mut c in ...` 或已被我之前的改动包成 `let chains = ...`），
+直接用 `grep -n "best_chain_candidates" crates/xwx_engine/src/engine/lookup.rs` 取行号后再插。

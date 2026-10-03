@@ -1587,3 +1587,9 @@ womenjtqbj：我们今天（词条，高频，重算后分高）排 #1，我们�
 迹显示 [词级] 我们今天 covered=10（实际只吃 7 个字母）。lookup_abbrev 返回首字母前缀匹配
 （wmjt 是 我们今天 的前缀）⇒ ⑤⑤④ 的边一律写 end=pinyin.len() 于是谎报整串覆盖。
 修法：建边只取真正消费整串的匹配（mixed 的返回可信；lookup_abbrev 需按音节数==输入长度筛）。
+
+## 2026-10-03 尝试 Q：建边只收整串匹配（打坏一条、未修好，回退）
+
+lookup_abbrev 按音节数==输入长度筛 → 开关 true 时 20 条 20/20→19/20，womenjtqbj 仍 covered=10。
+⇒ 那条 covered=10 不是来自该批边。下一步：在最终排序之后打印 (word,covered,spelling,score)，
+定位 covered 在哪一步被写成 10（链候选/词级抽取/旧通道合并/后续改写）。
