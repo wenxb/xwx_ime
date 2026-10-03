@@ -2337,3 +2337,24 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   各输入 #1 仍是正确高频词（你好/我们/你们/你还/北京/没有/今天）。比 734 行那次干净——
   因为 3B 的打分改动已退回，只剩整句门槛打开带来的新增。
 - 其余门槛：单元 320 passed / 0 ignored、clippy 0、单文件 ≤600 全达标。
+
+## ⑤⑱ 末尾单字母补全：`daishix` → 待实现
+
+- **两道闸一起改**（早前只改一处测出「无变化」的原因）：
+  1. `dict/lookup.rs` 的调用点原先 `tail_len < MIN_PARTIAL_TAIL` 直接 `break` ⇒ 单字母尾巴
+     的读法连产出机会都没有；现放行，但收窄为「**尾部单字母 且 前面已有音节前缀**」
+     （`tail_len < input.len()`）——纯首字母串（`n`）仍由副索引负责、`lookup_mixed` 返回空
+     （现有契约，被 `dict::tests::real_abbrev_mixed_requires_a_full_syllable` 钉住）。
+  2. `engine/lookup.rs` 的 `needs_abbrev` 里 `!tolerant_explains` 会挡掉整条路；现改为
+     `!tolerant_explains || self.ends_one_letter_short(pinyin)`，判据是「去掉最后一个字母后
+     仍能完整切成音节」（复用 `Segmenter::segment`，不新写 DP）。
+- **不整条拆 `!tolerant_explains`** 的理由写在代码注释里：早前整体拆过，390 行漂移、零改善。
+- **效果**：`daishix` → **待实现**（#1）；反例逐字节不变：`shanghaai`→上哈爱、`jintqbj`→今天去北京、
+  `daishixian`→待实现、`daishixi`→带实习；验收形态全绿（`chuzaina`→出在哪、`wmjtqbj`→我们今天去北京、
+  `zmgai`→怎么改、`nihao`→你好、`ztai`→状态、`ztailan`→状态栏）。
+- **门槛**：单元 **321 passed / 0 failed / 0 ignored**（新增用例带 LM，缺模型时明确跳过）、clippy 0。
+- **漂移点名**：44 条语料 **9 个输入内容变化、2 个首位变化**：
+  - `womenjintianqugongyuann`：我们今天 → **我们今天去公园内**（覆盖整串，合理 ✓）
+  - `womenjintianqugongyuam`：我们今天 → **我们今天去公寓阿曼**（覆盖整串但内容牵强 ✗——
+    方向符合「覆盖整串者优先」，内容质量存疑，记为待评估：是否该由分数而非覆盖决定首位）
+  - 其余 7 个（nihao/women/nimen/niha/beijin/meiyo/jintian）只是新增候选，首位不变。

@@ -241,8 +241,13 @@ impl ImeEngine {
         // 与上游的一致处：整串候选进**同一张候选表**、由分数与层序排序
         // （librime 的 `PrepareCandidate` 把整句放流内首位；libime 的每个
         // 候选都是覆盖整串的 lattice 路径），不设「确定性阈值」。
+        // **末尾只差一个字母时**，容错层的「解释」不该挡掉末尾补全那条路：
+        // `daishix` 的容错读法是「带上/戴上/代收」，而 `x → xian` 能拼出词库里
+        // 真实存在的整串键（`dai shi xian` = 待实现）。早前整体拆掉
+        // `!tolerant_explains` 试过：390 行漂移、零改善——所以只在
+        // [`Self::ends_one_letter_short`] 成立的形状上放行。
         let needs_abbrev = !reachable
-            && !tolerant_explains
+            && (!tolerant_explains || self.ends_one_letter_short(pinyin))
             && pinyin.len() >= MIN_ABBREV_INPUT_LEN
             && !ranked.iter().any(|c| c.covered >= pinyin.len());
         super::trace::note(|| {
@@ -550,6 +555,16 @@ impl ImeEngine {
     /// beam 给的是覆盖整串的 n-best 路径；这里只做三件薄事：把词序拼成整串、
     /// 补上整串才有的逐词先验、标成简拼层（这条分支本来只在精确格解不出整串
     /// 时才走，走通的路径必然用过至少一条简拼弧）。
+    /// 「末尾只差一个字母」：去掉最后一个字母后仍能**完整切成音节**。
+    ///
+    /// 用 `Segmenter::segment`（既有 DP，返回空即切不开）把末尾补全的放行面限制在
+    /// 最小形状上：`daishix` → 去尾 `daishi` ✓ 放行；`shanghaai` → 去尾 `shanghaa`
+    /// ✗、`jintqbj` → 去尾 `jintqb` ✗ 都不放行，行为不变。
+    fn ends_one_letter_short(&self, pinyin: &str) -> bool {
+        let n = pinyin.len();
+        n >= 2 && !self.segmenter.segment(&pinyin[..n - 1]).is_empty()
+    }
+
     pub(super) fn best_chain_candidates(
         &self,
         pinyin: &str,

@@ -324,7 +324,17 @@ impl MmapDict {
             // `mei|yo`)。
             let allow_p0 = !is_full_pinyin(input, table);
             for (index_prefix, tail_len) in partial_tail_readings(input, table) {
-                if tail_len < MIN_PARTIAL_TAIL || dfs.out.len() >= MAX_MIXED_COLLECT {
+                // **单字母尾巴也放行**（`daishix` 的 `x`）：早前把 `MIN_PARTIAL_TAIL`
+                // 从 2 改成 1 测出「无变化」，是因为另有一道闸在引擎侧
+                // （`needs_abbrev` 的 `!tolerant_explains`）挡着——读法必须先被产出，
+                // 才谈得上放行。收窄条件交由引擎侧判定（见
+                // `ImeEngine::ends_one_letter_short`）。
+                if tail_len < MIN_PARTIAL_TAIL
+                    && !(tail_len == 1 && tail_len < input.len())
+                {
+                    break;
+                }
+                if dfs.out.len() >= MAX_MIXED_COLLECT {
                     break;
                 }
                 // 只是**跳过这一条读法**,不是终止整轮——`p = 0` 排在

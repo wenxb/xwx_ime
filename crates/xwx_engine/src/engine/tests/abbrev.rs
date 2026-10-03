@@ -403,14 +403,28 @@ fn real_dict_two_letter_initial_abbreviations_hit_the_side_index() {
 /// 修法限定在「精确格不可达 + 尾部单字母 + 该字母能拼出词库里真实存在的整串键」，
 /// 不整条拆掉 `!tolerant_explains`（早前整体拆过：390 行漂移、零改善）。
 #[test]
-#[ignore = "目标形态：daishix 前 3 内有「待实现」（当前红：全是容错读法）"]
 fn single_letter_tail_completion_reaches_the_real_key() {
     let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
     let abbrev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/abbrev.bin");
     if !dict_path.is_file() || !abbrev_path.is_file() {
         return;
     }
-    let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+    // 这半必须带 LM：无模型时首位是「带实现」（容错层的单词读法），
+    // 带模型才轮到末尾补全的「待实现」——与 sentence_gate 那半同理。
+    let gram = std::env::var("XWX_LM_PATH")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| {
+            let home = std::env::var("HOME").ok()?;
+            let p = std::path::PathBuf::from(home).join(".local/share/xwx/wanxiang-lts-zh-hans.gram");
+            p.is_file().then_some(p)
+        });
+    if gram.is_none() {
+        eprintln!("跳过：没有 .gram 模型（无模型时该形态到不了首位）");
+        return;
+    }
+    let mut engine = ImeEngine::new_with_lm(Some(&dict_path), gram.as_deref()).expect("词库加载失败");
     engine.dict = engine.dict.with_abbrev(&abbrev_path);
     let cands = engine
         .lookup_candidates("daishix", &LmContext::empty())
