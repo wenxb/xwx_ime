@@ -4447,3 +4447,29 @@ default 配置不受影响 ⇒ 已回退。
 
 **当前 HEAD 的取舍**：采用第 2 条（未筛选），因为它的验收形态最好（20 条 20/20、三套语料达标），
 且默认配置逐字节不变。
+
+## ⑤⑨⑨ 读到两个查表函数的实现要点（决定"匹配长度"该怎么带出来）
+
+**`lookup_abbrev`**（`dict/lookup.rs:104`）：
+```rust
+for variant in super::abbrev::abbrev_variants(abbrev) {          // shh→sh 等写法变体
+    for c in idx.lookup_prefix(&variant)? { … }                  // ★ 对副索引做**前缀匹配**
+}
+out.retain(|c| c.pinyin.split(' ').count() <= letters);          // 一字一字母的口径
+```
+⇒ 它是**前缀匹配**：查询串是索引 key 的前缀就会命中 ⇒ **返回的候选并不保证消费了整串**
+（这正是 ⑤⑤④ 建边"一律标 covered=整串"出问题的根源，也正是 ⑤⑨②/⑤⑨⑦ 想筛而筛不对的原因：
+`Candidate` 里没有"匹配了 key 的多少"这个信息）。
+
+**`lookup_mixed`**（`dict/lookup.rs:196`）走交错 DFS（`MixedDfs`），按输入逐位消费；
+输入本身是合法全拼时改走 `lookup_mixed_full_pinyin`（与原实现逐字节一致）。
+
+**⇒ "把匹配长度带出来"的最小改法（下一步，接口层）**：
+- `idx.lookup_prefix(&variant)` 的**返回**里带上"被匹配到的 key"（或它的长度）；
+- `lookup_abbrev` 把它写进候选（例如复用 `Candidate::covered` —— 该字段目前恒为 0，
+  正好空着；⑤⑦③ 已确认它没有别的语义）；
+- 于是 `build_abbrev_lattice` 建边时可以直接用真值，不再需要"从拼音反推"（三次失败的原因）。
+
+**验收**（与之前一致）：开关 true 时 20 条 **20/20** 保持（这是当前 HEAD 的成绩），
+且 `womenjtqbj` 的「我们今天」不再带 cov10 ⇒ mixed 从 0.893 回到 **≥0.929**；
+默认配置（开关 false）逐字节不变（四套语料 + v1 对拍 + 401 passed/0 failed + clippy 0）。

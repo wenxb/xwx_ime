@@ -1623,3 +1623,9 @@ entry_tier_len 贯穿失败（plain_key 签名未接），其后数据来自旧�
 20 条 20/20→13/20、mixed 0.893→0.750。原因：合法整串匹配含"首字母+字面音节"混合形态（zmgai→怎么改），
 首字母串 zmg≠zmgai 被误杀。结论：匹配消费长度无法从词条拼音重建，是副索引 key 的属性；
 下一步要么让索引带出该长度（接口小改），要么维持现状（HEAD：20/20、mixed 0.893）。
+
+## 2026-10-03 读到查表实现：lookup_abbrev 是副索引前缀匹配
+
+dict/lookup.rs:104 用 idx.lookup_prefix(variant) + retain(音节数<=字母数) ⇒ 返回值不保证消费整串，
+且 Candidate 无"匹配长度"信息 ⇒ ⑤⑤④ 建边只能猜。最小改法：让 lookup_prefix 带出被匹配的 key，
+写进 Candidate::covered（该字段恒 0、无其它语义），建边时用真值。
