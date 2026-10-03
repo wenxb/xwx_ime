@@ -1426,3 +1426,9 @@ needs_abbrev 对 pure_abbrev/leading_abbrev 忽略 Abbrev 层候选 ⇒ 两类�
 
 行为指标全绿（首位零变化、四套语料基线、对拍 0、clippy 0），但门禁 400/1（总数 401、无套件中断，
 特征不同于 ⑤⑥② 的 378/1 抖动）⇒ 未定性、按纪律回退。下次：复现后取 FAILED 用例名再分类。
+
+## 2026-10-03 逐类切换开关正式落地（默认关闭）+ 门禁抖动定性
+
+400/1 定性为集成层抖动（tests/prefix_commit.rs::whole_string_reading_commits_in_one_space，
+跑真引擎+私有总线；本会话两次门禁异常同源）。开关 DEMOTE_OLD_ABBREV_CHANNEL=false 落地，
+轻量判据在 merge 处、原判据未动；v1 对拍 0 变化。下一步置 true 量格子独立供给。

@@ -34,6 +34,12 @@ const MAX_CANDIDATES: usize = 100;
 ///   不白留空位。
 const ABBREV_QUOTA: usize = 5;
 
+/// **逐类切换的回退点**（阶段 3）：`true` 时，纯缩写输入（`pure_abbrev`）与
+/// 「开头即缩写」（`leading_abbrev`）这两类**不再让旧简拼通道出候选**，
+/// 改由简拼格独立供给；旧通道代码保留，一键切回。
+/// 默认 `false` = 两条供给同场竞争（⑤⑥② 的状态）。
+pub(crate) const DEMOTE_OLD_ABBREV_CHANNEL: bool = false;
+
 /// 容错层在截断中的保底名额。
 ///
 /// 精确层占满上限时，打错一处的纠错读法不能被整批截掉——用户看不到它，

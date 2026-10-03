@@ -144,7 +144,25 @@ impl ImeEngine {
         // 后面的简拼格就永远不建（实测 wsm/zgr/xxn/dbq/mgx 五条正因此拿不到
         // 词级候选；关掉旧通道时它们只剩输入回声，也是同一个原因）。
         let exact_covers_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
-        let abbrev = if bounds.is_none() {
+        // **轻量版类别判据**（只依赖 `reachable`/`segmenter`/`has_abbrev`，**不碰
+        // `ranked`**）：专供上面的切换开关使用。原判据**原地不动**——⑤⑥③ 实测把
+        // 原判据前移会改变 `needs_abbrev` 里 `ranked` 项的求值时机，从而改行为。
+        let pure_abbrev_lite = self.dict.has_abbrev()
+            && !reachable
+            && pinyin.len() >= 2
+            && pinyin.char_indices().all(|(i, c)| {
+                c.is_ascii_alphabetic()
+                    && !segmenter::abbrev_syllables(&pinyin[i..i + 1]).is_empty()
+            });
+        let leading_abbrev_lite = self.dict.has_abbrev()
+            && !reachable
+            && pinyin.len() >= 3
+            && self.segmenter.segment(&pinyin[..1]).is_empty()
+            && self.segmenter.segment(&pinyin[..2]).is_empty()
+            && !matches!(&pinyin[..2], "zh" | "ch" | "sh");
+        let demote_old =
+            super::DEMOTE_OLD_ABBREV_CHANNEL && (pure_abbrev_lite || leading_abbrev_lite);
+        let abbrev = if bounds.is_none() && !demote_old {
             self.abbrev_candidates(pinyin, ctx, &ranked)?
         } else {
             Vec::new()
