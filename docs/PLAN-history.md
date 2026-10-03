@@ -1367,3 +1367,9 @@ LatticeEdge 字段已核对(engine/mod.rs:314；end/word/pinyin/freq/fuzzy_penal
 
 build_abbrev_lattice 追加整串条目边（lookup_abbrev+lookup_mixed 的 covered==len 结果，abbrev 标记）。
 实测首位零变化、10/20 候选变长、四套语料与对拍全不变、401 passed/0 failed、clippy 0。
+
+## 2026-10-03 整串条目边后指标仍 5/20：瓶颈回到层序
+
+自检通过（ztai 简拼段前五随开关变化）。整串条目边已进格子（默认路径 10/20 候选变长），
+但关旧通道后容错层仍排在简拼层之前、状态进不了前 10。下一步实验：置顶只认"分支内 freq>0 的
+整串条目级候选"（而非链候选）——之前尝试 I 失败是因为无差别顶链候选。
