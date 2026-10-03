@@ -1409,3 +1409,9 @@ needs_abbrev 含 !ranked.any(covered>=len)，而旧通道的整串候选满足�
 pure_abbrev/leading_abbrev 忽略简拼层候选 ⇒ 首位零变化、10/20 候选变长、四套语料全在基线
 (edits 0.728 未退化)、对拍 0 变化、clippy 0；但 workspace 测试 378/1(基线 401/0，某套件提前中断)，
 单跑 -p xwx_engine 通过 ⇒ 失败在后续套件。已回退；下一步用 --no-fail-fast 取失败用例名再决定更新期望或收窄范围。
+
+## 2026-10-03 按类放行正式落地（阶段 3 入口，已提交）
+
+needs_abbrev 对 pure_abbrev/leading_abbrev 忽略 Abbrev 层候选 ⇒ 两类输入在旧通道在场时也跑简拼格分支，
+两条供给同场竞争。实测：首位零变化、10/20 候选变长、四套语料基线、对拍 0 变化、clippy 0、401 passed/0 failed
+（392/1 那次是负载抖动，--no-fail-fast 复跑全绿）。纪律：测试红且总数少于基线时先 --no-fail-fast 复跑。
