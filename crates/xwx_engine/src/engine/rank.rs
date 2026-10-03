@@ -325,13 +325,14 @@ pub(super) fn merge_with_abbrev(
     mut ranked: Vec<Candidate>,
     abbrev: Vec<Candidate>,
 ) -> (usize, Vec<Candidate>) {
-    let abbrev_total = abbrev.len();
     ranked.extend(abbrev);
     let total = ranked.len();
-    // 简拼层在「排序前」的 ranked 中是尾部 abbrev_total 条,先切出来
-    // 各自排序截断——配额语义只在「分层截取」上有边界可依附。
-    let mut head = ranked;
-    let mut tail = head.split_off(total - abbrev_total);
+    // **按拼写分层,不按来源分层**:简拼这条路上来的候选里,「末尾半音节补全」
+    // 那批是有意的 `Exact`(与格子里打字中的补全词同层),它们不该吃简拼的
+    // 保底配额——配额是给「缩写读法」的,让 `Exact` 占了就白占。
+    let (mut tail, mut head): (Vec<Candidate>, Vec<Candidate>) = ranked
+        .into_iter()
+        .partition(|c| c.spelling == SpellingKind::Abbrev);
     sort_candidates(inp, &mut head);
     sort_candidates(inp, &mut tail);
     if total > MAX_CANDIDATES {
