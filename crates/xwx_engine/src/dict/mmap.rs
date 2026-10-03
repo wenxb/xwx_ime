@@ -10,7 +10,7 @@ use memmap2::Mmap;
 
 use crate::candidate::Candidate;
 
-use super::{AbbrevIndex, DictError, Dictionary, KeyPrefix, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN, MMAP_MAGIC, MMAP_RECORD_LEN, MMAP_VERSION, MmapDict, MmapRecord, read_u16, read_u32, read_u64};
+use super::{AbbrevIndex, DictError, Dictionary, KeyPrefix, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN, MMAP_MAGIC, MMAP_RECORD_LEN, MMAP_VERSION, MmapDict, MmapRecord, SyllableGraph, read_u16, read_u32, read_u64};
 
 impl MmapDict {
     /// 打开并 mmap 映射一个 dict.bin 词库文件。
@@ -68,6 +68,7 @@ impl MmapDict {
             entries_off,
             total_freq: OnceLock::new(),
             abbrev: None,
+            graph: None,
         })
     }
 
@@ -103,6 +104,36 @@ impl MmapDict {
     /// 是否已装配简拼副索引(测试与诊断用)。
     pub fn has_abbrev(&self) -> bool {
         self.abbrev.is_some()
+    }
+
+    /// 装配音节级转移索引(`scripts/build_syllable_graph.py` 的产物)。
+    ///
+    /// 同代校验用索引头部的 `n_keys`(生成时的词库记录数)：不符说明两者不是
+    /// 一起生成的，拿错代索引会给出别的词的音节转移，比没有更糟——不装配。
+    pub fn with_syllable_graph<P: AsRef<Path>>(mut self, path: P) -> Self {
+        match SyllableGraph::open(path.as_ref()) {
+            Ok(g) => {
+                if g.keys() != self.pinyin_count as u64 {
+                    tracing::warn!(
+                        dict_records = self.pinyin_count,
+                        graph_records = g.keys(),
+                        "音节级索引与词库不同代(记录数不符)，不装配"
+                    );
+                } else {
+                    self.graph = Some(g);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.as_ref().display(),
+                    "音节级索引打开失败,缩写弧回退到逐次主索引二分(功能不变)");
+            }
+        }
+        self
+    }
+
+    /// 音节级转移索引(未装配时为 `None`)。
+    pub fn syllable_graph(&self) -> Option<&SyllableGraph> {
+        self.graph.as_ref()
     }
 
     /// 词条总数（调试/统计用）。

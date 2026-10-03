@@ -116,6 +116,15 @@ pub trait Dictionary: Send + Sync {
         Ok((self.key_prefix_state(pinyin)?, 0))
     }
 
+    /// 音节级转移索引(可选)：缩写弧的半音节展开与「这条链存在吗」的剪枝用。
+    ///
+    /// 默认 `None`：只有装配了 `syllable_graph.bin` 的 mmap 词库有。返回 `None`
+    /// 时调用方**必须**回退到 [`Dictionary::key_prefix_state`]——那条路每次是一次
+    /// 跨页 mmap 二分(实测 ~1µs)，索引只是把这些查询换成内存树walk。
+    fn syllable_graph(&self) -> Option<&SyllableGraph> {
+        None
+    }
+
     /// 前缀查词：返回所有 `pinyin` 以给定串开头的词条。
     ///
     /// 用于「边输入边联想」；TODO: 当前实现走 LIKE，数据量大时需要
@@ -189,6 +198,8 @@ pub struct MmapDict {
     /// 在副索引缺失时照常工作——绝不回退到「懒扫描主索引建表」(那次扫描
     /// 实测约 840ms,且发生在按键处理路径上,不可接受)。
     abbrev: Option<AbbrevIndex>,
+    /// 音节级转移索引(可选;缺省时缩写弧回退到逐次 `key_prefix_state` 二分)。
+    graph: Option<SyllableGraph>,
 }
 
 /// 词库存取值：运行时用只读 mmap 二进制（[`MmapDict`]），
@@ -233,6 +244,25 @@ impl DictStore {
             Self::Sqlite(_) => false,
         }
     }
+
+    /// 装配音节级转移索引(仅 Mmap 变体有效)。
+    ///
+    /// 与副索引同一套约定：缺失/损坏/不同代只告警，不装配也不 panic；
+    /// 没有它简拼弧仍能工作，只是每次去主索引二分。
+    pub fn with_syllable_graph<P: AsRef<Path>>(self, path: P) -> Self {
+        match self {
+            Self::Mmap(d) => Self::Mmap(d.with_syllable_graph(path)),
+            Self::Sqlite(_) => self,
+        }
+    }
+
+    /// 是否已装配音节级索引(测试与诊断用)。
+    pub fn has_syllable_graph(&self) -> bool {
+        match self {
+            Self::Mmap(d) => d.syllable_graph().is_some(),
+            Self::Sqlite(_) => false,
+        }
+    }
 }
 
 impl Dictionary for DictStore {
@@ -250,6 +280,15 @@ impl Dictionary for DictStore {
         match self {
             Self::Sqlite(_) => Ok(KeyPrefix::None),
             Self::Mmap(d) => d.key_prefix_state(pinyin),
+        }
+    }
+
+    /// 同 [`Dictionary::key_prefix_state`] 的转发教训：漏了它引擎以为没有索引，
+    /// 缩写弧全部退回 mmap 二分（功能对、速度丢），且不会有任何报错。
+    fn syllable_graph(&self) -> Option<&SyllableGraph> {
+        match self {
+            Self::Sqlite(_) => None,
+            Self::Mmap(d) => d.syllable_graph(),
         }
     }
 

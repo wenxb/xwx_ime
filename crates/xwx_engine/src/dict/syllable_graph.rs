@@ -39,6 +39,7 @@ pub struct GraphNode {
 }
 
 /// 音节级转移索引的 mmap 视图。
+#[derive(Debug)]
 pub struct SyllableGraph {
     map: Mmap,
     node_count: usize,
@@ -212,6 +213,11 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn dict_path() -> Option<PathBuf> {
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+        p.exists().then_some(p)
+    }
+
     fn data_path() -> Option<PathBuf> {
         // 单元测试的 CARGO_MANIFEST_DIR 是 crate 目录(集成测试才是仓库根)。
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/syllable_graph.bin");
@@ -250,6 +256,25 @@ mod tests {
             assert!(node.entry_len >= 1);
         }
         assert!(g.child(0, "zzz").unwrap().is_none(), "不存在的音节不该有子节点");
+    }
+
+    #[test]
+    fn graph_is_assembled_only_when_it_matches_the_dict() {
+        let (Some(graph_path), Some(dict_path)) = (data_path(), dict_path()) else {
+            eprintln!("跳过：缺少 data/syllable_graph.bin 或 data/dict.bin");
+            return;
+        };
+        let d = crate::dict::MmapDict::open(&dict_path)
+            .unwrap()
+            .with_syllable_graph(&graph_path);
+        assert!(d.syllable_graph().is_some(), "同代索引应被装配");
+        // 装配判据就是这一条：索引头部记录数 == 词库记录数
+        assert_eq!(d.syllable_graph().unwrap().keys(), d.pinyin_count as u64);
+        // 拿词库文件冒充索引(魔数不符) → 不装配、不 panic
+        let bad = crate::dict::MmapDict::open(&dict_path)
+            .unwrap()
+            .with_syllable_graph(&dict_path);
+        assert!(bad.syllable_graph().is_none(), "不是索引的文件不该被装配");
     }
 
     #[test]
