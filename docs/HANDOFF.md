@@ -1886,3 +1886,13 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 依赖 `XWX_LM_PATH`：没配模型时**跳过**（模型是可选数据，与词库/副索引不同，
   后者缺了就红，见 `tests/required_data.rs`）。这样安排是有意的：可选数据不该让
   快速测试变红，必需数据则必须红。
+
+## ㊽ Q3 收尾：调参集与验收集分开
+
+- 新增 `tests/corpora/tuning.jsonl`（5 条：zmgai / shh / nihaoshij / shanghaai / daishix）
+  作为**调参集**；`tests/corpus.rs` 里把验收集扩到四套（daily / mixed / keystrokes / edits）
+  并声明**结论只能由验收集下**——调参集只解析、不参与条目下限与判定。
+- **`eval_rank` 的用户层：暂不接**。`with_user_lm(mut self, user: UserLM)`（`engine/api.rs:129`）
+  需要 `UserLM` 值，而它的 `open_or_create` 会**创建/回写**用户模型——评测脚本不该动
+  用户的学习数据。要用也只能指向 dev 隔离文件（`user_bigram.dev.txt`），且必须在
+  只读语义下用；这件事留到「需要用户层参与评测」时再做，并先在卡片记一条。

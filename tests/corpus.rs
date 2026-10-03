@@ -9,11 +9,17 @@
 
 use std::path::Path;
 
-const KINDS: [(&str, &str); 3] = [
+/// 验收集：改动前后都用它对比，**不许退化**。
+const KINDS: [(&str, &str); 4] = [
     ("daily", "全拼日常"),
     ("mixed", "简拼/混拼"),
+    ("keystrokes", "逐键编辑"),
     ("edits", "打错/半成品尾巴"),
 ];
+
+/// **调参集**：只用来找参数、不参与验收判定（Q3 要求两者分开）。
+/// 它里面的例子可能与验收集重叠——那是允许的，但结论只能由验收集下。
+const TUNING: &str = "tuning.jsonl";
 
 fn parse(path: &Path) -> Vec<(String, String)> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读 {}: {e}", path.display()));
@@ -42,6 +48,11 @@ fn parse(path: &Path) -> Vec<(String, String)> {
 #[test]
 fn three_corpora_exist_and_are_well_formed() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpora");
+    // 调参集也要能被解析，但**不**计入验收条目下限。
+    let tuning = dir.join(TUNING);
+    assert!(tuning.is_file(), "缺调参集: {}", tuning.display());
+    println!("调参集: {} 条", parse(&tuning).len());
+
     for (kind, desc) in KINDS {
         let path = dir.join(format!("{kind}.jsonl"));
         assert!(path.is_file(), "缺语料 {desc}: {}", path.display());
