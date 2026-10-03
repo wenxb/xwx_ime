@@ -3898,3 +3898,31 @@ nhma → 链候选(4条): [("你好吗",4,-19.304), ("你会吗",4,-20.490), ("�
 - rank.rs 的注释写明"简拼进第一页的通道是配额，不是排序"⇒ 要么按类给简拼整串读法
   一个配额通道内的优先（而不是改层序），要么在有**条目级证据**（freq>0、整串命中）时
   破例参与层序比较。两条都需要一次 A/B（四套语料 + 20 条清单）。
+
+## ⑤⑦⑨ 阶段 4 的第一步受阻：`WordSpot` 不带 freq ⇒ 改走"投影处查词条"
+
+**尝试**：在 `best_chain_candidates` 里给候选带上词条级证据
+（`let freq = path.words.iter().map(|w| w.freq).max()` ⇒ 结果所在边/词的 freq）。
+
+**结果**：**编译不过**——beam 的路径词是 `WordSpot { word, pinyin }`，**没有 `freq` 字段**
+（错误：`no field freq on type &engine::WordSpot`）。要把 freq 从格子边一路带进 beam 的路径，
+需要改 `WordSpot`／解码器的数据结构 ✗ 超出"小步"范围 ⇒ 已回退（树干净）。
+
+**替代方案（不改 beam，达到同一目的）**：在**投影处**判断"这条 Abbrev 候选是不是条目级"——
+拿它的 `(word, pinyin)` 直接查词库：
+
+```rust
+// 在需要区分"整串条目读法 vs 逐词拼链"的地方（如 merge/层序口径）：
+let is_entry = match &self.dict {
+    DictStore::Mmap(d) => d.lookup(&c.pinyin)?.iter().any(|e| e.word == c.word && e.freq > 0),
+    _ => false,
+};
+```
+成本：每个 Abbrev 候选一次索引查询（Abbrev 层候选数量有限，且这条路只在需要时走）；
+好处：不需要改动 `WordSpot`/解码器，且判据是**词条级事实**（freq>0 且 (词,音) 精确命中），
+正是 ⑤⑦⑧ 里"条目级 vs 逐词拼链"的区分。
+
+**下一步**：把上面的 `is_entry` 用于层序/投影口径（阶段 4 正题）：
+给 `is_entry == true` 的 Abbrev 候选在**层序比较**里与 Fuzzy 层同等对待（或走配额优先），
+然后按老规矩验收：20 条清单（当前 16/20 在表内、13/20 首位）+ 四套语料
+（不得低于 1.000 / 0.929 / 0.877 / 0.728）+ v1 对拍 0 变化 + clippy 0。
