@@ -1660,3 +1660,18 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 仓库里仍超 600 行的只剩 `crates/xwx_engine/examples/regression_probe.rs`(621)：
   拆法是目录式示例 `examples/regression_probe/main.rs` + `corpus.rs`，
   `--example regression_probe` 的调用方式不变；拆完必须重跑 v1 对拍（它本身是基线生成器）。
+
+## ㉛ A1 行为半：边界规则收口到一处实现
+
+- **问题**：`'` 强制切分点的「音节/音节链不得跨边界」有**三份实现**——
+  `engine/rank.rs::unreachable_tail` 内联判断、`engine/lattice.rs::syllable_crosses_boundary`、
+  `engine/lattice.rs::key_respects_boundaries`。
+- **做法**：判据只在 `crates/xwx_engine/src/engine/input.rs` 的自由函数
+  `crosses_boundary(bounds, pos, len)` 与 `key_respects_boundaries(bounds, key)` 里；
+  `lattice.rs` 的两个 helper **保留原名与签名**、内部转调（调用点零改动），
+  `rank.rs` 的可达性 DP 也改调它。
+- **走过的弯路**：子代理选择「把 `bounds` 参数从 `build_lattice*` 签名里去掉、
+  调用方改传 `NormalizedInput`」——牵动 6 个调用点，改到一半停住留 12 个编译错误，已回退。
+  **收口内部实现、不动对外签名**是同样能收口的最小改动面。
+- **验收**：`cargo test --workspace` 366 passed / 0 failed；clippy `-D warnings` 0；
+  `regression_probe --format v1` 对拍 **0 行**；`perf_probe` 通过。
