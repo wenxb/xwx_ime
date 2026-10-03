@@ -117,3 +117,36 @@ fn real_gram_state_advances() {
     let (_, s3) = lm.score(&ctx5, "六七八九");
     assert_eq!(s3.tail, "五六七八九", "并入后应只留末 5 字");
 }
+
+/// **不认识的 `.gram` 格式必须被拒绝**（Q4）：只判「format 非空」时，拿不认识的
+/// 版本硬解只会得到静默的乱码分数。这里取真实模型、**只改前 32 字节的 format
+/// 字段**，其余原样——`open` 必须报错且点名格式。
+#[test]
+fn unknown_gram_format_is_rejected() {
+    let Ok(src) = std::env::var("XWX_LM_PATH") else {
+        return; // 没模型就跳过（必需数据的验收由 tests/required_data.rs 负责）
+    };
+    let path = std::path::Path::new(&src);
+    if !path.is_file() {
+        return;
+    }
+    let mut blob = std::fs::read(path).expect("读模型");
+    // 头部 layout:`struct Metadata { char format[32]; ... }`，format 在前 32 字节。
+    let bad = b"Rime::Grammar/9.9";
+    blob[..bad.len()].copy_from_slice(bad);
+    for b in blob[bad.len()..32].iter_mut() {
+        *b = 0;
+    }
+    let dir = std::env::temp_dir().join(format!("xwx-bad-gram-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    let tmp = dir.join("bad.gram");
+    std::fs::write(&tmp, &blob).expect("写坏模型");
+
+    let err = super::WanxiangLM::open(&tmp).expect_err("不支持的 format 必须被拒绝");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("格式") || msg.contains("format"),
+        "报错应点名格式问题: {msg}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1877,3 +1877,12 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   而不是改 T2 的门槛。
 - 教训：先确认改动打在哪条路上——这次我先改了错文件（常量在 `dict/mixed.rs`
   而非 `engine/mod.rs`），改对后又发现打在了错的机制上。
+
+## ㊼ Q4 收尾：`.gram` 坏格式的定向用例
+
+- `wanxiang/tests.rs::unknown_gram_format_is_rejected`：取真实模型、**只改前 32 字节的
+  format 字段**（`Rime::Grammar/9.9`，其余原样），`WanxiangLM::open` 必须报错且点名格式
+  ——旧实现只判「非空」，这种文件会被照常打开。
+- 依赖 `XWX_LM_PATH`：没配模型时**跳过**（模型是可选数据，与词库/副索引不同，
+  后者缺了就红，见 `tests/required_data.rs`）。这样安排是有意的：可选数据不该让
+  快速测试变红，必需数据则必须红。
