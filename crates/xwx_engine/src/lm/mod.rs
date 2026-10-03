@@ -70,6 +70,14 @@ pub trait LanguageModel: Send + Sync {
         self.state_from_context(&LmContext::empty())
     }
 
+    /// 「无证据基线」分（log10）：上下文与词都不提供信息时模型给出的值。
+    ///
+    /// 打分层用它做**路径级补偿**：多词读法不该按词数反复支付这个基线。
+    /// 默认 0.0 = 该模型没有这个概念、调用方不补偿。
+    fn floor_log10(&self) -> f32 {
+        0.0
+    }
+
     /// 从真实已上屏上下文构造状态。
     ///
     /// 第 2 步起，`InputSession` 保留已上屏文本（有界），每轮查询前用
@@ -396,6 +404,10 @@ impl MixedLM {
 }
 
 impl LanguageModel for MixedLM {
+    fn floor_log10(&self) -> f32 {
+        self.base.floor_log10()
+    }
+
     type State = MixedState;
 
     fn state_from_context(&self, ctx: &LmContext) -> MixedState {
@@ -493,6 +505,14 @@ impl LmStore {
 }
 
 impl LanguageModel for LmStore {
+    fn floor_log10(&self) -> f32 {
+        match self {
+            Self::Bigram(lm) => lm.floor_log10(),
+            Self::Wanxiang(lm) => lm.floor_log10(),
+            Self::Mixed(lm) => lm.floor_log10(),
+        }
+    }
+
     type State = LmState;
 
     fn state_from_context(&self, ctx: &LmContext) -> LmState {

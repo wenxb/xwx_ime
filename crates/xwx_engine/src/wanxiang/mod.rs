@@ -550,6 +550,12 @@ pub struct WanxiangState {
 }
 
 impl LanguageModel for WanxiangLM {
+    /// 见 [`LanguageModel::floor_log10`]：万象的兜底分由
+    /// `non_collocation_penalty` 折算（`-6 / ln10 - log10_corpus_size`）。
+    fn floor_log10(&self) -> f32 {
+        WanxiangLM::floor_log10(self)
+    }
+
     type State = WanxiangState;
 
     fn state_from_context(&self, ctx: &LmContext) -> Self::State {

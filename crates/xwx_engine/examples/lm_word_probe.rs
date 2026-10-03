@@ -18,6 +18,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lm = WanxiangLM::open(Path::new(&path))?;
     let empty = LmContext::empty();
 
+    println!("== 兜底基线 floor_log10 = {:+.6} ==", lm.floor_log10());
+
     println!("== 单词（空上文）==");
     for w in ["杵在那", "杵", "在", "那", "出", "哪", "你好", "龘"] {
         let st = lm.state_from_context(&empty);
