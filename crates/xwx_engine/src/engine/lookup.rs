@@ -4,6 +4,14 @@
 use super::rank::merge_layer;
 use super::*;
 
+/// 词条口径重算的共享证据（见 [`ImeEngine::entry_evidence`]）。
+struct EntryEvidence {
+    /// 词库总词频；0 = 不可用，跳过重算。
+    total: u64,
+    /// 上文 LM 状态（首词的前文就是已上屏文本，无近似）。
+    state: LmState,
+}
+
 impl ImeEngine {
     /// 核心查询管线:给定拼音串,返回排序后的候选列表。
     ///
@@ -346,6 +354,12 @@ impl ImeEngine {
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），整串读法
             // 由带 LM 状态的 beam 自己重建（见 `best_chain_candidate`）。
+            // 重算证据按查询算一次，链候选与条目边共用。
+            let ev = if super::DEMOTE_OLD_ABBREV_CHANNEL && demote_scope {
+                Some(self.entry_evidence(ctx)?)
+            } else {
+                None
+            };
             for mut c in self.best_chain_candidates(
                 pinyin,
                 ctx,
@@ -353,39 +367,17 @@ impl ImeEngine {
                 SpellingKind::Abbrev,
                 ABBREV_PER_WORD_PENALTY,
             )? {
-                // **补上词条级证据**：beam 的路径词（`WordSpot`）不带 freq，所以在这里
-                // 用 (word, pinyin) 回查词库——整串命中词条（freq>0）的读法因此能和
-                // "逐词拼链"区分开。层序/投影口径需要这个区分（见 ⑤⑦⑧/⑤⑦⑨）。
-                if let DictStore::Mmap(d) = &self.dict {
-                    if let Some(e) = d.lookup(&c.pinyin)?.iter().find(|e| e.word == c.word) {
-                        if c.freq == 0 {
-                            c.freq = e.freq;
-                        }
-                        // **整串命中词条 ⇒ 按词条口径重算分数**（`dict_logp +
-                        // (lm - floor) * lm_weight`，与旧通道同式）：beam 的分是
-                        // 逐词先验 + 每弧惩罚的累加，不反映词条词频（实测 `ztai`：
-                        // 状态 freq=503366 被「这台」64585 压到 #3）。
-                        // **必须挂开关**：默认世界里格子与旧通道候选同场竞争，直接改分
-                        // 会扰动全局排序（⑤⑧④ 实测 mixed 0.929→0.893、zgr/smsh 首位变错）。
-                        // 判据用 `demote_scope`（与①降级②整串条目边**同一个**作用域）：
-                        // 这里重算的是「格子供给的整串条目读法」，只有旧通道被降级
-                        // （= 该读法由格子独家供给）时才需要按词条口径校准。
-                        if super::DEMOTE_OLD_ABBREV_CHANNEL
-                            && demote_scope
-                            && c.covered >= pinyin.len()
-                        {
-                            let total = self.dict.total_freq()?;
-                            if total > 0 {
-                                let dict_logp = ((e.freq.max(1) as f64).log10()
-                                    - (total as f64).log10()) as f32;
-                                let st = self.lm.state_from_context(ctx);
-                                let lm = self.lm.score_only(&st, &c.word);
-                                let evidence = lm - self.lm.floor_log10();
-                                c.score = dict_logp + evidence * self.lm_weight;
-                            }
-                        }
-                    }
-                }
+                // **整串命中词条 ⇒ 按词条口径重算分数**（与旧通道同式，见
+                // [`Self::fill_entry_evidence`]）：beam 的分是逐词先验 + 每弧惩罚的累加，
+                // 不反映词条词频（实测 `ztai`：状态 freq=503366 被「这台」64585 压到 #3）。
+                //
+                // **链候选与整串条目边都要过这一道**：原先只作用于链候选，于是同一片
+                // 整串条目读法里「走链进来的」按词条口径计分、「走条目边进来的」仍带
+                // beam 的逐弧累加分，两者差一个量级——`shh` 的 似乎(−4.18) 压过
+                // 时候(−16.79)，而时候的词频更高；`zmg` 的 怎么改 也因此从 45 名掉到
+                // 68 名（keystrokes −0.001，⑤⑩④ 当时按「放开线」处理）。合到一处后
+                // 两处同式，`zmg` 回到 45 名、keystrokes 回到 0.877（⑤⑩⑥）。
+                self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                     ranked.push(c);
                 }
@@ -399,6 +391,10 @@ impl ImeEngine {
             // 不改任何既有候选的分与序，回退点就是删掉这段。
             for mut c in self.lattice_candidates(pinyin, ctx, &abbrev_lattice)? {
                 c.spelling = SpellingKind::Abbrev;
+                // 整串条目边走进来的读法同样过「词条口径重算」这一道（同
+                // [`Self::fill_entry_evidence`]，见上）。这条边的 `covered` 就是
+                // 整串长度，故 `fill_entry_evidence` 内部的整串判据必定成立。
+                self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                     ranked.push(c);
                 }
@@ -591,6 +587,56 @@ impl ImeEngine {
             )
         });
         Ok(super::recall::fold_display_candidates(ranked))
+    }
+
+
+    /// **整串命中词条 ⇒ 按词条口径重算分数**（`dict_logp + (lm − floor) × lm_weight`，
+    /// 与旧通道同式）。命中词条同时回填 `freq`。
+    ///
+    /// 链候选（`best_chain_candidates`）与整串条目边（`lattice_candidates`）
+    /// **都要过这一道**：原先只作用于链候选，于是同一片整串条目读法里「走链进来的」
+    /// 按词条口径计分、「走条目边进来的」仍带 beam 的逐弧累加分，两者差一个量级
+    /// （实测 `shh`：似乎 −4.18 vs 时候 −16.79，而时候的词频更高；`zmg` 的
+    /// 怎么改也因此从 45 名掉到 68 名）。
+    ///
+    /// `ev` 为 `None` 时只做 **freq 回填**（命中词条 ⇒ `freq` 补 0）——这一半
+    /// **与开关无关**，默认态也照跑；重算分数才挂开关与降级范围。
+    fn fill_entry_evidence(
+        &self,
+        pinyin: &str,
+        c: &mut Candidate,
+        ev: Option<&EntryEvidence>,
+    ) -> Result<(), EngineError> {
+        let DictStore::Mmap(d) = &self.dict else {
+            return Ok(());
+        };
+        let Some(e) = d.lookup(&c.pinyin)?.into_iter().find(|e| e.word == c.word) else {
+            return Ok(());
+        };
+        if c.freq == 0 {
+            c.freq = e.freq;
+        }
+        let Some(ev) = ev else {
+            return Ok(());
+        };
+        if ev.total == 0 || c.covered < pinyin.len() {
+            return Ok(());
+        }
+        let dict_logp = ((e.freq.max(1) as f64).log10() - (ev.total as f64).log10()) as f32;
+        let lm = self.lm.score_only(&ev.state, &c.word);
+        c.score = dict_logp + (lm - self.lm.floor_log10()) * self.lm_weight;
+        Ok(())
+    }
+
+    /// 词条口径重算所需的**共享证据**（整词频 + 上文 LM 状态）。
+    ///
+    /// 按查询算一次而不是按候选算：整串条目边一批可达数百条，每条各构造一次
+    /// LM 状态是纯浪费（实测把 `full:weishenme` 的 p95 抬高约 0.9ms）。
+    fn entry_evidence(&self, ctx: &LmContext) -> Result<EntryEvidence, EngineError> {
+        Ok(EntryEvidence {
+            total: self.dict.total_freq()?,
+            state: self.lm.state_from_context(ctx),
+        })
     }
 
     /// 把格子**位置 0** 上的每条边打成一个候选:候选分 = 边自身的词频/LM
