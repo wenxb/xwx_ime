@@ -5177,3 +5177,41 @@ nihoa 这类「首音节合法 + 尾部残缺」输入——既非 pure（含 i/
 音节图缩写弧：nih 的 你好 = [ni 字面][h→hao 缩写]），条目边经 lookup_mixed 原语
 照常——第 8 步删的是 `abbrev_candidates` 通道（合并/配额/独立层序），保留
 dict 层两个查询函数作纯匹配原语。
+
+## ⑤⑩⑬ W1c：第三类（残缺尾/容错类）接上条目边+词条口径重算——**零漂移**
+
+**改动**：`lookup.rs` 的 needs_abbrev 块里新增 `third_abbrev = !pure_abbrev && !leading_abbrev`，
+`grid_scope = demote_scope || third_abbrev`，`build_abbrev_lattice` 与 `ev`（重算）
+两道闸从 `demote_scope` 换成 `grid_scope`。层序收编标志不扩（这一类的整串读法
+多为精确补全，天然精确档）。
+
+**实测**：对拍 **90 段 90/90 逐字节同、首位 0、差异行 0**——第三类
+（meiy/beijin/nihaoq/nitqhq…）的格供给与旧通道供给**完全重合**（去重后无新增），
+即迁移行为中性。401/0 · clippy 0 · 四语料全基线 · 清单 20/20+20/20 · 形态 10/10 ·
+perf p95 5.604ms（max 12.389 为单样本调度抖动，p95 档不变）。
+
+## ⑤⑩⑭ 第 8 步（删 `abbrev_candidates` 通道）的删除实验与三个精确前置
+
+**实验**（未提交，已回滚）：通道对全部输入关闭（`abbrev = Vec::new()`），W1c 在场。
+结果 68/90 逐字节同、首位变化 3、720 行差异。损害面集中在三类，即删除的三个前置：
+
+1. **nih 类（len < MIN_ABBREV_INPUT_LEN=4）**：`nih` 你会→你（回声化）、你会/你和/
+   你喝 整批丢失。第三类判据有 `len >= 4` 闸，3 字母输入格子不建 ⇒ 迁入需把
+   MIN_ABBREV_INPUT_LEN 降到 3（或给第三类单独的长度口径），并验 edits 语料
+   （0.728）不退化。
+2. **zho 类的边供给谜**：通道关闭后 zho 丢 中欧/中欧城/兆欧表——但 zho 的
+   `demote_scope`（leading ✓）与 `grid_scope` 都为真、`lookup_abbrev("zho")` 的
+   校验池里有 中欧（⑤⑩⑩ 探针实测）、条目边判据 `covered==0 ⇒ end=整串` 应当
+   建边——实测却没有。**下一步第一件事**：给 `build_abbrev_lattice` 的条目边
+   循环加 trace（或在 `zz` 探针里直呼 `build_abbrev_lattice`），钉住 中欧 在哪
+   一环被滤掉。在钉死之前不能删通道（zho 是 mixed 语料 chh→称号 同族的
+   [声母][韵] 供给）。
+3. **xian 类（可达输入的跨界补全）**：通道对**可达**输入也在供给（门槛不挂
+   needs_abbrev）——xian 的 下年度/下能/侠女（"xian" ⊑ "xia nian…" 跨音节边界
+   补全）随通道消失，+唏/奚/汐（配额重分配的其它来源）。删除前要裁决：这类
+   跨界补全是保留（把 T2 补全挪进条目边路径）还是接受消失（首位 先/现/显 不变，
+   损失只在长尾）。裁决记录进 APPROVED_FIRST_CHANGE。
+
+**前置A（早停放宽）结论**：**不需要**。扩围三步（W1a/W1b/W1c）后 smsh 类清单
+20/20 保持，500 早停 + 折叠校验的组合没有产生误杀——⑤⑩⓪ 的担忧在当前判据
+组合下不成立，记录在案不再追。

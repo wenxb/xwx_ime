@@ -344,8 +344,15 @@ impl ImeEngine {
             // **按输入类别收窄的层序破例标志**（⑤⑧②）：只有这两类输入让
             // "整串命中词条的简拼读法"按精确档参与层序比较。
             let entry_tier_exception = pure_abbrev || leading_abbrev;
+            // **第三类（残缺尾/容错类）的格化（⑤⑩⑬ W1c）**：needs_abbrev 里
+            // 既非纯缩写也非开头缩写的剩余类（首音节合法 + 尾部残缺，如
+            // meiy/beijin/nihaoq）也建条目边并按词条口径重算——旧通道删除
+            // （第 8 步）前的最后一块迁入。层序收编标志不扩：这一类的整串
+            // 读法本来多为精确补全（北京/你好），天然就在精确档。
+            let third_abbrev = !pure_abbrev && !leading_abbrev;
+            let grid_scope = demote_scope || third_abbrev;
             let abbrev_lattice = super::trace::timed("建简拼格", || {
-                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref(), demote_scope)
+                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref(), grid_scope)
             })?;
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），所以整串
@@ -354,7 +361,7 @@ impl ImeEngine {
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），整串读法
             // 由带 LM 状态的 beam 自己重建（见 `best_chain_candidate`）。
             // 重算证据按查询算一次，链候选与条目边共用。
-            let ev = if super::DEMOTE_OLD_ABBREV_CHANNEL && demote_scope {
+            let ev = if super::DEMOTE_OLD_ABBREV_CHANNEL && grid_scope {
                 Some(self.entry_evidence(ctx)?)
             } else {
                 None
