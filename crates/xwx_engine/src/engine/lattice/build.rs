@@ -377,7 +377,11 @@ impl ImeEngine {
                         freq: c.freq,
                         fuzzy_penalty: *fuzzy_penalty,
                         typo_penalty: arc_penalty,
-                        edit_count: arc_edits,
+                        // **累计**而不是本弧：词边代表 [start, end) 整段被消费，前面
+                        // 音节用掉的编辑数必须算进来；否则「前面错过、末尾音节精确」的
+                        // 词边会少报，后向 DP 的整条路径预算形同虚设。递归往下传的也是
+                        // `typo_edits + arc_edits`，两处口径一致。
+                        edit_count: typo_edits + arc_edits,
                         gap: false,
                         abbrev: past_abbrev,
                     });
@@ -396,7 +400,7 @@ impl ImeEngine {
                                 freq: 0,
                                 fuzzy_penalty: 0.0,
                                 typo_penalty: arc_penalty,
-                                edit_count: arc_edits,
+                                edit_count: typo_edits + arc_edits,
                                 gap: false,
                                 abbrev: past_abbrev,
                             });

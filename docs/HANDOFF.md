@@ -2121,3 +2121,27 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 验收：单元 **312 passed**、clippy **0**、`regression_probe --format v1` 对拍 **0 行**、
   `cargo test --workspace` 21 个套件全 ok；不带 `XWX_TRACE` 时输出与生产一致。
 - 用法：`printf 'ztailan\n' | XWX_TRACE=1 cargo run --release --offline --example recall_trace`
+
+## ⑤⑩ 阶段 1（第一刀）：词边编辑数改成**整段累计**
+
+- **改什么**：`crates/xwx_engine/src/engine/lattice/build.rs` 两处建边（词条边 + 用户造词边）
+  由 `edit_count: arc_edits`（只有本弧）改为 `edit_count: typo_edits + arc_edits`（整段累计）。
+  递归往下传的本来就是 `typo_edits + arc_edits`，改完两处口径一致。
+- **为什么该改**（codex 读码时点名）：`LatticeEdge` 代表 `[start, end)` 整段被消费，
+  后向 DP 的「整条路径 ≤ `MAX_TYPO_EDITS` 次编辑」预算按 `edge.edit_count` 扣
+  （见 `lattice_candidates_scored` 的 `remaining`）。若前面音节发生过编辑、末尾音节精确，
+  旧写法会让这条边报 0，预算被绕过。
+- **它今天就可达，而且对拍看得见**（我先前的「这是潜伏 bug」判断是错的，实测推翻）：
+  容错弧本身确实只在**尾部走不动的位置**产生（`nohao`/`niihao`/`nuihao`/`n1hao`/`nihap`/
+  `zhonggoren`/`zhongguren`/`zhonggouren` 八种中部打错输入实测产出的词边为**空**），
+  但**补全**那一侧同样吃这份预算：真词库 + 真 .gram 下输入 `womenjintianqugongyuann`
+  （尾部多一个 `n`）里，「我么」这条前缀候选的补全需要超过 `MAX_TYPO_EDITS` 次编辑。
+- **对拍差异逐条点名**（`regression_probe --format v1`，共 **28 行**，全部落在这一个输入上）：
+  `womenjintianqugongyuann` 的 5 条候选由有限分变 `-inf`——
+  `我么` ×4（-56.0216 / -56.9145 / -57.3124 / -71.0580）、`我盟` ×1（-59.7633）；
+  **候选词表与顺序不变**，只是超过预算的读法正确沉底。目标形态与已修形态逐字节不变
+  （`wmjtqbj`/`womenjtqbj`/`zmgai`/`zguor`/`nihao`/`xian`/`daishixian`）。
+- 定向用例：`crates/xwx_engine/src/engine/tests/typo_budget.rs::completion_beyond_typo_budget_scores_unreachable`
+  —— **旧实现实测红**（`旧实现报有限分 -57.31241`）、新实现绿。
+- 验收：单元 **313 passed**、clippy **0**、`regression_probe --format v1` 对拍 **28 行（逐条点名见上）**、
+  `perf_probe` 通过（max 10.611ms、超线 0）。

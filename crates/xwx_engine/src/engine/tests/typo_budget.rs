@@ -191,3 +191,38 @@ fn typo_arcs_carry_one_edit_and_exact_edges_carry_none() {
         "空词边若出现也必须是 1 次编辑(口径一致)"
     );
 }
+
+/// 整条路径的编辑预算必须真的扣到**补全**上（词边编辑数要累计）。
+///
+/// 实测（真词库 + 真 .gram）：`womenjintianqugongyuann` 里「我么」的补全需要超过
+/// `MAX_TYPO_EDITS` 次编辑。旧实现词边只报本弧的编辑数 ⇒ 这条候选拿到**有限分**
+/// （-57.3124）；改成整段累计后正确判为不可达（-inf）。
+#[test]
+fn completion_beyond_typo_budget_scores_unreachable() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let dict_path = root.join("dict.bin");
+    let gram = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+        })
+        .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+    let (Some(gram_path), true) = (gram, dict_path.is_file()) else {
+        return; // 环境缺文件:跳过
+    };
+    if !gram_path.is_file() {
+        return;
+    }
+    let engine = ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+    let cands = engine
+        .lookup_candidates("womenjintianqugongyuann", &LmContext::empty())
+        .expect("查询失败");
+    let Some(hit) = cands.iter().find(|c| c.word == "我么") else {
+        return; // 词表本身不变；这里只防数据换代
+    };
+    assert!(
+        hit.score.is_infinite() && hit.score < 0.0,
+        "补全超过编辑预算的候选必须判为不可达，旧实现报有限分 {:?}",
+        hit.score
+    );
+}
