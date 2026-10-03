@@ -1640,3 +1640,9 @@ build.rs 建整串条目边时按 covered == 输入字母数 过滤 lookup_abbre
 
 补丁：let mut cand = Candidate::new(...); cand.covered = s.chars().count(); out.push(cand);
 下次：构建时完整保留编译器输出(tail -30)再调整；守卫不要把输出丢掉。
+
+## 2026-10-03 附录五：covered=s.len() 打坏默认路径(mixed 召回 13/14→10/14)，回退
+
+编译通过、单元测试 327/0，但开关 false 时 mixed MRR 0.929→0.714、开关 true 0.893→0.679。
+⇒ covered 是共享字段、别处有语义，不能复用；正解=新增 matched_len 字段或改返回类型，
+并先 grep .covered 的全部消费点确认语义边界。
