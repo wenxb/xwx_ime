@@ -322,17 +322,34 @@ pub(super) fn unexplained_letters(inp: &str, c: &Candidate) -> usize {
 /// 「恰好 5 条」与「被截到 5 条」)。
 pub(super) fn merge_with_abbrev(
     inp: &str,
-    mut ranked: Vec<Candidate>,
+    ranked: Vec<Candidate>,
     abbrev: Vec<Candidate>,
 ) -> (usize, Vec<Candidate>) {
-    ranked.extend(abbrev);
+    merge_layer(inp, ranked, abbrev, SpellingKind::Abbrev, ABBREV_QUOTA)
+}
+
+/// **分层合并 + 保底配额**（简拼层与容错层共用同一套机制）。
+///
+/// `extra` 是某一条召回路径单独产出的候选：`layer` 指明它在排序里的层序，
+/// `quota` 是它在本轮截断中的**保底名额**——截断按候选总数算，若只是
+/// 「push 后整表 sort + truncate」，当精确层已经占满上限时，这条路径的候选
+/// 会被整批截掉，用户就永远看不到它（简拼层救 `zhongguor`、容错层救打错一处
+/// 的输入，都是这个场景）。
+pub(super) fn merge_layer(
+    inp: &str,
+    mut ranked: Vec<Candidate>,
+    extra: Vec<Candidate>,
+    layer: SpellingKind,
+    quota: usize,
+) -> (usize, Vec<Candidate>) {
+    ranked.extend(extra);
     let total = ranked.len();
     // **按拼写分层,不按来源分层**:简拼这条路上来的候选里,「末尾半音节补全」
     // 那批是有意的 `Exact`(与格子里打字中的补全词同层),它们不该吃简拼的
     // 保底配额——配额是给「缩写读法」的,让 `Exact` 占了就白占。
     let (mut tail, mut head): (Vec<Candidate>, Vec<Candidate>) = ranked
         .into_iter()
-        .partition(|c| c.spelling == SpellingKind::Abbrev);
+        .partition(|c| c.spelling == layer);
     sort_candidates(inp, &mut head);
     sort_candidates(inp, &mut tail);
     if total > MAX_CANDIDATES {
@@ -344,7 +361,7 @@ pub(super) fn merge_with_abbrev(
         //   填满到 100——与旧「合并排序截 100」行为逐位一致,不退化
         //   (head ≤ 100 时旧行为等价于「先取 head 全量、再用简拼层
         //   补满 100」,与这里逐位相同)。
-        let tail_keep = ABBREV_QUOTA
+        let tail_keep = quota
             .min(tail.len())
             .max(MAX_CANDIDATES.saturating_sub(head.len()));
         tail.truncate(tail_keep);

@@ -1,6 +1,7 @@
 //! 候选查询:整串查询 [`ImeEngine::lookup_candidates`] 与格边候选
 //! (`lattice_candidates` / `lattice_candidates_scored`)。
 
+use super::rank::merge_layer;
 use super::*;
 
 impl ImeEngine {
@@ -189,15 +190,27 @@ impl ImeEngine {
                 // 有整串读法 ⇒ 必须分数更高才动。
                 let worth_it = !covering_best.is_finite() || tolerant_best > covering_best;
                 if worth_it {
-                    let before = ranked.len();
-                    for c in tolerant {
-                        if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
-                            ranked.push(c);
-                        }
-                    }
-                    if ranked.len() != before {
-                        sort_candidates(pinyin, &mut ranked);
-                        ranked.truncate(MAX_CANDIDATES);
+                    // **统一配额（A2 缺陷 3）**：容错层走与简拼层同一套
+                    // `merge_layer` 保底机制。原先「push 后整表截断」在精确层
+                    // 已经占满上限时会把这批纠错读法**整批截掉**——用户看不到，
+                    // 容错等于没做。
+                    let fresh: Vec<Candidate> = tolerant
+                        .into_iter()
+                        .filter(|c| {
+                            !ranked
+                                .iter()
+                                .any(|e| e.word == c.word && e.pinyin == c.pinyin)
+                        })
+                        .collect();
+                    if !fresh.is_empty() {
+                        let (_, merged) = merge_layer(
+                            pinyin,
+                            ranked,
+                            fresh,
+                            SpellingKind::Fuzzy,
+                            TOLERANT_QUOTA,
+                        );
+                        ranked = merged;
                     }
                 }
             }
