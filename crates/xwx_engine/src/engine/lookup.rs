@@ -133,6 +133,11 @@ impl ImeEngine {
         } else {
             Vec::new()
         };
+        debug_assert_eq!(
+            super::recall::collect_recall_hits(&abbrev, super::recall::RecallSource::Abbrev).len(),
+            abbrev.len(),
+            "召回事实与候选一一对应"
+        );
         let (_, mut ranked) = merge_with_abbrev(pinyin, ranked, abbrev);
 
         // **第二个门槛(分数)**:已经有一个「覆盖整串」的读法、而且它比容错

@@ -441,6 +441,7 @@ mod input;
 mod lattice;
 mod lookup;
 mod rank;
+mod recall;
 
 
 #[cfg(test)]
