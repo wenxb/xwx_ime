@@ -1896,3 +1896,17 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   需要 `UserLM` 值，而它的 `open_or_create` 会**创建/回写**用户模型——评测脚本不该动
   用户的学习数据。要用也只能指向 dev 隔离文件（`user_bigram.dev.txt`），且必须在
   只读语义下用；这件事留到「需要用户层参与评测」时再做，并先在卡片记一条。
+
+## ㊾ 第三批第 1 项（上）：用户词典解屏蔽的引擎侧
+
+- **现状核实**：屏蔽只有一半——`user_lm/mod.rs` 有 `is_blocked` / `block_candidate` /
+  `blocklist_len` 与四条用例，**没有解屏蔽**，也没有任何按键入口。
+- **本次落地**：`UserLM::unblock(word, pinyin_key) -> u32`，与 `block_candidate` 对称
+  （`mutate_tables(|t| t.blocklist.remove(&block_key(...)))`），幂等。
+  **明确不恢复**被屏蔽时清掉的计数与词条——那是用户「删掉」的明确表态，
+  解屏蔽的语义是「以后别再压它」，计数会随重新使用长回来（写在方法文档里）。
+- 用例 `unblock_removes_the_block_and_is_idempotent`（公开 API：`add_entry` → `block_candidate`
+  → `snapshot().is_blocked` → `unblock` → 不再被拦 + `blocklist_len` 归零 + 重复调用安全）。
+- **待做（同一项的后半）**：`ImeEngine`/`InputSession` 暴露 `UnblockCandidate` 动作 +
+  `crates/xwx_ibus` 加触发键（建议 `Ctrl+Shift+Delete`）并在事件映射里登记；
+  再做「屏蔽 → 候选消失 → 解屏蔽 → 候选回来」的端到端用例。

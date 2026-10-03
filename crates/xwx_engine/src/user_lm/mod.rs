@@ -301,6 +301,18 @@ impl UserLM {
         })
     }
 
+    /// **解屏蔽**：把 `(拼音, 词)` 从屏蔽表里移除。
+    ///
+    /// 与 [`Self::block_candidate`] 对称，但**不恢复**被清掉的计数与词条：
+    /// 那些是用户明确表态「删掉」时清的，解屏蔽的语义是「以后别再压它」，
+    /// 不是「把历史恢复原状」——计数会随重新使用自然长回来。
+    /// 没屏蔽过就是空操作（幂等）。返回 dirty。
+    pub fn unblock(&self, word: &str, pinyin_key: &str) -> u32 {
+        self.mutate_tables(|t| {
+            t.blocklist.remove(&block_key(pinyin_key, word));
+        })
+    }
+
     /// 屏蔽表条数(测试/日志用)。
     pub fn blocklist_len(&self) -> usize {
         self.tables

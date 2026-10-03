@@ -530,3 +530,30 @@ fn unreadable_user_file_is_not_truncated() {
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// **解屏蔽**：屏蔽过的 `(拼音, 词)` 移出屏蔽表后不再被拦；幂等。
+///
+/// `unblock` **不**恢复被 `block_candidate` 清掉的计数（语义是「以后别再压它」，
+/// 不是「把历史恢复原状」）——这条在 `unblock` 的文档里写明，计数会随重新使用长回来。
+#[test]
+fn unblock_removes_the_block_and_is_idempotent() {
+    let lm = UserLM::in_memory();
+    lm.add_entry("自造短语", "zi zao duan yu");
+    lm.block_candidate("自造短语", "zi zao duan yu");
+    assert!(
+        lm.snapshot().is_blocked("zi zao duan yu", "自造短语"),
+        "屏蔽后应被拦"
+    );
+    assert_eq!(lm.blocklist_len(), 1);
+
+    lm.unblock("自造短语", "zi zao duan yu");
+    assert!(
+        !lm.snapshot().is_blocked("zi zao duan yu", "自造短语"),
+        "解屏蔽后不该再被拦"
+    );
+    assert_eq!(lm.blocklist_len(), 0, "屏蔽表应被清空");
+
+    // 幂等：没屏蔽过/重复解屏蔽都安全。
+    lm.unblock("自造短语", "zi zao duan yu");
+    assert_eq!(lm.blocklist_len(), 0);
+}
