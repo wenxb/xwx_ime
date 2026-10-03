@@ -192,7 +192,12 @@ pub struct SessionUpdate {
     /// 当前拼音串（未上屏部分），空串表示无输入。
     pub preedit: String,
     /// 全部候选（按得分降序）。
-    pub candidates: Vec<Candidate>,
+    ///
+    /// 共享而非克隆(codex 审查 P2 第三条):候选表带 `String`,翻页/数字选词
+    /// 只移动光标时旧实现每次刷新都整表克隆。会话持有唯一那份 `Arc`,
+    /// 更新包只传引用计数;会话真要改候选时走 `Arc::make_mut`(无人共享
+    /// 就原地改,还有人拿着就写时复制),语义词、零额外拷贝。
+    pub candidates: std::sync::Arc<Vec<Candidate>>,
     /// 高亮候选的全局下标（相对 `candidates`）。
     pub cursor: usize,
     /// 预编辑串(拼音串)内的光标位置:字节偏移,也等于字符位置
@@ -262,7 +267,7 @@ pub struct InputSession {
     /// 由所有 mutating 路径维护,`reset()` 归 0。
     caret: usize,
     /// 当前候选（刷新时重新计算）。
-    candidates: Vec<Candidate>,
+    candidates: std::sync::Arc<Vec<Candidate>>,
     /// 高亮候选下标——**唯一权威的选中坐标**（全局下标，相对 `candidates`）。
     ///
     /// 页码、面板高亮、数字选词、点击选词全部由它推导（codex 审查 D5）：

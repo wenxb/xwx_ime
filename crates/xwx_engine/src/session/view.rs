@@ -10,7 +10,7 @@ impl InputSession {
             engine,
             pinyin: String::new(),
             caret: 0,
-            candidates: Vec::new(),
+            candidates: std::sync::Arc::new(Vec::new()),
             cursor: 0,
             page_size: DEFAULT_PAGE_SIZE,
             committed_tail: String::new(),
@@ -91,7 +91,7 @@ impl InputSession {
         let caret = self.confirmed_chars() + self.caret;
         SessionUpdate {
             preedit,
-            candidates: self.candidates.clone(),
+            candidates: std::sync::Arc::clone(&self.candidates),
             cursor: self.cursor,
             caret,
             page: self.page(),

@@ -213,18 +213,22 @@ fn real_dict_long_input_candidates_cover_only_their_own_span() {
         .lookup_candidates(input, &LmContext::empty())
         .expect("查询失败");
     assert!(!cands.is_empty(), "长串应有候选");
+    // **首位是覆盖整串的整句读法**（上游 `script_translator.cc:497-508` 生成整句、
+    // `PrepareCandidate` :524-531 放进流内首位）。旧实现断言「首选只覆盖一段」，
+    // 那正是「整串打完首屏只有一个词/一个字」的来源。
     let top = &cands[0];
-    assert!(
-        top.covered > 0 && top.covered < input.len(),
-        "首选必须只覆盖一段(实际 {:?} covered={}): 前 5 {:?}",
+    assert_eq!(
+        top.covered,
+        input.len(),
+        "首位应是覆盖整串的读法,实际 {:?} covered={},前 5: {:?}",
         top.word,
         top.covered,
         cands.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
     );
-    assert_eq!(
-        top.covered, 12,
-        "首选「{}」覆盖 wo men jin tian(2+3+3+4=12 字节),剩下 qugongyuan",
-        top.word
+    assert!(
+        cands.iter().any(|c| c.covered < input.len()),
+        "前缀候选仍要在(分段上屏靠它们),实际前 5: {:?}",
+        cands.iter().take(5).map(|c| (&c.word, c.covered)).collect::<Vec<_>>()
     );
 }
 

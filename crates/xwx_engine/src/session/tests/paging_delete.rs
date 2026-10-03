@@ -433,3 +433,34 @@ fn every_visible_candidate_is_committed_by_digit_space_and_click() {
         }
     }
 }
+
+/// 只移动光标(翻页、数字/点击选词)时不重建候选表:两次刷新共享同一份
+/// `Arc`(codex 审查 P2 第三条)。旧实现每次 `update()` 都克隆整表——
+/// `Candidate` 带三个 `String`,500 条的简拼层就是 1500 次分配,而翻页
+/// 这种操作根本不动候选内容。
+#[test]
+fn cursor_move_shares_the_candidate_table_instead_of_cloning_it() {
+    let mut s = session_with_many_candidates();
+    for c in "ni".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    let SessionOutput::Updated(first) = s.handle(InputEvent::Char('.')).expect("不应失败") else {
+        panic!("`.` 翻页应返回 Updated");
+    };
+    let SessionOutput::Updated(second) = s.handle(InputEvent::Char('.')).expect("不应失败") else {
+        panic!("`.` 翻页应返回 Updated");
+    };
+    assert!(
+        std::sync::Arc::ptr_eq(&first.candidates, &second.candidates),
+        "只移动光标时不该重建候选表(应共享同一份 Arc)"
+    );
+
+    // 反向:候选内容真的变了(新打一个字母)时必须给出新的表。
+    let SessionOutput::Updated(third) = s.handle(InputEvent::Char('h')).expect("不应失败") else {
+        panic!("打字母应返回 Updated");
+    };
+    assert!(
+        !std::sync::Arc::ptr_eq(&second.candidates, &third.candidates),
+        "候选表变了就不能继续共享旧的 Arc"
+    );
+}

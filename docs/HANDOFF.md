@@ -1604,3 +1604,23 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - **门槛**:workspace 全绿、clippy 0、perf 通过(max 11.27ms);
   v1 对拍 137 行差异,构成为「长候选表第 95 名以后的尾部漂移」+「原串回显变整串读法」
   一类改善(`zho` → 在欧洲/中欧),28 条电池无新增回归。
+
+## ㉗ 全拼整句候选:能收成整句时一次空格整串上屏
+
+- **症状(用户)**:`daishixian` 首屏只有「带/代/待/呆/袋/戴」——**不是排序问题,是整串
+  读法根本没被产出**(`beijingdaxue` 这类能对上层词条的输入一直是对的,掩盖了它)。
+- **上游判据**(`librime/src/rime/gear/script_translator.cc`):`:497`
+  `has_at_least_two_syllables = syllable_graph.edges.size() >= 2`;`:503-508`
+  「≥2 音节 **且没有恰好覆盖整串的词条**(`!has_reliable_phrase`)」→ 生成整句;
+  `:524-531` `PrepareCandidate()` 把整句设为当前候选(流内首位)。
+- **实现**:精确格能覆盖整串(`reachable`)且当前没有整串候选时,用同一套带状态
+  beam 在**含纠错的格优先**上取整串最优路径,作为候选并进流内首位。逐词先验
+  (`ABBREV_PER_WORD_PENALTY`)同时进 beam 剪枝目标(与 RIME 的
+  `LeftAssociateCompare`「词数少优先」同向)。
+- **实测**:`daishixian`→待实现、`womenjintianquxian`→我们今天去西安、
+  `womenjintianqugongyuan`→我们今天去公园、`nihaoo`→你好哦、`zhzhzhzh`→重中之重;
+  `beijingdaxue`/`zhongguoren`/`womenjintian`/`nihaoshijie`/`zmgai`/`shh`/`wmjtqbj` 不变。
+- **行为变更(已点名)**:原先编码「首选只覆盖一段」的两条用例与一条集成用例已按新语义
+  改写(`beam_lm.rs`、`lookup.rs`、`tests/prefix_commit.rs`);`shanghaai`(打错一个字母)
+  首位由「上」变为整句「上哈爱」——两者都差,属于容错门槛的另一类,记为待办。
+- **门槛**:workspace 全绿、clippy 0、perf 通过(max 11.2ms);v1 对拍变化输入 5/44。

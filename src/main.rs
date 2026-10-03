@@ -242,7 +242,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 注意：session bus（`$DBUS_SESSION_BUS_ADDRESS`）总是可连的，连接成功
     // 不代表 ibus-daemon 在跑。真正的判据是 `org.freedesktop.IBus` 这个
     // bus name 有没有 owner，所以 daemon 自启的检测放在连接之后。
-    if ibus_address().is_none() {
+    // **自启闸门**:`start_ibus_daemon` 跑的是 `ibus-daemon -rdx`,其中 `-r`
+    // 会**替换**总线上正在运行的实例。集成测试会大量启动本二进制,任何一条
+    // 没有把 `IBUS_ADDRESS` 指到私有总线的 spawn 都会因此把用户会话的输入法
+    // 弄停(2026-10-02 实测事故,见 docs/HANDOFF.md ㊲)。测试用它明确关掉自启;
+    // 生产默认行为不变(不设这个变量就是原来的自启)。
+    if ibus_address().is_none() && std::env::var_os("XWX_NO_IBUS_AUTOSTART").is_none() {
         start_ibus_daemon().await;
     }
     let conn = match ibus_address() {

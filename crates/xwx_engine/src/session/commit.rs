@@ -294,7 +294,7 @@ impl InputSession {
         // 显式打断(见对应分支),不是这里的职责。
         self.pinyin.clear();
         self.caret = 0;
-        self.candidates.clear();
+        std::sync::Arc::make_mut(&mut self.candidates).clear();
         self.cursor = 0; // 页码由下标推导(见 `page`)
         self.confirmed.clear();
         self.recognized = None;

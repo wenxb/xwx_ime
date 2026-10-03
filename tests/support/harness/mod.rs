@@ -50,7 +50,7 @@ impl Harness {
     pub fn new(label: &str) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for harness");
         let root = tmp.path().to_path_buf();
-        for sub in ["cfg", "xdg", "run", "home"] {
+        for sub in ["cfg", "xdg", "run", "home", "services"] {
             std::fs::create_dir_all(root.join(sub)).expect("mkdir harness subdir");
         }
         assert!(
@@ -58,7 +58,7 @@ impl Harness {
             "label 用于 engine.log 命名，不应为空"
         );
 
-        let (bus, address) = spawn_private_bus();
+        let (bus, address) = spawn_private_bus(&root);
 
         let control = zbus::blocking::connection::Builder::address(address.as_str())
             .expect("解析私有总线地址")
@@ -89,6 +89,22 @@ impl Harness {
     /// The private bus's pid (for the Drop-cleanup test).
     pub fn bus_pid_for_test(&self) -> u32 {
         self.bus.id()
+    }
+
+    /// 私有总线上当前的名字列表(`ListNames` 从不触发激活,可以安全查询)。
+    ///
+    /// 用它钉住「测试绝不牵出真实 IBus」这条不变量:被测引擎调
+    /// `RegisterComponent` 之后,`org.freedesktop.IBus` **仍然**不该出现在这里——
+    /// 出现即意味着私有总线把系统服务目录里的真 daemon 激活了。
+    pub fn bus_names(&self) -> Vec<String> {
+        let proxy = zbus::blocking::Proxy::new(
+            &self.control,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .expect("DBus 代理");
+        proxy.call::<_, _, Vec<String>>("ListNames", &()).expect("ListNames")
     }
 
     /// Stop the engine with **SIGINT** so `src/main.rs`'s `tokio::signal::ctrl_c`
@@ -170,6 +186,10 @@ impl Harness {
             .arg("--ibus")
             .env("IBUS_ADDRESS", &self.address)
             .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
+            // 闸门:被测引擎**永远不许**自己去拉 ibus-daemon。`start_ibus_daemon`
+            // 用的是 `ibus-daemon -rdx`,其中 `-r` 会**替换**正在跑的实例——
+            // 真会话的输入法就是这么被弄停的(见 docs/HANDOFF.md ㊲)。
+            .env("XWX_NO_IBUS_AUTOSTART", "1")
             .env("XWX_DICT_PATH", dict)
             .env("XWX_ABBREV_PATH", &abbrev_path)
             // Explicit non-existent .gram: src/main.rs honours XWX_LM_PATH
@@ -364,14 +384,43 @@ impl Drop for Harness {
     }
 }
 
-/// Start `dbus-daemon --session --print-address --nofork` and return it with
-/// the first line of its stdout (the bus address).
+/// Start a **strictly private** `dbus-daemon` and return it with the first line
+/// of its stdout (the bus address).
 ///
-/// The reader runs on a helper thread so a daemon that never prints cannot hang
-/// the suite; the thread keeps draining the pipe until the bus dies.
-fn spawn_private_bus() -> (Child, String) {
+/// 安全要点(docs/HANDOFF.md ㊲,2026-10-02):这里**不能**用 `dbus-daemon --session`。
+/// `--session` 会加载系统 session.conf,其中 `<standard_session_servicedirs/>`
+/// 包含 `/usr/share/dbus-1/services`,而那里有
+/// `org.freedesktop.IBus.service`(Exec=`ibus-daemon --replace --panel disable --xim`)。
+/// 被测引擎启动时会调 `RegisterComponent` 找 `org.freedesktop.IBus`,该名字在私有
+/// 总线上无人持有 ⇒ **D-Bus 激活出一个真实 ibus-daemon**;它拿到的又是真实
+/// `HOME`/`XDG_RUNTIME_DIR`(被激活者只继承总线守护进程的环境),于是会改写用户
+/// 真实的 `~/.config/ibus/bus/*` 地址文件,把用户会话的 IBus 指到一条测试结束就
+/// 消失的总线上。现在:配置自带、**没有 `<standard_session_servicedirs/>`**,
+/// `<servicedir>` 指向一个空目录 ⇒ 什么都激活不出来;并把总线守护进程自身也
+/// 关进隔离的家目录,连"越界写文件"的能力都不给。
+fn spawn_private_bus(root: &Path) -> (Child, String) {
+    let services = root.join("services");
+    let conf_path = root.join("bus.conf");
+    let sock = root.join("bus.sock");
+    let conf = format!(
+        "<busconfig>\n  <type>session</type>\n  <listen>unix:path={}</listen>\n  <servicedir>{}</servicedir>\n  <policy context=\"default\">\n    <allow send_destination=\"*\" eavesdrop=\"true\"/>\n    <allow eavesdrop=\"true\"/>\n    <allow own=\"*\"/>\n  </policy>\n</busconfig>\n",
+        sock.display(),
+        services.display()
+    );
+    std::fs::write(&conf_path, conf).expect("写私有总线配置失败");
     let mut child = Command::new("dbus-daemon")
-        .args(["--session", "--print-address", "--nofork"])
+        .arg(format!("--config-file={}", conf_path.display()))
+        .args(["--print-address", "--nofork"])
+        // 隔离:即使将来有人往总线里塞了可激活服务,被激活者也只能看到这套
+        // 临时目录,碰不到真实 $HOME / 地址文件 / 会话总线。
+        .env("HOME", root.join("home"))
+        .env("XDG_CONFIG_HOME", root.join("home/.config"))
+        .env("XDG_DATA_HOME", root.join("xdg"))
+        .env("XDG_CACHE_HOME", root.join("home/.cache"))
+        .env("XDG_RUNTIME_DIR", root.join("run"))
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("IBUS_ADDRESS")
+        .env_remove("IBUS_DAEMON_PATH")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

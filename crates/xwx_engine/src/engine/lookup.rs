@@ -154,6 +154,10 @@ impl ImeEngine {
         // 一个都没有 ⇒ 精确解码本来就能走到底 ⇒ 不需要容错。
         //
         let stalls = Self::first_stalls(&lattice, pinyin.len());
+        // 容错格由下面的分支按需构建；整句候选优先在**含纠错**的格上取
+        // （上游的整句也是建在含纠错的音节图上的）——否则 `shanghaai` 这种
+        // 打错一个字母的输入会出「上哈爱」，把纠正后的「上海」挤下去。
+        let mut tolerant_lattice_opt: Option<Vec<Vec<LatticeEdge>>> = None;
         // 容错能不能把整串读完(只有它真的读完过,才谈得上「不需要逃生口」)。
         let mut tolerant_explains = false;
         if tolerant_due && !stalls.is_empty() {
@@ -161,19 +165,23 @@ impl ImeEngine {
             // 重来一次。合并后重排截断,层序(精确 → 模糊 → 简拼)照旧。
             let tolerant_lattice =
                 self.build_tolerant_lattice(pinyin, bounds, &lattice, &stalls, user_snapshot.as_ref())?;
+            let tolerant_lattice = {
+                tolerant_lattice_opt = Some(tolerant_lattice);
+                tolerant_lattice_opt.as_ref().expect("刚存入")
+            };
             // 「容错格上有没有走到底的读法」用**后向 DP** 判,不跑 beam:
             // beam 是 O(位置 × 桶宽 × 桶内边数),长串上要几万次 LM 打分
             // (实测这一步就吃掉 10ms,是延迟超标的主因);而后向 DP 每条边
             // 只碰一次,`result[0]` 有限 ⟺ 存在覆盖整串的读法,语义等价。
             let tolerant_suffix =
-                self.backward_completion(pinyin, ctx, &tolerant_lattice, MAX_TYPO_EDITS)?;
+                self.backward_completion(pinyin, ctx, tolerant_lattice, MAX_TYPO_EDITS)?;
             // 「走到底」必须**在编辑预算内**成立(codex 审查 D13):预算这一维
             // 的最后一行就是「整条路径最多 MAX_TYPO_EDITS 次编辑」。
             tolerant_explains = tolerant_suffix[MAX_TYPO_EDITS as usize][0].is_finite();
             if tolerant_explains {
                 // 复用上面那次后向 DP(`lattice_candidates` 会再算一遍)。
                 let tolerant =
-                    self.lattice_candidates_scored(ctx, &tolerant_lattice, &tolerant_suffix)?;
+                    self.lattice_candidates_scored(ctx, tolerant_lattice, &tolerant_suffix)?;
                 let tolerant_best = tolerant
                     .iter()
                     .map(|c| c.score)
@@ -226,7 +234,7 @@ impl ImeEngine {
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），整串读法
             // 由带 LM 状态的 beam 自己重建（见 `best_chain_candidate`）。
-            for c in self.best_chain_candidates(pinyin, ctx, &abbrev_lattice)? {
+            for c in self.best_chain_candidates(pinyin, ctx, &abbrev_lattice, SpellingKind::Abbrev)? {
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                     ranked.push(c);
                 }
@@ -253,6 +261,41 @@ impl ImeEngine {
                             ranked.insert(0, c);
                         }
                     }
+                }
+            }
+        }
+
+        // **整句候选（全拼）**：上游 `script_translator.cc:497-508` 的判据——
+        // 「≥2 个音节 **且没有恰好覆盖整串的词条**」就生成整句，再由
+        // `PrepareCandidate`（同文件 :524-531）把它放进候选流首位。
+        //
+        // 这里用同一套带状态 beam 在**精确格**上取整串最优路径：`daishixian`
+        // 这类「要多条词条拼起来才成句」的输入，旧实现首屏只有
+        // 「带/代/待/呆/袋/戴」——整串读法根本没被产出，不是排序问题。
+        //
+        // 只在**精确格能覆盖整串**且当前没有整串候选时做：打一半的输入不走
+        // 这里（简拼/容错各有自己的门槛），打对的短词也不受影响（那本来就是
+        // 一条词条覆盖整串，`has_reliable_phrase` 为真）。
+        if reachable
+            && pinyin.len() >= MIN_ABBREV_INPUT_LEN
+            && !ranked.iter().any(|c| c.covered >= pinyin.len())
+        {
+            // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
+            let sentence_lattice = tolerant_lattice_opt.as_ref().unwrap_or(&lattice);
+            for c in
+                self.best_chain_candidates(pinyin, ctx, sentence_lattice, SpellingKind::Exact)?
+            {
+                if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
+                    ranked.push(c);
+                }
+            }
+            sort_candidates(pinyin, &mut ranked);
+            ranked.truncate(MAX_CANDIDATES);
+            // 整句进流内首位（与简拼那条同一个结构性规则，不设阈值）。
+            if let Some(idx) = ranked.iter().position(|c| c.covered >= pinyin.len()) {
+                if idx != 0 {
+                    let c = ranked.remove(idx);
+                    ranked.insert(0, c);
                 }
             }
         }
@@ -428,6 +471,7 @@ impl ImeEngine {
         pinyin: &str,
         ctx: &LmContext<'_>,
         lattice: &[Vec<LatticeEdge>],
+        spelling: SpellingKind,
     ) -> Result<Vec<Candidate>, EngineError> {
         // 先验进 beam 的剪枝目标（见 `decode_beam_with_lattice_penalized`）。
         let paths = self.decode_beam_with_lattice_penalized(
@@ -476,7 +520,7 @@ impl ImeEngine {
                 pinyin: key,
                 score: path.score,
                 freq: 0,
-                spelling: SpellingKind::Abbrev,
+                spelling,
                 echo: false,
                 covered: pinyin.len(),
             });

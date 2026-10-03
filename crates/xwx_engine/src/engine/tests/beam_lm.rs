@@ -168,9 +168,29 @@ fn whole_path_beam_beats_greedy() {
     let cands = engine
         .lookup_candidates("nimen", &ctx)
         .expect("查询失败");
+    // **整串读法进首位**(上游 `script_translator.cc:497-508` + `PrepareCandidate`
+    // :524-531):`nimen` 整串能收成「你们」,它排第一——这正是用户报的
+    // 「好几十个字母打完了首屏只有一个字」的那个问题。
     assert_eq!(
-        cands[0].word, "你",
-        "候选排序用近似 LM(无 bigram 增益):unigram 更高的「你」应排最前"
+        cands[0].covered, 5,
+        "整串读法应排最前(覆盖 `nimen` 全串),实际前 3: {:?}",
+        cands.iter().take(3).map(|c| (&c.word, c.covered)).collect::<Vec<_>>()
+    );
+    // 本条真正要钉的不变量没变:**只覆盖前缀的候选**仍按近似 LM(无 bigram
+    // 增益)排序,unigram 更高的「你」在这些前缀候选里最前。
+    let first_prefix = cands
+        .iter()
+        .find(|c| c.covered < "nimen".len())
+        .expect("应有只覆盖前缀的候选");
+    assert_eq!(
+        first_prefix.word, "你",
+        "前缀候选按近似 LM 排序:unigram 更高的「你」应排最前,实际 {:?}",
+        cands
+            .iter()
+            .filter(|c| c.covered < "nimen".len())
+            .take(3)
+            .map(|c| &c.word)
+            .collect::<Vec<_>>()
     );
 }
 

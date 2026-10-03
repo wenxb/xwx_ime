@@ -25,7 +25,7 @@ use support::{Harness, keyval, last_preedit, shared_fixture};
 /// - the IBus layer treating `CommitSegment` like `Commit` (`commit()` hides
 ///   the UI) → no `UpdateLookupTable` carrying 北京 → red.
 #[test]
-fn selecting_a_prefix_candidate_keeps_the_remaining_pinyin_composing() {
+fn whole_string_reading_commits_in_one_space() {
     let h = &mut Harness::new("segment-commit");
     h.start_engine(shared_fixture());
     h.focus_out().expect("FocusOut");
@@ -34,54 +34,19 @@ fn selecting_a_prefix_candidate_keeps_the_remaining_pinyin_composing() {
     h.type_ascii("nihaobeijing");
     h.clear_backlog();
 
-    // 方案 b:确认段**留在组合里**(预编辑区显示为已确认文本),这一步
-    // 一个字节都不交给应用——于是退格能回退、也不会出现「已上屏的段再也
-    // 收不回来」。这是与「上屏一段 + CommitText」最关键的差别。
+    // **整串读法进首位**（上游 `script_translator.cc:497-508` 生成整句、
+    // `PrepareCandidate` :524-531 放到流内首位）：`nihaobeijing` 能收成
+    // 「你好北京」，于是**一次空格整串上屏**。
+    //
+    // 旧的「选前缀候选 → 剩余串留在组合里（方案 b）」那条路径仍然存在
+    // （整串读法覆盖不了输入时、或用户显式选前缀候选时），但那时它不再是
+    // 首位候选；本条只钉「能收成整句时一次上屏」这个语义。
     assert!(h.key(keyval::SPACE, 0), "空格应选中候选");
     let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
     assert_eq!(
         support::commits(&sigs),
-        Vec::<String>::new(),
-        "确认段不立刻交给应用(方案 b)"
-    );
-    assert_eq!(
-        last_preedit(&sigs).as_deref(),
-        Some("你好beijing"),
-        "预编辑区 = 已确认段 + 剩余串"
-    );
-    let table = support::last_table(&sigs).expect("剩余串必须有候选窗——不能什么都没有");
-    assert_eq!(
-        table.candidates.first().map(String::as_str),
-        Some("北京"),
-        "剩余串的首选应是「北京」,实际 {:?}",
-        table.candidates
-    );
-
-    // **退格回退上一次确认**:剩余串原样回到输入串,重新出候选。
-    h.clear_backlog();
-    assert!(h.key(keyval::BACKSPACE, 0), "退格应回退上一次确认");
-    let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
-    assert_eq!(
-        support::commits(&sigs),
-        Vec::<String>::new(),
-        "回退不上屏任何东西"
-    );
-    assert_eq!(
-        last_preedit(&sigs).as_deref(),
-        Some("nihaobeijing"),
-        "字母一个都不能少地还回输入串"
-    );
-
-    // 重新选一遍,然后打完:整串结束时**一次**提交。
-    assert!(h.key(keyval::SPACE, 0), "重新选中「你好」");
-    let _ = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
-    h.clear_backlog();
-    assert!(h.key(keyval::SPACE, 0), "剩余串仍有候选,空格应继续选词");
-    let sigs = h.settle_response(Duration::from_millis(250), Duration::from_secs(4));
-    assert_eq!(
-        support::commits(&sigs),
         vec!["你好北京".to_owned()],
-        "组合结束时把已确认段与最后一段一次交给应用"
+        "整串读法应一次交给应用"
     );
     assert_eq!(
         last_preedit(&sigs),
