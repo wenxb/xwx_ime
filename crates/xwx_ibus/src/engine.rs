@@ -263,6 +263,25 @@ impl XwxEngineServer {
             return self.handle_key(&ctxt, InputEvent::DeleteCandidate).await;
         }
 
+        // —— Ctrl+Shift+Delete:撤销最近一次屏蔽 ——
+        // 与 Ctrl+Delete 同一位置拦截（都在修饰键透传过滤之前）；区别是**要求**
+        // Shift：纯 Ctrl+Delete 是「删当前高亮候选」，加 Shift 才是「撤回上一条」。
+        // 会话层在没得撤时返回 Noop，这里随之返回 false 透传给应用。
+        let is_ctrl_shift_delete = keyval == ibus_proto::keyval::DELETE
+            && state & ibus_proto::IBUS_RELEASE_MASK == 0
+            && state & ibus_proto::IBUS_CONTROL_MASK != 0
+            && state & ibus_proto::IBUS_SHIFT_MASK != 0
+            && state
+                & (ibus_proto::IBUS_LOCK_MASK
+                    | ibus_proto::IBUS_MOD1_MASK
+                    | ibus_proto::IBUS_SUPER_MASK
+                    | ibus_proto::IBUS_HYPER_MASK
+                    | ibus_proto::IBUS_META_MASK)
+                == 0;
+        if is_ctrl_shift_delete {
+            return self.handle_key(&ctxt, InputEvent::UnblockCandidate).await;
+        }
+
         // —— 其余：释放事件与 Ctrl/Alt/Super/Hyper/Meta 组合键透传给应用 ——
         if state
             & (ibus_proto::IBUS_RELEASE_MASK

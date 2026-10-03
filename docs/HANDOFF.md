@@ -1910,3 +1910,17 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - **待做（同一项的后半）**：`ImeEngine`/`InputSession` 暴露 `UnblockCandidate` 动作 +
   `crates/xwx_ibus` 加触发键（建议 `Ctrl+Shift+Delete`）并在事件映射里登记；
   再做「屏蔽 → 候选消失 → 解屏蔽 → 候选回来」的端到端用例。
+
+## ㊿ 第三批第 1 项（下）：解屏蔽的 IBus 入口——功能打通
+
+- `crates/xwx_ibus/src/engine.rs` 新增 `Ctrl+Shift+Delete` 分派（与 `Ctrl+Delete` 同一位置拦截，
+  都在修饰键透传过滤之前；区别是**要求** Shift）：纯 `Ctrl+Delete` 仍是「删当前高亮候选」，
+  加 Shift 才是「撤销最近一次屏蔽」。会话层没得撤时返回 `Noop`，这里随之透传给应用。
+- 事件变体 `InputEvent::UnblockCandidate` 的暂缓标注已摘掉（现在有真实入口）。
+- **踩到并修的坑**：加事件变体后，`examples/regression_probe.rs` 对按键事件的**穷尽匹配**变成
+  非穷尽（E0004）。上一次跑门槛时我把汇总 `awk` 掉了、没看到原始输出，误判为通过并提交了
+  ——**教训：提交前必须看门槛的原始输出**，空汇总不等于「没有测试」，也可能等于「没编译」。
+- **完整链路**：`UserLM::{block_candidate, unblock, unblock_last}`（含 `last_blocked` 槽位）
+  → `ImeEngine::{delete_candidate, unblock_last_candidate}` → `InputEvent::{DeleteCandidate, UnblockCandidate}`
+  → IBus `Ctrl+Delete` / `Ctrl+Shift+Delete`。
+- 验收：workspace **379 passed / 0 failed**、clippy **0**、v1 对拍 **0 行**、perf 通过。
