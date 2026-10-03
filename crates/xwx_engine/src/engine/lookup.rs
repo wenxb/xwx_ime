@@ -342,6 +342,17 @@ impl ImeEngine {
             //
             // `freq == 0` 是「分数驱动」的标记（组合候选与用户造词都用它），
             // 只有 `1..=FILLER_FREQ_TIER` 才是词库里没有真实依据的填充条目。
+            super::trace::note(|| {
+                let t: Vec<String> = ranked
+                    .iter()
+                    .take(5)
+                    .map(|c| format!("{}|freq={}|cov={}|{:?}", c.word, c.freq, c.covered, c.spelling))
+                    .collect();
+                let fire = ranked
+                    .first()
+                    .is_some_and(|c| c.covered >= pinyin.len() && c.freq > 0 && c.freq <= FILLER_FREQ_TIER);
+                format!("置顶判定: 开火={} 前五=[{}]", fire, t.join("  "))
+            });
             let top_is_filler_entry = ranked.first().is_some_and(|c| {
                 c.covered >= pinyin.len() && c.freq > 0 && c.freq <= FILLER_FREQ_TIER
             });
