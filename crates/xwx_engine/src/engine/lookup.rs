@@ -154,11 +154,10 @@ impl ImeEngine {
         let exact_covers_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
         // **降级范围**（`DEMOTE_OLD_ABBREV_CHANNEL` 的唯一作用域判据，只依赖
         // `reachable`/`segmenter`/`has_abbrev`，**不碰 `ranked`**）：纯缩写 ∪
-        // 开头即缩写，两者都**排除 `zh`/`ch`/`sh` 开头**。
-        //
-        // 排除它们的理由：`shh`/`zhh` 这类「双字母声母 + 首字母」的简写在格子上
-        // 的读法供给不足（实测开关打开时 `shh`→时候、`zhh`→只会 直接丢召回），
-        // 实测排除后 mixed 0.760 → 0.893。
+        // 开头即缩写。曾经排除 `zh`/`ch`/`sh` 开头（⑤⑩③：格子对 `shh`/`zhh`
+        // 这类简写的读法供给不足，排除后 mixed 0.760 → 0.893）；⑤⑩⑩ 的折叠
+        // 校验修好供给后排除删除，两类范围重新同宽（层序收编一路本来就不排除，
+        // 见 `rank.rs::pure_abbrev_input` 的文档）。
         //
         // **这三件事必须共用这一个判据**：①降级旧通道（下面 `demote_old`）、
         // ②整串条目边（`build_abbrev_lattice` 的 `demote_scope`）、③词条口径重算
@@ -168,7 +167,7 @@ impl ImeEngine {
         // 4 段（第 3 步修的就是这个）。
         let demote_scope = self.dict.has_abbrev()
             && !reachable
-            && (super::rank::pure_abbrev_input(pinyin, true, true)
+            && (super::rank::pure_abbrev_input(pinyin, true)
                 || super::rank::leading_abbrev_input(&self.segmenter, pinyin, true));
         let demote_old = super::DEMOTE_OLD_ABBREV_CHANNEL && demote_scope;
         let abbrev = if bounds.is_none() && !demote_old {
@@ -302,7 +301,7 @@ impl ImeEngine {
         // 不能破（见 `engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`），
         // 即使简拼格本身只用主索引。
         let pure_abbrev =
-            !reachable && super::rank::pure_abbrev_input(pinyin, self.dict.has_abbrev(), false);
+            !reachable && super::rank::pure_abbrev_input(pinyin, self.dict.has_abbrev());
         // 「已有整串读法」这条要**忽略原样回显**：纯缩写输入的解不了整串时，
         // 兜底先给的就是回显候选（`covered = 整串`、`echo = true`），
         // 它不算「已经有读法」，否则门槛永远挡住简拼格（实测 wsm/zgr/xxn/dbq/mgx
@@ -377,10 +376,9 @@ impl ImeEngine {
                 // 时候(−16.79)，而时候的词频更高；`zmg` 的 怎么改 也因此从 45 名掉到
                 // 68 名（keystrokes −0.001，⑤⑩④ 当时按「放开线」处理）。合到一处后
                 // 两处同式，`zmg` 回到 45 名、keystrokes 回到 0.877（⑤⑩⑥）。
+                let rescored = ev.is_some() && c.covered >= pinyin.len();
                 self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
-                if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
-                    ranked.push(c);
-                }
+                Self::push_rescored(&mut ranked, c, rescored);
             }
             // **词级简拼候选**：在简拼格上跑与精确路**同一个**抽取
             // （位置 0 的边 + 该边终点的最优补全分，见 `lattice_candidates`），
@@ -394,10 +392,9 @@ impl ImeEngine {
                 // 整串条目边走进来的读法同样过「词条口径重算」这一道（同
                 // [`Self::fill_entry_evidence`]，见上）。这条边的 `covered` 就是
                 // 整串长度，故 `fill_entry_evidence` 内部的整串判据必定成立。
+                let rescored = ev.is_some() && c.covered >= pinyin.len();
                 self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
-                if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
-                    ranked.push(c);
-                }
+                Self::push_rescored(&mut ranked, c, rescored);
             }
             {
                 {
@@ -626,6 +623,28 @@ impl ImeEngine {
         let lm = self.lm.score_only(&ev.state, &c.word);
         c.score = dict_logp + (lm - self.lm.floor_log10()) * self.lm_weight;
         Ok(())
+    }
+
+    /// 推入一条**已重算**的整串候选；同一 (词, 音) 已有既排行（精确补全/
+    /// 兜底给出的同款读法）时就地改分，而不是按旧判据去重丢弃。
+    ///
+    /// 为什么必须就地改分：同一 (词,音) 的整串读法只有一个真实分数（词条
+    /// 口径），两套刻度并存时旧刻度压死新刻度——实测 W1a 后 `sh` 的
+    /// 是(词频 31M，词条口径 −2.39) 撞上 Exact 补全旧行(−13.99)被丢弃，
+    /// 首页被 500K 档的 [s][h] 二字词(−4.18)整页占住。改分后同读法同分。
+    /// `rescored=false`（重算未发生，如非降级范围）维持原「去重跳过」，
+    /// 非 降级世界的分数一个都不动。
+    fn push_rescored(ranked: &mut Vec<Candidate>, c: Candidate, rescored: bool) {
+        match ranked.iter_mut().find(|e| e.word == c.word && e.pinyin == c.pinyin) {
+            Some(e) => {
+                if rescored {
+                    e.score = c.score;
+                    e.covered = c.covered;
+                    e.freq = c.freq;
+                }
+            }
+            None => ranked.push(c),
+        }
     }
 
     /// 词条口径重算所需的**共享证据**（整词频 + 上文 LM 状态）。

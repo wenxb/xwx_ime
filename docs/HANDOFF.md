@@ -5118,3 +5118,34 @@ shh→时候/zhh→只会 对称补进语料与测试，属宽松匹配的伪召
 
 **遗留**：前置A（`MAX_LOOKUP_RESULTS` 早停放宽）挪到扩围步、以 smsh 类清单为判据；
 扩围 W1（demote_scope 移除 zh/ch/sh 排除）/ W2（混拼类进格）未动。
+
+## ⑤⑩⑪ 扩围 W1a：`zh`/`ch`/`sh` 开头的纯缩写进格（层序收编一路本就不排除）
+
+**改动**：`rank.rs::pure_abbrev_input` 删除 `sibilant_excluded` 参数（降级范围与
+层序收编范围重新**同宽**）；`lookup.rs` 的 `demote_scope` 与 `needs_abbrev` 两处
+调用点、契约测试助手（`engine/tests/mod.rs::entry_tier_exception`）同步。排除的
+历史理由（⑤⑩③：格子对 `shh`→时候 简写的读法供给不足，排除后 mixed
+0.760 → 0.893）被 ⑤⑩⑩ 的折叠校验消解——校验把 san/se/si/suo 这类伪 [sh] 读法
+清出供给，剩下的是真读法。
+
+**路上抓到的结构性缺口（比扩围本身更值钱）**：同一 (词,音) 两套刻度并存的最后
+一角。`sh` 的 是(词频 31M) 在 `ranked` 里已有 Exact 补全旧行(−13.99)，重算后的
+词条口径行(−2.39) 被 `!ranked.iter().any(...)` 去重**丢弃**——首页被 500K 档的
+[s][h] 二字词(−4.18)整页占住，31M 的高频字整个出局。修法
+`lookup.rs::push_rescored`：去重命中且重算确实发生时就地改分（score/covered/freq），
+同读法同分；`rescored=false`（非降级范围，ev=None）维持原「去重跳过」，
+非降级世界的分数一个不动。
+
+**对拍点名（对 ⑤⑩⑩ 后基线）**：90 段 83 逐字节同；首位变化 2——`sh` 谁→是、
+`zh` 这→这(no-op 后实为不动)（对**原始基线** final.txt 是 所→是、在→这，
+`APPROVED_FIRST_CHANGE` 已更新为最终态）；`zhzhzhzh` 条数 71→67（freq=0 的
+格链候选让位给真词条）、`shenem` 88→87（神噩梦出清）。zh 侧新增 [z][h] 二字词
+（做好/中华/只好——一字一字母读法，合法）与 [zh] 单字（这/中/只）按词条口径
+同台竞争，这(17.6M)>中(7.7M)。
+
+**门槛**：401/0 · clippy 0 · 对拍 exit 0（点名例外仅 sh/zh 两条）· daily 1.000 /
+mixed 13/14·0.929 / keystrokes 0.877 / edits 0.728 · 清单 20/20+20/20 · 形态 10/10 ·
+perf 稳态 p95 5.980ms、max 11.652ms、超线 0（负载 ≈7 下与第 7 步的 5.5ms 同档）。
+
+**遗留**：W1b（`leading_abbrev_input` 的硬编码排除——zho/zhongg/zhongguor 进格）、
+前置A（早停放宽，按 smsh 清单判定）、第 8 步删除。

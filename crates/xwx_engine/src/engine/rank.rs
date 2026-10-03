@@ -181,19 +181,14 @@ pub(super) fn effective_layer(
 /// （见 `engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`），
 /// 即使简拼格本身只用主索引。
 ///
-/// `sibilant_excluded` 是**降级范围**与**层序收编范围**的唯一差别：
-/// `zh`/`ch`/`sh` 是合法双字母声母（`shh`→时候、`zhh`→只会 这类「双字母
-/// 声母 + 首字母」简写），它在格子上的读法供给不足，进降级范围会直接丢召回
-/// （实测 mixed 0.760 → 0.893 就是靠排除它们）。故降级范围传 `true`、
-/// 层序收编传 `false`。
-pub(super) fn pure_abbrev_input(
-    inp: &str,
-    has_abbrev: bool,
-    sibilant_excluded: bool,
-) -> bool {
+/// `zh`/`ch`/`sh` 开头的输入曾经被降级范围排除（`sibilant_excluded` 参数，
+/// ⑤⑩③）：当时格子对 `shh`→时候 这类「双字母声母 + 首字母」简写的读法供给
+/// 不足，进降级范围直接丢召回（mixed 0.760 → 0.893）。⑤⑩⑩ 的折叠校验修好
+/// 供给后（校验把 san/se/si 这类伪 [sh] 读法清出去），排除失去存在理由，
+/// 参数删除——降级范围与层序收编范围重新**同宽**。
+pub(super) fn pure_abbrev_input(inp: &str, has_abbrev: bool) -> bool {
     has_abbrev
         && inp.len() >= 2
-        && !(sibilant_excluded && matches!(&inp[..2], "zh" | "ch" | "sh"))
         && inp.char_indices().all(|(i, c)| {
             c.is_ascii_alphabetic() && !segmenter::abbrev_syllables(&inp[i..i + 1]).is_empty()
         })
