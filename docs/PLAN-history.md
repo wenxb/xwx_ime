@@ -1202,3 +1202,8 @@ daily 11/12、mixed 11/14、edits MRR 0.645。原因：减基线等于逐词奖�
 zaodianxiuxi→早点休息、womashangdao→我马上到、jintiantianqizenmeyang→今天天气怎么样、
 nizaiganshenme→你在干什么、nihaoshijie→你好世界；daily MRR 0.958→1.000；
 chuzaina/shanghaai/简拼形态与 mixed/keystrokes/edits 全部不变；对拍 44 输入 0 变化。
+
+## 2026-10-03 儿化音 r 别名
+
+简拼弧补 `r → er`（abbrev_syllables("r") 找不到 er）：zaiyikuair→在一块儿、wanhuir→晚会儿、
+haowanr→好玩儿；验收形态与语料全不变，对拍 44 输入 0 变化。

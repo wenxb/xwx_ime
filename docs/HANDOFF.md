@@ -2585,3 +2585,11 @@ LM 的「无证据基线分」按词复付（每个词各付一次 -11.605767）
 | clippy · 测试 · v1 对拍 | — | 0 · **399 passed / 0 failed** · **44 输入 0 变化** |
 
 钉子用例已补：`crates/xwx_engine/src/engine/tests/projection_filler.rs`（两组：填充档真短语守住首位／该换位的仍换位）。
+
+## ⑤㉗ 儿化音的 `r` 别名：`zaiyikuair` → 在一块儿
+
+输入末尾单个 `r` 是「儿」的通用简写，但 `segmenter::abbrev_syllables("r")` 只找得到
+以 `r` 开头的音节（`ren`/`ri`/`rong`…），`er` 不在其中 ⇒ 简拼弧里单独补一条
+`r → er`（同代价、同缩写标记；它本来就是缩写读法）。实测：
+`zaiyikuair` → 在一块儿 #1、`wanhuir` → 晚会儿、`haowanr` → 好玩儿。
+验收形态与四套语料全不变（daily 12/12 · MRR 1.000、mixed 13/14、keystrokes 12/12、edits 6/6）。

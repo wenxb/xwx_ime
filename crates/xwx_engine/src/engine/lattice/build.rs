@@ -311,6 +311,13 @@ impl ImeEngine {
                 for s in segmenter::abbrev_syllables(&pinyin[pos..pos + len]) {
                     readings.push((s, ABBREV_PENALTY, 0, true));
                 }
+                // **儿化音的 `r`**:输入末尾一个 `r` 是「儿」的通用简写
+                // (`zaiyikuair` → 在一块儿),但 `abbrev_syllables("r")` 只找得到
+                // 以 `r` 开头的音节(`ren`/`ri`/`rong`…),`er` 不在其中 ⇒ 单独补一条。
+                // 与简拼弧同代价同标记(它本来就是缩写读法)。
+                if len == 1 && &pinyin[pos..pos + 1] == "r" {
+                    readings.push(("er", ABBREV_PENALTY, 0, true));
+                }
             }
             // **末尾半音节补全**(与上面几支互斥的读法选择**并行**,不是 else):
             // 输入在这里到头,窗口是某个更长音节的前缀(`beijin` 的 `jin` →
