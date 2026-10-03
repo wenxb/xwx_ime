@@ -1225,3 +1225,9 @@ lookup_mixed 切到格子路径，保留旧通道作回退点；验收=纯缩写
 
 临时关掉简拼通道后，20 条纯缩写输入只有 2 条仍正确（wmjtqbj/xnkl），13 条变错、5 条只剩
 输入回声 ⇒ lookup_abbrev 是这类输入唯一有效来源。第 2 步须先让格子产出同形的 Abbrev 候选。
+
+## 2026-10-03 阶段 3 第 2 步第一步：词级简拼候选从简拼格抽取（已提交）
+
+在 needs_abbrev 支内复用 lattice_candidates(abbrev_lattice) 抽词级候选、标 Abbrev、去重并池；
+只加候选不改序。实测 20 条纯缩写 19 条候选完全一致、wmjtqbj 新增 6 条词级候选且无消失；
+四套语料与 v1 对拍 44 输入全不变；perf 同条件不可区分；clippy 0、401 passed/0 failed。

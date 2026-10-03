@@ -292,6 +292,19 @@ impl ImeEngine {
                     ranked.push(c);
                 }
             }
+            // **词级简拼候选**：在简拼格上跑与精确路**同一个**抽取
+            // （位置 0 的边 + 该边终点的最优补全分，见 `lattice_candidates`），
+            // 得到的是 `去北京`/`我今天` 这类**单词条读法**，覆盖是「这个词
+            // 吃掉多少字母」（分段上屏要的语义），而不是整串。
+            // 旧通道（`lookup_abbrev`/`lookup_mixed`）仍照常给整串候选，
+            // 两者按 (word, pinyin) 去重后一起排序——这一步只**加**候选、
+            // 不改任何既有候选的分与序，回退点就是删掉这段。
+            for mut c in self.lattice_candidates(pinyin, ctx, &abbrev_lattice)? {
+                c.spelling = SpellingKind::Abbrev;
+                if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
+                    ranked.push(c);
+                }
+            }
             {
                 {
                     sort_candidates(pinyin, &mut ranked);
