@@ -2,6 +2,57 @@
 
 use super::*;
 
+/// 钉住桶内层序契约（**唯一出处**：[`crate::engine::rank::effective_layer`]）：
+///
+/// 1. `(u_min 桶, 有效层序)` 整体非降——`Exact` → `Fuzzy` → `Abbrev`；
+/// 2. `Candidate::spelling`（原始来源）在桶内**允许且只允许一种交错**：
+///    被收编的整串条目级简拼排在 `Fuzzy` 之前。
+///
+/// 旧判据直接比 `c.spelling`，隐含假设「两层在桶内不交错」；收编生效后该假设
+/// 不再成立（实测 `renm` 桶 0 内 `人们`(收编档) → `仍`(Fuzzy) → `日俄`(Abbrev)），
+/// 故按①+②重述。②不是①的推论，单独留着：它禁止的是「未被收编的简拼
+/// 插到容错读法之前」这种真错序。
+fn assert_bucket_layer_order(inp: &str, cands: &[Candidate], seg: &Segmenter, has_abbrev: bool) {
+    let keys: Vec<(usize, SpellingKind)> = cands
+        .iter()
+        .map(|c| (sort_bucket(inp, c), sort_layer(inp, c, seg, has_abbrev)))
+        .collect();
+    assert!(
+        keys.windows(2).all(|w| w[0] <= w[1]),
+        "{inp} (u_min 桶, 有效层序) 应整体非降: {:?}",
+        cands
+            .iter()
+            .map(|c| (
+                &c.word,
+                c.spelling,
+                sort_bucket(inp, c),
+                sort_layer(inp, c, seg, has_abbrev)
+            ))
+            .collect::<Vec<_>>()
+    );
+    let exc = entry_tier_exception(inp, seg, has_abbrev);
+    for w in cands.windows(2) {
+        if sort_bucket(inp, &w[0]) != sort_bucket(inp, &w[1]) {
+            continue;
+        }
+        // 桶内**原始来源**出现 `Abbrev` 在 `Fuzzy` 之前时，只允许一种理由：
+        // 那条 Abbrev 是被收编的整串条目级简拼（有效层序因此是 `Exact`，
+        // 未收编的 Abbrev 排在 Fuzzy 之前则是真错序）。
+        // 反方向（Fuzzy 后接 Abbrev）是正常层序，不在此列。
+        if w[0].spelling == SpellingKind::Abbrev && w[1].spelling == SpellingKind::Fuzzy {
+            assert!(
+                exc && w[0].freq > 0 && w[0].covered >= inp.len(),
+                "{inp} 桶内 Abbrev→Fuzzy 交错只允许「被收编的整串条目级简拼」: \
+                 {:?}(Abbrev, freq={}, covered={}) 之后是 {:?}(Fuzzy)",
+                w[0].word,
+                w[0].freq,
+                w[0].covered,
+                w[1].word
+            );
+        }
+    }
+}
+
 /// 简拼层保底配额(PLAN.md 第三节缺口的修法):
 /// 精确+兜底层装满 `MAX_CANDIDATES` 时,简拼层仍有 `ABBREV_QUOTA`
 /// 条进候选列表,且目标词必须出现。真实词库 + 万象 gram,
@@ -62,6 +113,8 @@ fn abbrev_layer_survives_full_exact_layer() {
     // 配额语义没动,换两个仍然装满的输入来钉:「`xian`」精确层占满
     // 100 条、简拼层仍保底 5 条;「`ky`」精确层为空、简拼层填满 100 条
     // (配额是保底不是封顶的另一面)。
+    let has_abbrev = engine.dict.has_abbrev();
+    let seg = Segmenter::new();
     for input in ["xian", "ky"] {
         let cands = engine
             .lookup_candidates(input, &LmContext::empty())
@@ -75,17 +128,7 @@ fn abbrev_layer_survives_full_exact_layer() {
             n_abbrev >= ABBREV_QUOTA,
             "{input} 简拼层应至少保底 {ABBREV_QUOTA} 条(实际 {n_abbrev})"
         );
-        let pair_keys: Vec<(usize, SpellingKind)> = cands
-            .iter()
-            .map(|c| (sort_bucket(input, c), c.spelling))
-            .collect();
-        assert!(
-            pair_keys.windows(2).all(|w| w[0] <= w[1]),
-            "{input} (u_min 桶, 层序) 应整体非降: {:?}",
-            cands.iter()
-                .map(|c| (&c.word, c.spelling, sort_bucket(input, c)))
-                .collect::<Vec<_>>()
-        );
+        assert_bucket_layer_order(input, &cands, &seg, has_abbrev);
     }
 }
 
@@ -131,6 +174,8 @@ fn mixed_abbrev_targets_are_visible() {
     //   T1 修好召回后这三个词都进来了,按词频排序「你好」落到第 4。
     //   新上限 4 = 修理后实测位;这是**召回变全**的直接后果,不是排序退化
     //   (旧列表里的 你还/你和/你很 一个都没掉,只是前面多了两个更高频的)。
+    let has_abbrev = engine.dict.has_abbrev();
+    let seg = Segmenter::new();
     for (input, want, rank_ceiling) in [
         ("nih", "你好", 4usize),
         ("renm", "人们", 1usize),
@@ -159,17 +204,7 @@ fn mixed_abbrev_targets_are_visible() {
             SpellingKind::Abbrev,
             "{input} 的 {want} 应来自简拼层"
         );
-        let pair_keys: Vec<(usize, SpellingKind)> = cands
-            .iter()
-            .map(|c| (sort_bucket(input, c), c.spelling))
-            .collect();
-        assert!(
-            pair_keys.windows(2).all(|w| w[0] <= w[1]),
-            "{input} (u_min 桶, 层序) 应整体非降: {:?}",
-            cands.iter()
-                .map(|c| (&c.word, c.spelling, sort_bucket(input, c)))
-                .collect::<Vec<_>>()
-        );
+        assert_bucket_layer_order(input, &cands, &seg, has_abbrev);
     }
 }
 

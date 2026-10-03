@@ -296,15 +296,8 @@ impl ImeEngine {
         // 仍**受副索引约束**（`has_abbrev`）：副索引负责纯首字母简拼这条契约
         // 不能破（见 `engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`），
         // 即使简拼格本身只用主索引。
-        let pure_abbrev = self.dict.has_abbrev()
-            && !reachable
-            && pinyin.len() >= 2
-            && pinyin
-                .char_indices()
-                .all(|(i, c)| {
-                    c.is_ascii_alphabetic()
-                        && !segmenter::abbrev_syllables(&pinyin[i..i + 1]).is_empty()
-                });
+        let pure_abbrev =
+            !reachable && super::rank::pure_abbrev_input(pinyin, self.dict.has_abbrev());
         // 「已有整串读法」这条要**忽略原样回显**：纯缩写输入的解不了整串时，
         // 兜底先给的就是回显候选（`covered = 整串`、`echo = true`），
         // 它不算「已经有读法」，否则门槛永远挡住简拼格（实测 wsm/zgr/xxn/dbq/mgx
@@ -321,15 +314,8 @@ impl ImeEngine {
         // 收紧：要求**前两个字母都不能**构成音节。只看首字母会把「打错的正常输入」
         // 也算进来（`nihso` 的 `n` 不成音节，但它开头其实是正常的 `ni`），
         // 实测那样会让 `edits` 语料 MRR 0.728 → 0.680 退化。
-        let leading_abbrev = self.dict.has_abbrev()
-            && !reachable
-            && pinyin.len() >= 3
-            && self.segmenter.segment(&pinyin[..1]).is_empty()
-            && self.segmenter.segment(&pinyin[..2]).is_empty()
-            // `zh`/`ch`/`sh` 是**合法双字母声母**（`zhongguor` 的开头），
-            // 不是"开头即缩写"——不排除它们会把全拼输入也拉进这一支
-            // （实测 `zhongguor` 的「中国」被挤出前 10）。
-            && !matches!(&pinyin[..2], "zh" | "ch" | "sh");
+        let leading_abbrev = !reachable
+            && super::rank::leading_abbrev_input(&self.segmenter, pinyin, self.dict.has_abbrev());
         let needs_abbrev = !reachable
             && (pure_abbrev
                 || leading_abbrev

@@ -137,6 +137,76 @@ pub(super) fn plain_key(
 ///   那本来就是它们该在的位置。
 pub(super) const COVERAGE_PENALTY: f32 = 0.2;
 
+/// **同一个 `u_min` 桶内的层序语义**（排序第二键的唯一出处）。
+///
+/// 桶内合法次序是 `Exact` → `Fuzzy` → `Abbrev`（枚举声明序）。`Exact` 档还
+/// **收编**一类简拼候选：`Abbrev` 且 `freq > 0` 且覆盖整串，且输入属
+/// 「纯缩写 / 开头即缩写」两类（`entry_tier_exception`，判据见
+/// [`pure_abbrev_input`] / [`leading_abbrev_input`]）——这类读法的证据是
+/// **词条级**的（整串命中词库条目），与「上千条前缀简拼候选」的洪泛不是
+/// 一类，故与真精确候选同档按分数竞争；防洪泛仍靠 `ABBREV_QUOTA`（配额，
+/// 不是排序）。
+///
+/// ⇒ 推论（契约测试钉的就是它）：`Candidate::spelling`（原始来源）在同一桶内
+/// **允许且只允许一种交错**——被收编的整串条目级简拼排在 `Fuzzy` 之前。
+/// 旧断言直接比 `c.spelling`，隐含假设「两层在桶内不交错」；收编生效后该
+/// 假设不再成立，故判据改用本函数（⑤⑩②）。
+pub(super) fn effective_layer(
+    spelling: SpellingKind,
+    freq: u64,
+    covered: usize,
+    inp_len: usize,
+    entry_tier_exception: bool,
+) -> SpellingKind {
+    if entry_tier_exception
+        && spelling == SpellingKind::Abbrev
+        && freq > 0
+        && covered >= inp_len
+    {
+        SpellingKind::Exact
+    } else {
+        spelling
+    }
+}
+
+/// **层序收编的输入类别判据**「纯缩写」：每个字母都能起一个音节
+/// （`wsm`/`zgr`/`xxn`/`renm`）。
+///
+/// 与 `engine/lookup.rs` 的 `pure_abbrev` 同式，抽到这里是为了让排序与契约
+/// 测试用**同一份**判据——两份判据迟早漂移，而漂移的症状是「测试与实现
+/// 各说各话」。调用方保证 `!reachable`（判据只在「精确格解不出整串」的
+/// 分支里求值，见 `lookup.rs` 的 `needs_abbrev`）。
+///
+/// `has_abbrev` 这条约束不能省：副索引负责纯首字母简拼这条契约
+/// （见 `engine/tests/abbrev.rs::engine_without_abbrev_index_degrades_gracefully`），
+/// 即使简拼格本身只用主索引。
+pub(super) fn pure_abbrev_input(inp: &str, has_abbrev: bool) -> bool {
+    has_abbrev
+        && inp.len() >= 2
+        && inp.char_indices().all(|(i, c)| {
+            c.is_ascii_alphabetic() && !segmenter::abbrev_syllables(&inp[i..i + 1]).is_empty()
+        })
+}
+
+/// **层序收编的输入类别判据**「开头即缩写」：头 1、2 个字母都不是音节
+/// （`zmgai`/`wmjtqbj`）。
+///
+/// 收紧到「前两个字母都不能构成音节」是有实测依据的：只看首字母会把
+/// 「打错的正常输入」也算进来（`nihso` 的 `n` 不成音节，但它开头其实是
+/// 正常的 `ni`），实测那样会让 `edits` 语料 MRR 0.728 → 0.680 退化。
+/// `zh`/`ch`/`sh` 是**合法双字母声母**（`zhongguor` 的开头），不是「开头即
+/// 缩写」——不排除它们会把全拼输入也拉进这一支（实测 `zhongguor` 的「中国」
+/// 被挤出前 10）。
+///
+/// 调用方保证 `!reachable`，理由同 [`pure_abbrev_input`]。
+pub(super) fn leading_abbrev_input(seg: &Segmenter, inp: &str, has_abbrev: bool) -> bool {
+    has_abbrev
+        && inp.len() >= 3
+        && seg.segment(&inp[..1]).is_empty()
+        && seg.segment(&inp[..2]).is_empty()
+        && !matches!(&inp[..2], "zh" | "ch" | "sh")
+}
+
 /// 候选的完整排序键,供 [`sort_candidates`] 与 [`merge_with_abbrev`]
 /// 的配额位置换算共用(两处用同一个函数,键定义不可能漂移)。
 /// 各字段含义见 `sort_candidates` 函数内注释。分数字段包成
@@ -161,20 +231,7 @@ pub(super) fn sort_key<'a>(
         umin[cp_len]
     };
     let u_local = u.saturating_sub(u_min) as f32;
-    // **第二键的破例（按输入类别收窄）**：只有"纯缩写 / 开头即缩写"这两类输入
-    // （由 `lookup.rs` 用 Segmenter 判定后传进来）才把「整串命中词条的简拼读法」
-    // 按精确档比较——它的证据是词条级的（freq>0 且覆盖整串），与"上千条前缀简拼
-    // 候选"的洪泛不是一类（防洪泛仍靠配额）。其余输入一律走原层序（⑤⑧② 附录二：
-    // 任何"只看候选"的判据都区分不出输入类别，实测会打坏 abbrev_quota 与全拼首页）。
-    let layer = if entry_tier_exception
-        && c.spelling == SpellingKind::Abbrev
-        && c.freq > 0
-        && c.covered >= inp.len()
-    {
-        SpellingKind::Exact
-    } else {
-        c.spelling
-    };
+    let layer = effective_layer(c.spelling, c.freq, c.covered, inp.len(), entry_tier_exception);
     SortKey {
         bucket: u_min,
         spelling: layer,
