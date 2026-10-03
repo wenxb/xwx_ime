@@ -268,3 +268,14 @@ womashangdao→我马上到、jintiantianqizenmeyang→今天天气怎么样、n
 nihaoshijie→你好世界（daily MRR 0.958→1.000）。v1 对拍 44 输入 **0 变化**；
 chuzaina→出在哪、shanghaai→上海、wmjtqbj/womenjtqbj 不变。钉子用例
 engine/tests/projection_filler.rs。
+
+## perf 复核（2026-10-03 15:51，load average 17.55）
+
+投影层改动（填充档按词串口径比）新增的词串 LM 计算**不改变稳态**：
+同条件交替两份二进制（改动前 = 尾补全那版 `perf_before_completion`，
+改动后 = 当前）实测
+- 改动前：full 12.65/14.23/18.86 · mixed 14.46/16.98/17.96
+- 改动后：full 14.19/14.06/12.86 · mixed 12.46/12.75/12.33
+
+两版落在同一区间、无可区分差异；12ms 线在本机 load 12~18 时对**两版都**不可达
+（既有记录同此结论），判定 perf 时一律用同条件 A/B，不看单次绝对值。
