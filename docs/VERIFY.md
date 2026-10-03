@@ -243,7 +243,7 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 
 | 门槛 | 状态 |
 |---|---|
-| `cargo test --workspace` | 单元 **325 passed / 0 failed / 0 ignored** ✓ |
+| `cargo test --workspace` | 单元 **327 passed / 0 failed / 0 ignored** ✓ |
 | clippy `-D warnings` | **0** ✓ |
 | 单文件 ≤600 行 | 全部达标 ✓ |
 | v1 对拍 | 9/44 输入内容变化、**2 个首位变化**（均已点名）✓ |
@@ -260,3 +260,11 @@ v1 对拍 44 个输入 **0 行差异**；`tests/corpora/edits.jsonl` 召回 6/6�
 
 `nihaobeijin`→你好北京、`womenjintianqugongyua`→我们今天去公园 从「不可召回」变成首位；
 v1 对拍 44 输入 **0 行差异**；keystrokes 语料召回 10/12→12/12。
+
+## 已知有意差异（2026-10-03 投影层填充档判断）
+
+填充档（freq<=100）的**真短语**不再被组合候选挤掉：zaodianxiuxi→早点休息、
+womashangdao→我马上到、jintiantianqizenmeyang→今天天气怎么样、nizaiganshenme→你在干什么、
+nihaoshijie→你好世界（daily MRR 0.958→1.000）。v1 对拍 44 输入 **0 变化**；
+chuzaina→出在哪、shanghaai→上海、wmjtqbj/womenjtqbj 不变。钉子用例
+engine/tests/projection_filler.rs。

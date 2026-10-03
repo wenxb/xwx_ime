@@ -2584,5 +2584,4 @@ LM 的「无证据基线分」按词复付（每个词各付一次 -11.605767）
 | mixed / keystrokes / edits | 13/14 · 12/12 · 6/6 | 不变（0.929 / 0.877 / 0.728） |
 | clippy · 测试 · v1 对拍 | — | 0 · **399 passed / 0 failed** · **44 输入 0 变化** |
 
-**待办（下一步先做）**：给这 5 条补钉子用例（`engine/tests/` 里按 `tail_completion.rs`
-的写法），本轮为了控制改动面没加。
+钉子用例已补：`crates/xwx_engine/src/engine/tests/projection_filler.rs`（两组：填充档真短语守住首位／该换位的仍换位）。

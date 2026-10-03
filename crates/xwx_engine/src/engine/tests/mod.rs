@@ -35,6 +35,7 @@ mod dag_reachability;
 mod typo_budget;
 mod typo_repeat;
 mod tail_completion;
+mod projection_filler;
 mod quota;
 mod recall;
 mod sentence_gate;
