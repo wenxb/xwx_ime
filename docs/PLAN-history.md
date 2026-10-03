@@ -1096,3 +1096,9 @@ if ctx_tail.is_empty() { return best; }   // 与候选词无关的常数
   abbrev 规则并存);引擎侧缩写弧同时支持 2 字母窗口。
 - 效果:`shh`→时候、`zhh`→只会、`chh`→策划、`shhzh`→生活中;`zgr`/`wsm`/`zmgai` 不变。
 - 代价(已点名):v1 对拍 137 行,构成为长表尾部漂移 + 原串回显变整串读法。
+
+## 十六、拆分 lattice.rs 与热路径内联（2026-10-03）
+
+- `engine/lattice.rs`(845) → `lattice.rs`(389) + `lattice/build.rs`(465)，满足单文件 ≤600 行。
+- 搬运后对拍 0 行但 perf 破线（11.2 → 13.7ms，混合简拼长串）；加 `#[inline]` 回 11.5ms。
+- 结论：热路径文件拆分后必须跑 `perf_probe`；纯搬运不等于零风险。

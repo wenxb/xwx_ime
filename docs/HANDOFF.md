@@ -1636,3 +1636,17 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - **坑(实测踩到并修)**:快照里存**页内**下标会漏掉翻页——第 1→2 页时页内 cursor
   都是 0,显示的页却变了,必须重发。改存**全局** cursor 后 3 条翻页用例回绿。
 - **门槛**:`cargo test --workspace` 全绿、clippy `-D warnings` 0 告警。
+
+## ㉙ 拆分超行文件 + 热路径内联（单文件 ≤600 行）
+
+- **规则**：AGENTS.md 要求单文件不超过 600 行。`crates/xwx_engine/src/engine/lattice.rs`
+  845 行 → `lattice.rs`(389) + `lattice/build.rs`(465)，纯搬运：父模块留边界判定 /
+  可达性 / 后向 DP / 回显 / 覆盖回填；子模块装 `build_lattice`、`build_tolerant_lattice`、
+  `build_abbrev_lattice`、`build_lattice_flags` 与链枚举 DFS `collect_chain_edges`。
+  方法仍挂在同一个 `ImeEngine` 上，跨模块可见性用 `pub(in crate::engine)`。
+- **坑（实测踩到）**：搬完对拍 **0 行**、clippy 0，但 `perf_probe` 的
+  `mixed:womenjintqubeij` p95 从 11.2ms 涨到 **13.1~13.7ms**（空载两次复现，破门槛）——
+  热方法换模块后**跨模块内联没了**。给 `collect_chain_edges` / `build_lattice_flags` /
+  `window_covers_stall` 加 `#[inline]` 后回到 **11.5ms** 通过。
+- **教训**：拆分热路径文件必须用 `perf_probe` 复测；「对拍零差异」只能证明**行为**没变，
+  证明不了**性能**没变。
