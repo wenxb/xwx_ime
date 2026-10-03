@@ -1752,3 +1752,13 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   人为篡改魔数与区段起点都被 `_validate` 拦下。
 - **待做**：`scripts/dict_to_bin.py` 套用同一套（下一轮）；读取端的 checked 偏移
   与头部区段校验（Rust 侧）仍未做。
+
+## ㊲ Q4 第三步：`dict_to_bin.py` 套用同一套加固
+
+- 新增与 `abbrev_to_bin.py` 同判据的 `_validate`（头部自洽、区段顺序/范围、
+  记录越界、**拼音 key 严格升序**）与 `_write_atomically`（自检 → 同目录 `.tmp`
+  → `os.replace`）。
+- 「输入=输出」检查**提前到 `main()` 解析之前**：等写完再查就晚了（源文件已被截断）。
+  这一条也让它可独立演示——本脚本的源是 sqlite3（仓库里没有），无法端到端跑。
+- **实测**：现有 `data/dict.bin`（76 MB）**通过自检**（说明判据与真实格式一致）；
+  人为篡改魔数被拦下；`data/dict.bin data/dict.bin` 被提前拒绝。

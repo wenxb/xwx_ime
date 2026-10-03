@@ -22,9 +22,57 @@ RECORD_LEN = 12  # u32 str_off + u16 str_len + u32 ent_off + u16 ent_len
 FREQ_MAX = 0xFFFFFFFF  # u32 上限，超出截断（真实词频远达不到）
 
 
+def _validate(blob):
+    """写出后自检：头部自洽、区段顺序与范围、记录数组越界、拼音 key 严格升序。
+
+    与 `abbrev_to_bin.py` 同一套判据——读取端（Rust）拿到坏文件只会静默降级，
+    所以产物必须在**构建这一侧**先自证。
+    """
+    magic, version, n_keys, _total, rec_off, str_off, ent_off = struct.unpack_from(
+        "<8sIQQQQQ", blob, 0
+    )
+    if magic != MAGIC or version != VERSION:
+        raise SystemExit("产物魔数/版本不符")
+    if not (HEADER_LEN <= rec_off <= str_off <= ent_off <= len(blob)):
+        raise SystemExit(
+            f"区段顺序/范围不合法: rec={rec_off} str={str_off} ent={ent_off} len={len(blob)}"
+        )
+    if rec_off + n_keys * RECORD_LEN > str_off:
+        raise SystemExit("记录数组越界")
+    prev = None
+    for i in range(n_keys):
+        o, sl, eo, el = struct.unpack_from("<IHIH", blob, rec_off + i * RECORD_LEN)
+        if str_off + o + sl > ent_off or ent_off + eo + el > len(blob):
+            raise SystemExit(f"第 {i} 条记录越界")
+        key = blob[str_off + o: str_off + o + sl]
+        if prev is not None and key <= prev:
+            raise SystemExit(f"拼音 key 未严格升序: {prev!r} → {key!r}")
+        prev = key
+
+
+def _write_atomically(src, dst, blob):
+    """校验后原子替换（Q4）：拒绝「输入=输出」，先写同目录 `.tmp`，自检通过再 replace。
+
+    直接覆盖目的文件：构建失败或中途被杀会留下半文件，正在 mmap 这张表的进程
+    会读到残缺数据。
+    """
+    if os.path.abspath(src) == os.path.abspath(dst):
+        raise SystemExit(f"输入与输出是同一个文件: {dst}（会先截断源文件，拒绝）")
+    if len(blob) < HEADER_LEN:
+        raise SystemExit("产物过短，拒绝写出")
+    _validate(blob)
+    tmp = dst + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(blob)
+    os.replace(tmp, dst)
+
+
 def main() -> None:
     src = sys.argv[1] if len(sys.argv) > 1 else "data/dict.sqlite3"
     dst = sys.argv[2] if len(sys.argv) > 2 else "data/dict.bin"
+    # 「输入=输出」在**解析之前**就拒绝：等写完再查就晚了（源文件已被截断）。
+    if os.path.abspath(src) == os.path.abspath(dst):
+        raise SystemExit(f"输入与输出是同一个文件: {dst}（会先截断源文件，拒绝）")
 
     print(f"读取词库: {src}")
     # 只读打开，转换过程不动原库
@@ -74,11 +122,7 @@ def main() -> None:
     assert len(header) == HEADER_LEN, "头部布局与 Rust 端不一致"
 
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    with open(dst, "wb") as f:
-        f.write(header)
-        f.write(records)
-        f.write(strings)
-        f.write(entries)
+    _write_atomically(src, dst, header + records + strings + entries)
     print(f"已写出: {dst}（{os.path.getsize(dst) / 1024 / 1024:.1f} MB）")
 
 
