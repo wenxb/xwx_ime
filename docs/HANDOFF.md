@@ -2653,3 +2653,19 @@ LM 的「无证据基线分」按词复付（每个词各付一次 -11.605767）
 - 格子路径的简拼候选覆盖整串（`covered = len`），而旧通道的 `lookup_mixed` 前缀混拼
   读法带真实覆盖 ⇒ 切换时要保留 `covered` 的语义（分段上屏依赖它）；
 - 纯缩写输入没有 `'` 边界，`bounds` 分支一次都不进，与旧通道一致。
+
+### ⑤㉚ 附：第 1 步已执行（2026-10-03）
+
+- **纯缩写清单**（20 条）与候选基线已存档：`/tmp/xwx/abbrev_inputs.txt`、
+  `/tmp/xwx/probe_abbrev_before.txt`（180 行）。
+  清单：wmjtqbj zmgai ztai ztailan wsm zgr yij smsh nhma xxn dbq mgx srkl xnkl
+  gxfc zyaq gzsl jttqzenmy zgdsq nzgsm。
+- **建格成本实测**（XWX_TRACE=1 的耗时行）：只有 `wmjtqbj` **今天就在建简拼格**
+  （建精确格 0.021ms + 建简拼格 **6.167ms**），其余 19 条只建精确格
+  （0.003~0.385ms，`nhma` 0.309ms、`zmgai` 0.385ms 是最贵的两条）。
+- ⇒ 两条对第 2 步的关键结论：
+  1. 纯缩写输入**本来就有一部分走了格子路径**（整句层在 `reachable && len >=
+     MIN_ABBREV_INPUT_LEN` 时建简拼格），把候选通道也切到格子上**不会凭空多付**
+     这份成本，只是复用；
+  2. 但长串（`wmjtqbj` 7 字母、`jttqzenmy` 9 字母）的简拼格成本已经是 6ms 量级，
+     切换时必须带预算、且**先量后切**——这正是施工图第 2 步的验收项之一。
