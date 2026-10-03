@@ -320,11 +320,21 @@ impl ImeEngine {
         // 实测那样会让 `edits` 语料 MRR 0.728 → 0.680 退化。
         let leading_abbrev = !reachable
             && super::rank::leading_abbrev_input(&self.segmenter, pinyin, self.dict.has_abbrev());
+        // **第三类还要求「首音节合法」**：类语义是「首音节合法 + 尾部残缺」
+        // （`nih` = `ni`+`h`、`meiy` = `me`+`y`）。没有这道闸，长度下限一放到
+        // 3，`zgr` 这类纯首字母串（无任何合法音节开头）也会混进来——无副索引
+        // 时它们本该优雅退化成回声（engine_without_abbrev_index 契约）。
+        // 判据与 leading_abbrev_input 的结构检查同源：前 1 或 2 个字母能切出
+        // 音节才算「首音节合法」。
+        let tail_class_head_is_syllable = !pinyin.is_empty()
+            && (!self.segmenter.segment(&pinyin[..1]).is_empty()
+                || (pinyin.len() >= 2 && !self.segmenter.segment(&pinyin[..2]).is_empty()));
         let needs_abbrev = !reachable
             && (pure_abbrev
                 || leading_abbrev
-                || ((!tolerant_explains || self.ends_one_letter_short(pinyin))
-                    && pinyin.len() >= MIN_ABBREV_INPUT_LEN))
+                || (tail_class_head_is_syllable
+                    && (!tolerant_explains || self.ends_one_letter_short(pinyin))
+                    && pinyin.len() >= MIN_ABBREV_TAIL_CLASS_LEN))
             && if pure_abbrev || leading_abbrev {
                 // **只看精确路**是否已经解释整串。不能把容错层(Fuzzy)的整串读法
                 // 也算进来：`ztai` 的「摘」(Fuzzy, covered=4) 会因此让

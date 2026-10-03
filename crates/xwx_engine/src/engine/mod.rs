@@ -255,6 +255,11 @@ const MIN_TOLERANT_INPUT_LEN: usize = 4;
 /// 「用最不靠谱的读法吃掉整个预算」——与容错门槛⓪同一条理由。目标形态
 /// (`zmgai` 5 个字母、`wmjtqbj` 7 个)都在门槛之上。
 const MIN_ABBREV_INPUT_LEN: usize = 4;
+/// 第三类（首音节合法 + 尾部残缺，`nih` = `ni`+`h`）自己的长度下限。
+/// 与整句 beam 的 [`MIN_ABBREV_INPUT_LEN`] 分开：整句要「≥2 音节」的语义，
+/// 3 字母的 `nih` 不该拿到整句候选；而第三类 3 = 双字母音节 + 1 个残缺尾
+/// 字母，与纯缩写类的 ≥2 同一逻辑量级（⑤⑩⑮：通道删除的迁入前置之一）。
+const MIN_ABBREV_TAIL_CLASS_LEN: usize = 3;
 
 /// 整串读法一次交几条候选（n-best）。
 const ABBREV_CHAIN_NBEST: usize = 4;
