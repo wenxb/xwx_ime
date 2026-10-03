@@ -1713,3 +1713,17 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   结果既无效果又写出判别力不成立、还差点采信假 red 的用例。
 - **后续**：等并列卡 `t-murt2eic-k3oz8w`（系统性打字测试）产出更广的输入清单，
   用它复扫；届时若出现显形案例再改（设计见 `docs/recall-hit.md` 第 ③ 步）。
+
+## ㉞ Q3 第一步：必需数据验收（缺数据必须红）
+
+- **问题**：`dict/tests.rs`、`engine/tests/personalization.rs`、`wanxiang/tests.rs` 在
+  数据缺失时 `return` 算绿——这让没有大数据的机器能跑快速测试，代价是**正式验收
+  也一起绿了**（Q3 原文）。
+- **做法**：新增 `tests/required_data.rs`，不做任何存在性跳过：先断言
+  `data/dict.bin`、`data/abbrev.bin` 存在，再真的加载（裸 `MmapDict::open` 不该挂
+  副索引、`with_abbrev` 后 `has_abbrev` 为真），最后跑一次真实简拼查询
+  （`zgr` 必须命中「中国人」）——**文件在但内容坏**也会红。
+- **实测双向**：数据齐 ⇒ 绿；把 `data/abbrev.bin` 挪走 ⇒ 红（提示生成脚本）。
+- 注：根级集成测试的 `CARGO_MANIFEST_DIR` 是**仓库根**，路径就是 `data/`（不用 `../../`）。
+- Q3 剩下三件（`eval_rank` 显式选生产同款装配、独立固定的日常/混拼/逐键编辑集、
+  指标补召回与 MRR 等）尚未做，需要先定验收阈值。
