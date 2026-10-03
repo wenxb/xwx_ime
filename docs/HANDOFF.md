@@ -2687,3 +2687,40 @@ LM 的「无证据基线分」按词复付（每个词各付一次 -11.605767）
 不是简拼层那种单词条候选。所以第 2 步要改成：
 **先让格子对纯缩写路径产出候选（与简拼层同形的 `Abbrev` 候选），再谈替换**；
 替换前必须用这 20 条逐条点名，并保留旧通道作回退点。
+
+### ⑤㉚ 附：第 2 步的实现规格（「同形 Abbrev 候选」，可直接施工）
+
+**已定位的现状**（`engine/lookup.rs` 的行号是当前 HEAD 的）：
+
+- 主路径只有两条分支（`lookup.rs:118-127`）：
+  `reachable` → `lattice_candidates`（格边候选）；否则 → `fallback_candidates`（边打字边联想）。
+- 简拼候选另走一条独立通道（`lookup.rs:134-144` → `lattice.rs::abbrev_candidates`），
+  它是纯缩写输入**目前唯一**的候选来源（第 2 步前置实验：关掉它 20 条只剩 2 条正确）。
+- 简拼格本身已经在建：整句层在 `reachable && len >= MIN_ABBREV_INPUT_LEN` 时
+  用 `best_chain_candidates(..., sentence_lattice, ...)`（`lookup.rs:342-348`）产出**整句候选**
+  （`Exact`），不是简拼层要的单词条候选（`Abbrev`）。
+- 对 `wsm`/`zgr`/`xxn`/`dbq`/`mgx` 这类 **`reachable == false`** 的纯缩写输入，
+  连简拼格都不会建 ⇒ 这就是它们只剩输入回声的原因。
+
+**规格**（新增一条通道，旧通道保留）：
+
+1. 判定「纯缩写输入」：`!reachable` 且输入的每个字母窗口都可作为简拼弧消费
+   （即 `collect_chain_edges(abbrev = true)` 能从 0 走到串尾）。判定成本低：
+   直接在 abbrev 模式下建格时**顺带**得到「格子是否覆盖整串」。
+2. 建格：对这类输入**无条件**建简拼格（不受 `reachable` 限制），
+   即把 `lookup.rs:342` 那条 `reachable && len >= MIN_ABBREV_INPUT_LEN` 的门槛
+   放宽成「纯缩写输入也建」——**只对这一类放宽**，其余输入行为逐字节不变。
+3. 抽候选：遍历格上的边，把**终点可达串尾**的路径末词/整词取出来，
+   标 `SpellingKind::Abbrev`、`covered = pinyin.len()`（纯缩写覆盖整串，
+   与旧通道一致），分数用 `decode.rs` 的边分公式累加（与整串候选同源）。
+4. 回退点：新通道由常量开关控制，默认走新路、可一键切回 `abbrev_candidates`；
+   两者产出的候选在 (word, pinyin) 上取并集去重，层序仍由 `merge_with_abbrev` 定。
+5. 验收（缺一不可）：20 条纯缩写清单**逐条点名**（基线在
+   `/tmp/xwx/probe_abbrev_before.txt`）；四套语料不得低于当前值
+   （daily 12/12·1.000、mixed 13/14·0.929、keystrokes 12/12·0.877、edits 6/6·0.728）；
+   ztai/ztailan/wmjtqbj/womenjtqbj/zmgai/zguor 不退化；perf 同条件 A/B 不可区分
+   （注意 `wmjtqbj` 的简拼格已是 6.167ms，长串要量）；clippy 0；对拍 44 输入 0 变化
+   （非纯缩写部分）。
+
+**为什么这仍是阶段 3 的正路**：它把「纯缩写输入」这一类从旧通道整层切到格子路径，
+同时保留旧通道作回退点——切换做完、验收过后，`lookup_abbrev` 才谈得上进入阶段 5 的删除清单。
