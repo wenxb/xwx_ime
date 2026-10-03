@@ -389,7 +389,7 @@ impl ImeEngine {
             }
             ranked = ordered_candidates(best_by_word);
         }
-        sort_candidates(pinyin, &mut ranked);
+        sort_candidates(pinyin, &mut ranked, false);
         ranked.truncate(MAX_CANDIDATES);
         Ok(ranked)
     }

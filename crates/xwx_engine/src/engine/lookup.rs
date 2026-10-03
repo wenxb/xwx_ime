@@ -347,6 +347,9 @@ impl ImeEngine {
             )
         });
         if needs_abbrev {
+            // **按输入类别收窄的层序破例标志**（⑤⑧②）：只有这两类输入让
+            // "整串命中词条的简拼读法"按精确档参与层序比较。
+            let entry_tier_exception = pure_abbrev || leading_abbrev;
             let abbrev_lattice = super::trace::timed("建简拼格", || {
                 self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref())
             })?;
@@ -394,7 +397,7 @@ impl ImeEngine {
             }
             {
                 {
-                    sort_candidates(pinyin, &mut ranked);
+                    sort_candidates(pinyin, &mut ranked, entry_tier_exception);
                     ranked.truncate(MAX_CANDIDATES);
                     // **整串候选置顶**(上游同构,不是调参):libime 的 n-best
                     // 整句候选占候选表 index 0..n-1,librime 的整句候选在它
@@ -455,7 +458,7 @@ impl ImeEngine {
                     ranked.push(c);
                 }
             }
-            sort_candidates(pinyin, &mut ranked);
+            sort_candidates(pinyin, &mut ranked, false);
             ranked.truncate(MAX_CANDIDATES);
             // **整句进流内首位，但只在没有「可靠整串词条」时**：覆盖整串的词条
             // 若全是源数据最低档（`FILLER_FREQ_TIER`）就说明这一串在词库里没有

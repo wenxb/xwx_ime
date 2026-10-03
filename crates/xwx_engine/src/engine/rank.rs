@@ -11,7 +11,7 @@ pub(super) fn ordered_candidates<K>(
     v
 }
 
-pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
+pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate], entry_tier_exception: bool) {
     // 排序键 = (u_min 桶, 拼写来源层序, 分数 − 覆盖罚分, 频次降序, ...):
     //
     // **首键「u_min 桶」**:候选终点位置 `pos = cp.len()` 处的「不可
@@ -58,7 +58,7 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate]) {
     // `clone_from_slice` 写回,一次排序克隆两遍整个候选表(`Candidate` 带
     // 三个 `String`,500 条 ≈ 1500 次分配)。改成「键 + 下标」后按下标置换
     // 就地交换,零克隆——省的是分配,不是毫秒(与 `score_only` 同一结论)。
-    let keys: Vec<PlainKey> = ranked.iter().map(|c| plain_key(inp, &umin, c)).collect();
+    let keys: Vec<PlainKey> = ranked.iter().map(|c| plain_key(inp, &umin, c, entry_tier_exception)).collect();
     let mut order: Vec<usize> = (0..ranked.len()).collect();
     order.sort_by(|&a, &b| {
         keys[a].cmp(&keys[b]).then_with(|| {
@@ -104,8 +104,13 @@ pub(super) struct PlainKey {
 }
 
 /// 从候选算出数值排序键(与 `sort_key` 的前三键同式)。
-pub(super) fn plain_key(inp: &str, umin: &[usize], c: &Candidate) -> PlainKey {
-    let k = sort_key(inp, umin, c);
+pub(super) fn plain_key(
+    inp: &str,
+    umin: &[usize],
+    c: &Candidate,
+    entry_tier_exception: bool,
+) -> PlainKey {
+    let k = sort_key(inp, umin, c, entry_tier_exception);
     PlainKey {
         bucket: k.bucket,
         spelling: k.spelling,
@@ -139,7 +144,12 @@ pub(super) const COVERAGE_PENALTY: f32 = 0.2;
 /// `b.score.partial_cmp(&a.score)` 等价;引擎分数域不会出现 NaN
 /// (打分是 log10(正数) 的加权和),NaN 在 [`ScoreDesc`] 里钳到最末,
 /// 与旧实现 `unwrap_or(Ordering::Equal)` 的兜底最接近。
-pub(super) fn sort_key<'a>(inp: &str, umin: &[usize], c: &'a Candidate) -> SortKey<'a> {
+pub(super) fn sort_key<'a>(
+    inp: &str,
+    umin: &[usize],
+    c: &'a Candidate,
+    entry_tier_exception: bool,
+) -> SortKey<'a> {
     let u = unexplained_letters(inp, c);
     // u_min(终点处的不可避免未解释数):补全词(cp 比输入长)必以
     // 输入开头(u=0),桶恒 0;简拼层构造上覆盖整串,恒 0;只覆盖
@@ -151,9 +161,23 @@ pub(super) fn sort_key<'a>(inp: &str, umin: &[usize], c: &'a Candidate) -> SortK
         umin[cp_len]
     };
     let u_local = u.saturating_sub(u_min) as f32;
+    // **第二键的破例（按输入类别收窄）**：只有"纯缩写 / 开头即缩写"这两类输入
+    // （由 `lookup.rs` 用 Segmenter 判定后传进来）才把「整串命中词条的简拼读法」
+    // 按精确档比较——它的证据是词条级的（freq>0 且覆盖整串），与"上千条前缀简拼
+    // 候选"的洪泛不是一类（防洪泛仍靠配额）。其余输入一律走原层序（⑤⑧② 附录二：
+    // 任何"只看候选"的判据都区分不出输入类别，实测会打坏 abbrev_quota 与全拼首页）。
+    let layer = if entry_tier_exception
+        && c.spelling == SpellingKind::Abbrev
+        && c.freq > 0
+        && c.covered >= inp.len()
+    {
+        SpellingKind::Exact
+    } else {
+        c.spelling
+    };
     SortKey {
         bucket: u_min,
-        spelling: c.spelling,
+        spelling: layer,
         score: ScoreDesc(c.score - COVERAGE_PENALTY * u_local),
         freq: std::cmp::Reverse(c.freq),
         word: c.word.as_str(),
@@ -350,8 +374,8 @@ pub(super) fn merge_layer(
     let (mut tail, mut head): (Vec<Candidate>, Vec<Candidate>) = ranked
         .into_iter()
         .partition(|c| c.spelling == layer);
-    sort_candidates(inp, &mut head);
-    sort_candidates(inp, &mut tail);
+    sort_candidates(inp, &mut head, false);
+    sort_candidates(inp, &mut tail, false);
     if total > MAX_CANDIDATES {
         // 只有总条数超上限才需要截断。配额是「保底名额」而非「简拼层
         // 封顶」:简拼层取「剩余空位」与配额中较大的那个——
@@ -370,7 +394,7 @@ pub(super) fn merge_layer(
     head.extend(tail);
     // 拼接后整体重排:让排序首键(u_min 桶)跨层生效(见函数级
     // 注释)。sort_by 是稳定排序,重排不改变同键候选的相对次序。
-    sort_candidates(inp, &mut head);
+    sort_candidates(inp, &mut head, false);
     (total, head)
 }
 

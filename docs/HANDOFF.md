@@ -4020,3 +4020,31 @@ v1 对拍 44 输入 **0 变化**；clippy **0**；`--no-fail-fast` **401 passed 
 - `covered >= inp.len()`：链候选构造上就成立，无区分力；
 - `freq > 0`：全拼输入的简拼层候选也有 `freq > 0`（条目级），无区分力；
 - `cp_len > inp.len()`：全拼输入也有展开型简拼候选，无区分力（本轮实测）。
+
+## ⑤⑧③ **阶段 4 核心落地**：层序破例**按输入类别收窄**（全部门槛通过）
+
+**实现**（按 ⑤⑧② 附录一的方案 1）：
+- `lookup.rs` 的简拼分支里算出 `let entry_tier_exception = pure_abbrev || leading_abbrev;`
+  （用的是 ⑤⑥⑥ 的轻量版判据，那里有 `Segmenter`）；
+- `rank.rs`：`sort_candidates(inp, ranked, entry_tier_exception: bool)` 与
+  `sort_key(..., bool)`、`plain_key(..., bool)` 都接上这个标志；
+  `sort_key` 的第二键在 `entry_tier_exception && spelling == Abbrev && freq > 0 && covered >= inp.len()`
+  时把候选按**精确档**参与层序比较；**其余调用点一律传 `false`**（`decode.rs` 及 rank 内部）。
+
+**实测（全绿）**：
+
+| 检查 | 结果 |
+|---|---|
+| 单元测试（`cargo test -p xwx_engine`） | **327 passed / 0 failed**（⑤⑧② 破的那三个契约全部恢复） |
+| 全量（`--no-fail-fast`） | **401 passed / 0 failed** |
+| clippy | **0** |
+| v1 对拍 44 输入 | **0 变化** |
+| 四套语料（开关 `false`，默认） | daily 1.000 · mixed 0.929 · keystrokes 0.877 · edits 0.728（**全在基线**） |
+| 开关 `true`（格子独立供给） | 首位正确 **15/20**、正确读法在候选表里 **20/20** |
+
+⇒ 至此：**召回缺口为 0**（20/20），首位还差 5 条（`zmgai` #2、`ztai` #3、`smsh` #3、`xxn` #8、`dbq` #4）。
+
+**下一步**：
+1. 收那 5 条的排序（同一套层序/配额口径，逐条点名，每次一笔）；
+2. 首位接近 20/20 后，把开关**按类**置 `true`（真正进入"逐类切换"），
+   再评估阶段 5（删旧通道语义）——那时旧通道才有对象可删。
