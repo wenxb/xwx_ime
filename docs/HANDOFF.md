@@ -5049,3 +5049,20 @@ sh  #0 所 −3.3349 Abbrev      #1 三 −3.4442 Abbrev      #2 色 −3.5846 A
 **解锁顺序（下一轮）**：先做 ⑤⑩⑥ (2/2) 的两件事（放宽 `lookup_abbrev` 的 500 条早停 →
 折叠变体的拼音校验），把 (a)/(b) 两类纳入降级范围并单独验收，再谈删语义。
 删之前还要保证**默认配置（不设任何环境变量/开关）无退化**（阶段 5 的原口径）。
+
+## ⑤⑩⑧ 仓库卫生：两条漏网的未跟踪产物加进 `.gitignore`
+
+`git status` 一直挂着两个未跟踪项，同类产物其实都已忽略，只有这两条漏了：
+
+- **`data/syllable_graph.bin`（62,020,673 字节 ≈ 59 MB）** —— `scripts/build_syllable_graph.py`
+  从 `dict.bin` 生成的音节级转移索引。`data/dict.bin`、`data/abbrev.bin`、
+  `data/*.sqlite3`、`scripts/eval_samples.jsonl` 都在 `.gitignore` 里，只有它没有。
+  引擎缺它时**自动回退**到逐音节二分（`da72f89` 的「索引缺失自动回退」），所以不进 git
+  是正确处置，由发布物 / 本机重新生成。
+- **`.playwright-mcp/`** —— Playwright MCP 的会话产物（截图/页面快照），与仓库无关。
+
+**顺带发现（未修）**：`scripts/build_syllable_graph.py` 的文档字符串写着
+「布局（小端，见 `data/README.md`「syllable_graph.bin 二进制格式」）」，但
+`data/README.md` 里**没有**这一节（`grep -i syllable data/README.md` 无命中）。
+⇒ 格式说明只有脚本注释一处，读者按 README 找不到。要么把该节补进 `data/README.md`，
+要么改掉脚本里的指引。

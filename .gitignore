@@ -8,6 +8,10 @@ data/dict.bin
 # 简拼(首字母)副索引:scripts/abbrev_to_bin.py 从 dict.bin 生成(约 69 MB),
 # 与 dict.bin 同等对待,通过 `just install` / 发布物分发,不进 git。
 data/abbrev.bin
+# 音节级词典转移索引:scripts/build_syllable_graph.py 从 dict.bin 生成(约 59 MB),
+# 与 dict.bin/abbrev.bin 同等对待;引擎缺它时**自动回退**到逐音节二分(不是错误),
+# 所以同样不进 git,由发布物 / 本机重新生成。
+data/syllable_graph.bin
 data/*.sqlite3
 
 # 语言模型（文本或未来的 mmap 二进制格式），由语料训练生成
@@ -31,6 +35,8 @@ scripts/eval_samples.jsonl
 *.swo
 *~
 .DS_Store
+# Playwright MCP 的会话产物(截图/页面快照),与仓库无关。
+.playwright-mcp/
 # ---- rime oracle (对照工具) ----
 tools/rime_oracle/.rime_user/
 tools/rime_oracle/rime_oracle
