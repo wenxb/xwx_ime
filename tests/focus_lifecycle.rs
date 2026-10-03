@@ -138,15 +138,23 @@ fn focus_in_and_enable_are_noops_that_preserve_a_live_composition() {
     let h = &mut Harness::new("focus-in-enable");
     h.start_engine(shared_fixture());
 
-    // Idle: no signals at all.
+    // 空闲时 FocusIn 什么都不发；Enable 只注册中/英属性表（唯一的例外）。
     h.clear_backlog();
     h.focus_in().expect("FocusIn 必须成功返回");
-    h.enable().expect("Enable 必须成功返回");
     let sigs = h.settle(Duration::from_millis(250), Duration::from_secs(2));
     assert!(
         sigs.is_empty(),
-        "空闲时 FocusIn/Enable 不得发信号。实际: {:?}",
+        "空闲时 FocusIn 不得发信号。实际: {:?}",
         support::member_names(&sigs)
+    );
+
+    h.clear_backlog();
+    h.enable().expect("Enable 必须成功返回");
+    let sigs = h.settle(Duration::from_millis(250), Duration::from_secs(2));
+    let names = support::member_names(&sigs);
+    assert!(
+        names.len() == 1 && names[0] == "RegisterProperties",
+        "空闲时 Enable 只该把中/英属性注册给面板，不该发别的信号。实际: {names:?}"
     );
 
     // Composing: the composition must survive FocusIn (it is not FocusOut).

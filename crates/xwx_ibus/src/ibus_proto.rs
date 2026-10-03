@@ -245,6 +245,82 @@ pub fn ibus_lookup_table(
     .try_into()?)
 }
 
+/// IBusPropType（`ibusproperty.h`）：本输入法只用 TOGGLE。
+pub const IBUS_PROP_TYPE_TOGGLE: u32 = 1;
+/// IBusPropState（`ibusproperty.h`）：未选中 / 选中。
+pub const IBUS_PROP_STATE_UNCHECKED: u32 = 0;
+pub const IBUS_PROP_STATE_CHECKED: u32 = 1;
+/// 中/英模式属性的 key：面板点击后按这个名字回调 `PropertyActivate`。
+pub const PROP_KEY_MODE: &str = "InputMode";
+
+/// 空的 IBusPropList（叶子属性的 `sub_props` 字段不能省）。
+fn empty_prop_list_value() -> Value<'static> {
+    Value::from(Structure::from((
+        "IBusPropList",
+        empty_props(),
+        Vec::<Value<'static>>::new(),
+    )))
+}
+
+/// 构造一个 IBusProperty（不透明值，供 `UpdateProperty` 与属性表复用）。
+///
+/// 字段顺序照 ibus 1.5.29 的 `ibus_property_serialize` 逐条对齐：
+/// `("IBusProperty", a{sv}, s:key, u:type, v:label, s:icon, v:tooltip,
+///   b:sensitive, b:visible, u:state, v:sub_props, v:symbol)`
+/// ⇒ 类型串 `(sa{sv}suvsvbbuvv)`。
+///
+/// 两个与直觉相反的地方：① 第三项 `type` 是 **u**（`IBusPropType` 枚举），
+/// 不是字符串；② 面板上显示的那个「中/英」字是**最后一个**字段 `symbol`，
+/// 包在 variant 里的 IBusText——它不是字符串，也不是 `label`。
+fn property_value<'a>(
+    key: &'a str,
+    symbol: &'a str,
+    label: &'a str,
+    state: u32,
+) -> Value<'a> {
+    Value::from(Structure::from((
+        "IBusProperty",
+        empty_props(),
+        key,
+        IBUS_PROP_TYPE_TOGGLE,
+        text_value(label),
+        "", // icon：面板用 symbol 显示，不需要图标
+        text_value(label),
+        true, // sensitive
+        true, // visible
+        state,
+        empty_prop_list_value(),
+        text_value(symbol),
+    )))
+}
+
+/// 构造单个 IBusProperty 序列化（`UpdateProperty` 信号用）。
+pub fn ibus_property(
+    key: &str,
+    symbol: &str,
+    label: &str,
+    state: u32,
+) -> Result<OwnedValue, ProtoError> {
+    Ok(property_value(key, symbol, label, state).try_into()?)
+}
+
+/// 构造 IBusPropList 序列化（`RegisterProperties` 信号用）：
+/// `("IBusPropList", a{sv}, av)` = `(sa{sv}av)`，数组元素是包在 variant 里的
+/// IBusProperty。
+pub fn ibus_prop_list(
+    key: &str,
+    symbol: &str,
+    label: &str,
+    state: u32,
+) -> Result<OwnedValue, ProtoError> {
+    Ok(Structure::from((
+        "IBusPropList",
+        empty_props(),
+        vec![property_value(key, symbol, label, state)],
+    ))
+    .try_into()?)
+}
+
 /// IBusEngineDesc 的 19 个字段。
 ///
 /// 用命名字段结构体承载而非元组：`zvariant::Structure::from` 的元组
@@ -403,6 +479,29 @@ pub fn component_xml(exec: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// 中/英属性的线上形状必须与 ibus 1.5.29 的 `ibus_property_serialize`
+    /// 逐字段对齐：本机唯一的钉法（真面板跑在 GNOME Shell 里），
+    /// 错一处面板就静默忽略或报错。
+    ///
+    /// 类型串 = `("IBusProperty", a{sv}, s:key, u:type, v:label, s:icon,
+    /// v:tooltip, b:sensitive, b:visible, u:state, v:sub_props, v:symbol)`。
+    #[test]
+    fn mode_property_matches_the_upstream_wire_shape() {
+        let prop = ibus_property(PROP_KEY_MODE, "中", "中文", IBUS_PROP_STATE_UNCHECKED)
+            .expect("属性构造失败");
+        assert_eq!(
+            prop.value_signature().to_string(),
+            "(sa{sv}suvsvbbuvv)",
+            "IBusProperty 字段顺序/类型必须与上游一致"
+        );
+        let list = ibus_prop_list(PROP_KEY_MODE, "英", "English", IBUS_PROP_STATE_CHECKED)
+            .expect("属性表构造失败");
+        assert_eq!(
+            list.value_signature().to_string(),
+            "(sa{sv}av)",
+            "IBusPropList 必须是 (类型名, 附加属性, 属性数组)"
+        );
+    }
     use super::*;
 
     /// 与 ibus 1.5.29 反序列化端注册的类型串逐字对照。

@@ -14,14 +14,15 @@
 //! 每个引擎实例持有一个独立的 [`InputSession`]（不同输入焦点互不干扰），
 //! 引擎本体（词库/模型）由 `Arc<ImeEngine>` 共享。
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use xwx_engine::{ImeEngine, InputEvent, InputSession, SessionOutput, SessionUpdate};
 use zbus::interface;
-use zvariant::OwnedObjectPath;
 
-use crate::ibus_proto::{self, ENGINE_NAME, ENGINE_PATH};
+use crate::ibus_proto;
+
+/// Factory 接口已拆到 [`crate::factory`]，这里转出以保持原有导入路径。
+pub use crate::factory::EngineFactory;
 
 /// 引擎服务：一个输入焦点（IBus 上下文）对应一个实例。
 ///
@@ -34,6 +35,8 @@ pub struct XwxEngineServer {
     last_ui: tokio::sync::Mutex<Option<(String, u32)>>,
     /// 输入会话状态机。
     session: tokio::sync::Mutex<InputSession>,
+    /// **上一次上报给面板的中/英模式**：模式没变就不重发 `UpdateProperty`。
+    last_mode: tokio::sync::Mutex<Option<bool>>,
 }
 
 impl XwxEngineServer {
@@ -42,6 +45,7 @@ impl XwxEngineServer {
         Self {
             session: tokio::sync::Mutex::new(InputSession::new(engine)),
             last_ui: tokio::sync::Mutex::new(None),
+            last_mode: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -86,6 +90,65 @@ impl XwxEngineServer {
                 }
             }
             Err(e) => tracing::warn!(error = %e, "上屏文本构造失败"),
+        }
+    }
+
+    /// 中/英属性在面板上的三件套：`(symbol, label, state)`。
+    ///
+    /// `symbol` 是面板上显示的那个字（GNOME 顶栏与输入源并排显示），`label` 进菜单。
+    fn mode_property_parts(english: bool) -> (&'static str, &'static str, u32) {
+        if english {
+            ("英", "English", ibus_proto::IBUS_PROP_STATE_CHECKED)
+        } else {
+            ("中", "中文", ibus_proto::IBUS_PROP_STATE_UNCHECKED)
+        }
+    }
+
+    /// 发 `UpdateProperty`（单个属性）。
+    async fn send_update_property(&self, ctxt: &zbus::SignalContext<'_>, english: bool) {
+        let (symbol, label, state) = Self::mode_property_parts(english);
+        match ibus_proto::ibus_property(ibus_proto::PROP_KEY_MODE, symbol, label, state) {
+            Ok(value) => {
+                if let Err(e) = self.update_property(ctxt, value).await {
+                    tracing::warn!(error = %e, "UpdateProperty 信号发送失败");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "中英属性构造失败"),
+        }
+    }
+
+    /// 把当前中/英模式同步给面板：**只在模式真的变了**时发信号。
+    ///
+    /// 面板据此显示 中/英。此前没有任何反馈：用户按了 Ctrl+空格 之后
+    /// 只能靠「打出来是字母还是候选」猜自己在哪个模式。
+    async fn sync_mode_property(&self, ctxt: &zbus::SignalContext<'_>) {
+        let english = self.session.lock().await.english_mode();
+        let changed = {
+            let mut last = self.last_mode.lock().await;
+            // `None` = 面板还没收到过 `RegisterProperties`：只记下来，不发信号，
+            // 否则空闲的 FocusOut 也会往面板推属性（面板还没这一项）。
+            let registered = last.is_some();
+            let changed = *last != Some(english);
+            *last = Some(english);
+            registered && changed
+        };
+        if changed {
+            self.send_update_property(ctxt, english).await;
+        }
+    }
+
+    /// 首次注册属性表（`RegisterProperties`）：面板收到后菜单里才有这一项。
+    async fn register_mode_property(&self, ctxt: &zbus::SignalContext<'_>) {
+        let english = self.session.lock().await.english_mode();
+        let _ = self.last_mode.lock().await.replace(english);
+        let (symbol, label, state) = Self::mode_property_parts(english);
+        match ibus_proto::ibus_prop_list(ibus_proto::PROP_KEY_MODE, symbol, label, state) {
+            Ok(value) => {
+                if let Err(e) = self.register_properties(ctxt, value).await {
+                    tracing::warn!(error = %e, "RegisterProperties 信号发送失败");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "中英属性表构造失败"),
         }
     }
 
@@ -239,6 +302,8 @@ impl XwxEngineServer {
                 == 0;
         if is_ctrl_space {
             self.handle_key(&ctxt, InputEvent::ToggleAscii).await;
+            // 模式变了就把新状态推给面板（顶栏的 中/英 靠这条信号）。
+            self.sync_mode_property(&ctxt).await;
             return true; // 消费掉，应用不再收到 Ctrl+空格
         }
 
@@ -319,22 +384,61 @@ impl XwxEngineServer {
     #[zbus(name = "FocusOut")]
     async fn focus_out(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
         self.reset_state(&ctxt).await;
+        self.sync_mode_property(&ctxt).await;
     }
 
     /// IBus 显式复位请求（切换引擎/清空输入时由 daemon 调用）。
     #[zbus(name = "Reset")]
     async fn reset(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
         self.reset_state(&ctxt).await;
+        self.sync_mode_property(&ctxt).await;
     }
 
-    /// 引擎被启用。TODO: 加载用户词频、模糊音配置。
+    /// 引擎被启用：把中/英属性注册给面板。
     #[zbus(name = "Enable")]
-    async fn enable(&self) {}
+    async fn enable(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
+        self.register_mode_property(&ctxt).await;
+    }
+
+    /// 面板点击属性（中/英切换）：`name` 是属性 key，`state` 是新状态。
+    ///
+    /// 只认自己的属性；模式确实要变时才走 Ctrl+空格 那条路（会话里可能还有
+    /// 未上屏的拼音，交给它按原有语义处理），随后同步回面板。
+    #[zbus(name = "PropertyActivate")]
+    async fn property_activate(
+        &self,
+        #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>,
+        name: String,
+        state: u32,
+    ) {
+        if name != ibus_proto::PROP_KEY_MODE {
+            return;
+        }
+        let want_english = state == ibus_proto::IBUS_PROP_STATE_CHECKED;
+        if self.session.lock().await.english_mode() == want_english {
+            return;
+        }
+        self.handle_key(&ctxt, InputEvent::ToggleAscii).await;
+        self.sync_mode_property(&ctxt).await;
+    }
+
+    /// 属性显示/隐藏：本输入法只有一个常显属性，无需处理；
+    /// 实现出来是为了 daemon 调用时不报 UnknownMethod。
+    #[zbus(name = "PropertyShow")]
+    async fn property_show(&self, name: String) {
+        let _ = name;
+    }
+
+    #[zbus(name = "PropertyHide")]
+    async fn property_hide(&self, name: String) {
+        let _ = name;
+    }
 
     /// 引擎被禁用：清空未上屏的输入。
     #[zbus(name = "Disable")]
     async fn disable(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
         self.reset_state(&ctxt).await;
+        self.sync_mode_property(&ctxt).await;
     }
 
     /// 候选窗翻页（daemon 转发面板按键）。
@@ -412,101 +516,23 @@ impl XwxEngineServer {
         visible: bool,
     ) -> zbus::Result<()>;
 
+    /// 注册属性表：`RegisterProperties(v)`。
+    #[zbus(signal)]
+    async fn register_properties(
+        &self,
+        ctxt: &zbus::SignalContext<'_>,
+        props: zvariant::OwnedValue,
+    ) -> zbus::Result<()>;
+
+    /// 更新单个属性：`UpdateProperty(v)`。
+    #[zbus(signal)]
+    async fn update_property(
+        &self,
+        ctxt: &zbus::SignalContext<'_>,
+        prop: zvariant::OwnedValue,
+    ) -> zbus::Result<()>;
+
     /// 收起候选窗：`HideLookupTable()`。
     #[zbus(signal)]
     async fn hide_lookup_table(&self, ctxt: &zbus::SignalContext<'_>) -> zbus::Result<()>;
-}
-
-/// Factory 服务：daemon 调用 `CreateEngine` 时按需创建引擎实例。
-///
-/// 路径约定：首个实例使用规范路径 [`ENGINE_PATH`]（main.rs 启动时已
-/// 预导出，这里直接复用），后续实例带序号后缀，避免与已导出对象冲突。
-pub struct EngineFactory {
-    /// 共享的引擎本体。
-    engine: Arc<ImeEngine>,
-    /// 用于导出新引擎对象的连接。
-    conn: zbus::Connection,
-    /// 已创建的引擎实例计数（首个复用启动时预导出的实例）。
-    seq: AtomicU32,
-}
-
-impl EngineFactory {
-    /// 新建工厂。
-    pub fn new(engine: Arc<ImeEngine>, conn: zbus::Connection) -> Self {
-        Self {
-            engine,
-            seq: AtomicU32::new(0),
-            conn,
-        }
-    }
-}
-
-/// `org.freedesktop.IBus.Factory` 接口实现。
-#[interface(name = "org.freedesktop.IBus.Factory")]
-impl EngineFactory {
-    /// 创建（或复用）一个引擎实例，返回其对象路径：`CreateEngine(s) -> (o)`。
-    #[zbus(name = "CreateEngine")]
-    async fn create_engine(&self, name: &str) -> zbus::fdo::Result<OwnedObjectPath> {
-        if name != ENGINE_NAME {
-            return Err(zbus::fdo::Error::InvalidArgs(format!("未知引擎: {name}")));
-        }
-        let n = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
-        // **先构造并校验路径,再注册**:注册之后才发现路径非法,对象表里会
-        // 留下一个永远不应答的路径。非法源头只有一个字符——D-Bus 对象路径
-        // 的分段只允许 `[A-Za-z0-9_]`,旧实现的 `{ENGINE_PATH}-{n}`(连字符)
-        // 会被 zvariant 拒绝,于是**第二次 CreateEngine 必定失败**
-        // 。
-        let path = OwnedObjectPath::try_from(engine_object_path(n))
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-        if n > 1 {
-            let server = XwxEngineServer::new(Arc::clone(&self.engine));
-            self.conn
-                .object_server()
-                .at(path.clone(), server)
-                .await
-                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-        }
-        tracing::info!(name, path = %path, "创建引擎实例");
-        Ok(path)
-    }
-}
-
-/// 第 `n` 个引擎实例的对象路径(`n = 1` 即预导出的那个)。
-///
-/// 单独成函数是为了能被单测钉住:序号部分必须是合法路径分段
-/// (`[A-Za-z0-9_]`),不能用连字符。
-pub(crate) fn engine_object_path(n: u32) -> String {
-    if n <= 1 {
-        ENGINE_PATH.to_string()
-    } else {
-        format!("{ENGINE_PATH}_{n}")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 第 2 个及之后的实例路径必须能被 D-Bus 接受:
-    /// 旧实现用连字符(`.../xwx-2`),zvariant 直接拒绝,于是第二次
-    /// `CreateEngine` 必定失败。
-    #[test]
-    fn later_engine_instances_use_valid_object_paths() {
-        assert_eq!(engine_object_path(1), ENGINE_PATH);
-        assert_eq!(engine_object_path(2), format!("{ENGINE_PATH}_2"));
-        for n in 2..=4 {
-            let p = engine_object_path(n);
-            assert!(!p.contains('-'), "对象路径分段不许有连字符: {p}");
-            assert!(
-                OwnedObjectPath::try_from(p.as_str()).is_ok(),
-                "第 {n} 个实例的路径必须合法: {p}"
-            );
-        }
-        // 旧公式的失败本身也要钉住:这条断言如果过了,说明 zvariant 放宽了
-        // 校验(或者有人把修复改回去了)。
-        assert!(
-            OwnedObjectPath::try_from(format!("{ENGINE_PATH}-2").as_str()).is_err(),
-            "旧公式 `xwx-2` 应被 D-Bus 拒绝"
-        );
-    }
 }

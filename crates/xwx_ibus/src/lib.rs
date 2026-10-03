@@ -14,6 +14,8 @@
 //! 进程入口在 `xwx` bin crate 里。
 
 pub mod engine;
+pub mod factory;
 pub mod ibus_proto;
 
-pub use engine::{EngineFactory, XwxEngineServer};
+pub use engine::XwxEngineServer;
+pub use factory::EngineFactory;

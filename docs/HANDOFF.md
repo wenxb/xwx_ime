@@ -1991,3 +1991,45 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 定向用例：`session/tests/basic.rs::focus_change_resets_the_mode_to_chinese`。
 - 验收：单元 **311 passed**、clippy 0；`regression_probe --format v1` 与上一版基线
   差异仍是**长候选表尾部那 12 行**（A2 缺陷 1 的既有点名差异，与本改动无关）。
+
+## ⑤⑤ 第三批第 4 项：IBus 中英 Property（顶栏 中/英 指示）
+
+- **用户症状**：顶栏只显示输入源「XWX 拼音」，**没有任何中/英反馈**——按了
+  Ctrl+空格 之后只能靠「打出来是字母还是候选」猜自己在哪个模式。
+- **上游格式**（照 ibus 1.5.29 源码逐字段对齐，本仓 `crates/xwx_ibus/src/ibus_proto.rs`）：
+  - `IBusProperty` = `("IBusProperty", a{sv}, s:key, u:type, v:label, s:icon, v:tooltip,
+    b:sensitive, b:visible, u:state, v:sub_props, v:symbol)` ⇒ 类型串 `(sa{sv}suvsvbbuvv)`；
+  - `IBusPropList` = `("IBusPropList", a{sv}, av)` ⇒ `(sa{sv}av)`；
+  - 信号 `RegisterProperties(v)` / `UpdateProperty(v)`；方法 `PropertyActivate(su)`、
+    `PropertyShow(s)`、`PropertyHide(s)`（`ibusengine.c` 的 introspection XML + 发射点）。
+  - **两个与直觉相反的坑**：① 第三项 `type` 是 **u**（`IBusPropType` 枚举，
+    TOGGLE=1），不是字符串；② 面板上那个「中/英」字是**最后一个**字段 `symbol`，
+    且是包在 variant 里的 IBusText，既不是字符串也不是 `label`。
+- **触发点**（`crates/xwx_ibus/src/engine.rs`）：`Enable` → `RegisterProperties`（首次注册）；
+  Ctrl+空格、`PropertyActivate`（面板点菜单）、焦点切换/Disable/Reset 的复位 → `UpdateProperty`，
+  且**只在模式真的变了**时发（`last_mode` 缓存，避免每次按键都刷面板）。
+- **结构**：`engine.rs` 打完补丁 627 行 > 600（AGENTS.md 上限），把
+  `EngineFactory`/`engine_object_path`/其单测整块搬到 `crates/xwx_ibus/src/factory.rs`
+  （108 行），`engine.rs` 533 行；`engine.rs` 里 `pub use crate::factory::EngineFactory;`
+  转出，`src/main.rs` 等原有导入路径不动。
+- **验证**（本机唯一能到的一层：真 daemon 的投递，真面板在 GNOME Shell 里）：
+  `dbus-run-session` + 隔离 `XDG_CONFIG_HOME`（否则引擎会读 `~/.config/ibus/bus/*`
+  连到用户真实总线抢名字，必 `NameTaken`）+ `XWX_NO_IBUS_AUTOSTART=1`，
+  `gdbus monitor` 抓到的三条信号：
+  - `RegisterProperties (IBusPropList[IBusProperty('InputMode', 1, '中文', '', '中文',
+    true, true, 0, [], '中')])`
+  - Ctrl+空格 → `UpdateProperty(… state 1, label 'English', symbol '英')`
+  - 再按 → `UpdateProperty(… state 0, label '中文', symbol '中')`
+  `ProcessKeyEvent(32,65,4)` 两次都返回 `(true,)`（按键被消费）。
+- **未验证**：GNOME 顶栏实际显示效果（需要在真机上看一眼）。若面板不显示，
+  下一步是核对 GNOME Shell 的 ibus panel 是否只认特定 key（本实现用 `InputMode`，
+  与 ibus-libpinyin/rime 一族一致）。
+- 落地时踩的两个坑（都已被用例钉住）：
+  ① `sync_mode_property` 第一次调用时 `last_mode = None`——那是「面板还没收到过
+    `RegisterProperties`」，只该记下、**不发** `UpdateProperty`（否则空闲的
+    `FocusOut` 也往面板推属性；而且我第一版把「已注册」判断写在赋值之后，恒为真，
+    被 `tests/focus_lifecycle.rs::focus_out_while_idle_emits_no_hide_signals` 抓住）。
+  ② `Enable` 从「纯空实现」变成「注册属性表」是有意的行为变更，
+    `tests/focus_lifecycle.rs::focus_in_and_enable_are_noops_that_preserve_a_live_composition`
+    的空闲断言相应改成「FocusIn 不发信号、Enable 只发 `RegisterProperties`」；
+    用例原本要保的那条语义（不碰活的组合）不变。
