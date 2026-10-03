@@ -1362,3 +1362,8 @@ zmgai→这么改、zgdsq→这个多少钱、nzgsm→你在搞什么。结论�
 LatticeEdge 字段已核对(engine/mod.rs:314；end/word/pinyin/freq/fuzzy_penalty/typo_penalty/edit_count/gap/abbrev)；
 插入点=build_abbrev_lattice 返回前往 lattice[0] 追加 end=pinyin.len() 的整串边；
 读法来源复用 lookup_abbrev/lookup_mixed 中 covered==len 的结果；验收口径见 HANDOFF。
+
+## 2026-10-03 整串条目边进简拼格（阶段 2 第一块，已提交）
+
+build_abbrev_lattice 追加整串条目边（lookup_abbrev+lookup_mixed 的 covered==len 结果，abbrev 标记）。
+实测首位零变化、10/20 候选变长、四套语料与对拍全不变、401 passed/0 failed、clippy 0。

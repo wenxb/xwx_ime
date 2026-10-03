@@ -99,7 +99,45 @@ impl ImeEngine {
         bounds: Option<&[usize]>,
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
-        self.build_lattice_flags(pinyin, bounds, false, true, None, user_entries)
+        let mut lattice =
+            self.build_lattice_flags(pinyin, bounds, false, true, None, user_entries)?;
+        // **整串条目边**（见 docs/HANDOFF.md ⑤⑤③ 附录）：整串输入按简拼/混拼
+        // 约束展开后**恰好命中词库条目**的读法，作为位置 0 的一条边。
+        // 数据依据：20 条纯缩写输入里 18 条的正确答案属于这一类（生日快乐/
+        // 新年快乐/状态…都是词条级命中），而格子原先只会逐词拼链。
+        // 复用现成匹配语义（`lookup_abbrev` 纯首字母 + `lookup_mixed` 的 MixedDfs），
+        // 只取 `covered == 整串` 的结果；旧通道保留作回退点，两者按 (词, 音) 去重。
+        if self.dict.has_abbrev() {
+            // 与 `ImeEngine::abbrev_candidates` 同一取法：匹配在 `MmapDict` 上。
+            let DictStore::Mmap(d) = &self.dict else {
+                return Ok(lattice);
+            };
+            let mut whole: Vec<Candidate> = d.lookup_abbrev(pinyin)?;
+            whole.extend(d.lookup_mixed(pinyin)?);
+            for c in whole {
+                if c.covered != pinyin.len() {
+                    continue;
+                }
+                if lattice[0]
+                    .iter()
+                    .any(|e| e.word == c.word && e.end == pinyin.len())
+                {
+                    continue;
+                }
+                lattice[0].push(LatticeEdge {
+                    end: pinyin.len(),
+                    word: c.word,
+                    pinyin: c.pinyin,
+                    freq: c.freq,
+                    fuzzy_penalty: 0.0,
+                    typo_penalty: 0.0,
+                    edit_count: 0,
+                    gap: false,
+                    abbrev: true,
+                });
+            }
+        }
+        Ok(lattice)
     }
 
     /// [`Self::build_lattice_with`] 的带全部门槛开关版本:`tolerant` 打开容错
