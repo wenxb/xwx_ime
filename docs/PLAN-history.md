@@ -1189,3 +1189,9 @@ nihaobeijin→你好北京、womenjintianqugongyua→我们今天去公园；两
 （daily MRR→1.000、keystrokes→0.919）但把 chuzaina 打回「杵在那」，因组合候选的 LM 基线按词复付
 （floor_log10 自 3B 回退后在引擎里无人使用）；词串口径版更糟（shanghaai 掉到「上」、edits 0.564）。
 结论：该由阶段 3 统一打分消除逐词基线复付，而不是在投影层加规则。
+
+## 2026-10-03 尝试 C：LM 改成「相对基线证据量」（全线下滑，回退）
+
+5 处打分改用 logp-floor ⇒ wmjtqbj/womenjtqbj 变「我们就提前北京」、chuzaina 变「杵在那」、
+daily 11/12、mixed 11/14、edits MRR 0.645。原因：减基线等于逐词奖励，放大了 LM 权重；
+正确形状是每候选只付一次基线（floor + Σ证据量）。
