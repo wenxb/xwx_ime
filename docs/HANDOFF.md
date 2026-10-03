@@ -3944,3 +3944,37 @@ v1 对拍 44 输入 **0 变化**；clippy **0**；`--no-fail-fast` **401 passed 
 （它的证据是词条级的，与"上千条前缀简拼候选"的洪泛不是一类）。
 理由与边界都写在 `rank.rs` 的注释里（简拼层防洪泛靠配额；这里只对**整串条目级**破例）。
 验收：20 条清单（当前 16/20 在表内、13/20 首位）+ 四套语料不得低于上面数值 + v1 对拍 + clippy 0。
+
+## ⑤⑧② 层序破例的**收益已证实**，但破了 3 个契约测试 ⇒ 需收窄适用范围再落地
+
+⑤⑧① 的改动（`sort_key` 第二键：`Abbrev + freq>0 + covered>=len` 按精确档）**收益很大**：
+
+- 开关 `true`（格子独立供给）：正确读法在候选表 **16/20 → 20/20**、首位 **13/20 → 15/20**；
+- 默认配置（开关 `false`）：20 条首位零变化、四套语料全在基线、v1 对拍 0 变化、clippy 0
+  ——**行为指标上完全干净**。
+
+**但它破了 3 个契约测试**（`cargo test -p xwx_engine`：324 passed / 3 failed，总数 401 齐全
+⇒ 是真失败，不是抖动）：
+
+| 失败用例 | 它钉住的契约 |
+|---|---|
+| `engine::tests::abbrev_quota::abbrev_quota_is_floor_not_cap` | 配额是"保底不封顶"的语义 |
+| `engine::tests::abbrev_quota::abbrev_layer_survives_full_exact_layer` | 精确层满时简拼层仍要活着 |
+| `engine::tests::completion::full_pinyin_first_page_recovers` | **全拼输入**首页的补全召回 |
+
+⇒ 判定：破例不能是**全局**的（第三个用例说明它连**全拼输入**的首页都影响了），
+必须**收窄到"纯缩写 / 开头即缩写"这两类输入**（与 ⑤⑥② 的按类放行同一口径）。
+
+**收窄的实现难点与解法**：`sort_key(inp, umin, c)`（`rank.rs`）里拿不到 `Segmenter`，
+所以不能直接复用 `lookup.rs` 的两个结构判据。两种可行做法：
+1. **把类别算好传进来**：在 `lookup.rs` 里算出 `pure_abbrev || leading_abbrev`（那里有 segmenter），
+   通过 `sort_candidates` / `merge_with_abbrev` 的新参数传进 `sort_key`（改动面：3 个签名 +
+   调用点，仍是小步但涉及面略大）；
+2. **用不依赖 segmenter 的等价信号**：例如"该候选的 `covered >= inp.len()` **且** `pinyin` 的音节数
+   ≥ 2 且 `inp` 不是一个可切分的全拼串"——但后者仍要 segmenter；
+   更简单的是**用候选自身**：只对 `Abbrev` 且 `covered == inp.len()` 且 `freq > 0` 且
+   **`c.pinyin` 的音节数与 `inp` 长度不相等**（即不是"每个字母一个音节"的满缩写）破例——
+   需先用第三个用例的输入验证。
+
+**下一步（明确）**：按做法 1 收窄到两类输入 → 跑 `cargo test -p xwx_engine`（应 327/0）→
+再跑四套语料 + 对拍 + 20 条清单（开关 true 的 20/20 / 15/20 应保持）→ 全绿则提交。

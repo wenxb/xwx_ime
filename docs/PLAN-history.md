@@ -1510,3 +1510,9 @@ covered_whole_real（忽略 Abbrev）仍会被容错层整串读法判真 ⇒ �
 
 lookup.rs 简拼分支对 freq==0 的链候选回查词库补 freq（WordSpot 不带 freq）。实测首位零变化、
 四套语料基线、对拍 0 变化、401 passed/0 failed、clippy 0。下一步用该信号改层序键（rank.rs sort_key）。
+
+## 2026-10-03 层序破例：收益大但破 3 个契约测试（已回退，需收窄）
+
+开关 true 时召回 20/20、首位 15/20；默认配置行为全绿。但破 abbrev_quota（2 个）与
+completion::full_pinyin_first_page_recovers（全拼首页）⇒ 破例必须是"按类"的。
+解法：在 lookup.rs 算好类别传进 sort_key（rank.rs 拿不到 Segmenter）。详见 HANDOFF ⑤⑧②。
