@@ -1454,3 +1454,9 @@ mixed 0.929→0.503、keystrokes 0.877→0.795。⇒ 格子供给（整串条目
 
 ⑤⑥⑨ 的 trace 必须插在 build_abbrev_lattice 的 if has_abbrev 块内、for 循环之后（kept/whole 是块内局部量）；
 插到 Ok(lattice) 前会作用域编译错（已实测并回退）。完整补丁与三种读法见 HANDOFF ⑤⑦⓪。
+
+## 2026-10-03 定性完成：⑤⑤④ 的边因 covered 判据错误而全部被过滤掉
+
+迹：srkl abbrev=4/mixed=0、ztai abbrev=0/mixed=35、wsm abbrev=80/mixed=0，但 kept 全为空
+⇒ covered != pinyin.len() 恒成立 ⇒ 整串条目边一条没进格子。修法：先打印 covered 真实值，
+或直接去掉该过滤（这些候选本就来自整串查询）+ 按 word 去重。

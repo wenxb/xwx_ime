@@ -3686,3 +3686,34 @@ super::trace::note(|| {
 ```bash
 printf 'srkl\nztai\nwsm\n' | XWX_TRACE=1 /mnt/hdd/target/xwx_ime/release/examples/recall_trace 2>&1 | grep 整串条目边
 ```
+
+## ⑤⑦① **定性完成**：⑤⑤④ 的边没生效，因为 `covered == pinyin.len()` 这个过滤条件是错的
+
+按 ⑤⑦⓪ 的正确插法跑出迹（跑完已 `git checkout` 还原）：
+
+```
+srkl  → 整串条目边: abbrev=4  mixed=0  kept=[]
+ztai  → 整串条目边: abbrev=0  mixed=35 kept=[]
+wsm   → 整串条目边: abbrev=80 mixed=0  kept=[]
+```
+
+**读法**：`lookup_abbrev` / `lookup_mixed` **都正常返回了候选**（4 / 35 / 80 条），
+但**没有一条**通过我的 `c.covered == pinyin.len()` 过滤 ⇒ `kept` 恒为 `[]`
+⇒ 所以 ⑤⑤④ 加进格子的"整串条目边"**一条都没进去**，⑤⑥⑦ 的 6/20 覆盖由此而来。
+
+**结论**：`Candidate::covered` 的语义**不是**"这条读法吃掉了多少输入字符"。
+（早先我在迹里看到旧通道打印 `状态|freq=503366|cov=4`、输入 `ztai` 长 4，
+误以为两边同口径——那个 `cov=4` 是**旧通道自己的打印格式**，与这里的 `covered` 字段未必同义。）
+
+**下一步的修法（两种，任选，都很快）**：
+1. **先看清口径**：把 `kept.push(...)` 那行改成**不过滤**、直接打印前几条的
+   `(word, covered, freq, pinyin)`，跑一次 `srkl` 就知道 `covered` 到底是什么量纲；
+2. **或直接改判据**：这些候选来自**整串**的简拼/混拼查询，本身就代表"整串读法"，
+   因此可以**去掉 `covered` 过滤**（改为按 `word` 去重、`end = pinyin.len()` 照旧）。
+   若去掉后行为正确（20 条清单显著改善），就采用这一版；
+   若混进了不覆盖整串的读法，再回到第 1 步看清口径后精确过滤。
+
+**验收（沿用现成口径）**：开关 `DEMOTE_OLD_ABBREV_CHANNEL = true` 时，
+20 条清单「正确读法在候选表里」的比例应从 **6/20** 明显上升；
+四套语料不得低于 daily 1.000 / mixed 0.929 / keystrokes 0.877 / edits 0.728；
+v1 对拍 0 变化；clippy 0。开关默认仍为 `false`，只在测量时打开。
