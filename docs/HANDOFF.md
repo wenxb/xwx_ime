@@ -5066,3 +5066,18 @@ sh  #0 所 −3.3349 Abbrev      #1 三 −3.4442 Abbrev      #2 色 −3.5846 A
 `data/README.md` 里**没有**这一节（`grep -i syllable data/README.md` 无命中）。
 ⇒ 格式说明只有脚本注释一处，读者按 README 找不到。要么把该节补进 `data/README.md`，
 要么改掉脚本里的指引。
+
+## ⑤⑩⑨ 两项卫生处置落地（用户拍板：①删 ②补）
+
+- **删**：`tests/baselines/regression_v2.txt` 与其 `.id.txt` 已 `git rm`。
+  唯一引用是探针文档注释一处，无代码/脚本/justfile 引用；探针注释与
+  `docs/VERIFY.md` 同步改口径（基线随输出文件自带 `.id.txt` 追溯，仓库内
+  不再放基线文件）。commit `2d70a88`。
+- **补**：`data/README.md` 新增「一点六、音节级词典转移索引
+  syllable_graph.bin」整节（60B 头/16B 节点/6B 边/音节名表的完整布局、
+  同代判据 = 第 52 字节 key 数 == dict.bin 记录数、缺文件自动回退、
+  实测 412 音节 / 节点 2,819,021 / 边 2,819,020 / 62,020,673 字节）。
+  布局是从写入端 `scripts/build_syllable_graph.py` 与读取端
+  `dict/syllable_graph.rs` 交叉核对写出的，非转抄一处；脚本文档字符串里
+  悬空的「syllable_graph.bin 二进制格式」指引已改指真实节名。
+  确定性重建验证：重跑脚本产物 sha256 前后一致（`86df70c1…`）。

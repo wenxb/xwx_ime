@@ -9,7 +9,7 @@
 索引把这两个问题变成内存里的树walk：从根按音节走，子节点就是「词库里真实存在的
 后继音节」，走到即问完。节点存 (子表起止, 是否完整词条, 词条区间)。
 
-布局（小端，见 data/README.md「syllable_graph.bin 二进制格式」）：
+布局（小端，见 data/README.md「一点六、音节级词典转移索引 syllable_graph.bin」）：
     header 60B: 8s magic | I version | Q n_nodes | Q n_syllables
                 | Q node_off | Q edge_off | Q syl_off | Q n_keys
     node 16B:   I children_off | H children_len | B flags(b0=完整词条) | B pad

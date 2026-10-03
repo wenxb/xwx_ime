@@ -104,6 +104,73 @@ python3 scripts/abbrev_to_bin.py in.bin out.bin   # 自定义路径
 由 `MmapDict::lookup_mixed` 用「音节切分 + 空格拼回主索引前缀」实现,
 见 `docs/design-batch1.md`「设计更正」。
 
+## 一点六、音节级词典转移索引 syllable_graph.bin(运行时只读二进制)
+
+缩写弧建边的加速索引(`scripts/build_syllable_graph.py` 生成,读取端
+`crates/xwx_engine/src/dict/syllable_graph.rs`)。建边要在「当前已拼到哪个
+音节链」上反复问两件事——① 哪些音节能接在后面;② 这条链本身是不是完整
+词条。没有索引时只能拿整张音节表逐个去主索引二分(实测 `womenjintqubeij`
+一次输入约 1.2 万次二分 ≈ 10.5ms,曾是简拼格的全部成本);索引把这两件事
+变成内存树 walk:从根按音节走,子节点就是词库里**真实存在**的后继音节。
+
+由脚本**只读** `dict.bin` 生成:把主索引的拼音 key(字典序是单趟建树的
+前提)按最长公共前缀建 trie,0 号节点是根,一条 key 的音节链对应一条树
+路径;`MmapDict::with_syllable_graph` 装配。
+
+**可选数据,缺了能活**:文件缺失/损坏/与当前词库**不同代**(判据:头部
+第 52 字节的 key 数 ≠ 当前 `dict.bin` 记录数)时引擎**回退旧匹配器**、
+不报错——换词库后忘了重建它只会变慢,不会错。也因此不进 git,本机重新
+生成即可。
+
+### 二进制布局(v1,little-endian)
+
+```text
+偏移      内容
+0         magic: "XWXSYL1\0"(8 字节)
+8         u32 LE: 版本号(当前 1)
+12        u64 LE: 节点数 N
+20        u64 LE: 音节名条数 S
+28        u64 LE: 节点区偏移
+36        u64 LE: 边表区偏移
+44        u64 LE: 音节名表偏移
+52        u64 LE: 生成时词库的拼音 key 数(同代判据)
+
+节点区(N × 16 字节,下标即节点号,0 号是根):
+  u32 LE 子表起始边号(相对边表区)+ u16 LE 子表长度
+  + u8 flags(b0 = 完整词条)+ u8 填充
+  + u32 LE 词条区间起始(dict.bin 记录号;非完整词条 = 0xFFFFFFFF)
+  + u16 LE 词条区间长度 + u16 填充
+
+边表区(每条 6 字节;节点子表按音节号升序 → 读取端二分):
+  u16 LE 音节号 + u32 LE 子节点号
+
+音节名表(S 条变长,按名字升序,音节号 = 下标):
+  u16 LE 名字长度 + 名字 UTF-8
+```
+
+约定:
+
+- **音节号定义为名字升序的下标**,子表按音节号升序落盘,`child()` 直接
+  二分;半音节展开 `children_starting_with()` 用线性过滤——根扇出 412、
+  深层通常个位数,线性比二分还快;
+- **完整词条节点**存该 key 在 `dict.bin` 的**记录号区间**(一个 key 的
+  记录在主索引里连续);词条本体不重复存,区间扫描交给主索引;
+- 读取端只报错、不 panic(损坏文件在 `open` 阶段被
+  `DictError::Corrupt` 拒绝),要不要降级由调用方决定;查询面就是
+  `node / child / children_starting_with / walk`。
+
+构建:
+
+```sh
+python3 scripts/build_syllable_graph.py                 # data/dict.bin → data/syllable_graph.bin
+python3 scripts/build_syllable_graph.py in.bin out.bin  # 自定义路径
+```
+
+实测(rime-ice 全量词表,1,730,725 个拼音 key):节点 2,819,021(每个 key
+的末节点都是完整词条)、边 2,819,020(严格树:边 = 节点 − 1)、音节 412;
+产物 62,020,673 字节(62.0 MB:节点区 45.1 + 边区 16.9 + 音节名表 ~2KB);
+脚本内建产物自检(头自洽 + 抽 400 条 key 走通到底)。
+
 ## 二、中间格式 dict.sqlite3（构建/迁移用）
 
 引擎运行时不使用，仅作为 `dict_to_bin.py` 的输入中间格式
