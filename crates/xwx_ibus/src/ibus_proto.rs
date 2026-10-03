@@ -245,7 +245,11 @@ pub fn ibus_lookup_table(
     .try_into()?)
 }
 
-/// IBusPropType（`ibusproperty.h`）：本输入法只用 TOGGLE。
+/// IBusPropType（`ibusproperty.h`）：本输入法用 NORMAL——面板把它渲染成
+/// **普通菜单项**（点击即切换），不是带开关控件的 toggle。用户明确要求
+/// 「状态栏不要显示开关控件，点击 item 切换就可以了」。
+pub const IBUS_PROP_TYPE_NORMAL: u32 = 0;
+/// IBusPropType 的 toggle 档（面板画成开关控件），本输入法不用，留作对照。
 pub const IBUS_PROP_TYPE_TOGGLE: u32 = 1;
 /// IBusPropState（`ibusproperty.h`）：未选中 / 选中。
 pub const IBUS_PROP_STATE_UNCHECKED: u32 = 0;
@@ -282,7 +286,7 @@ fn property_value<'a>(
         "IBusProperty",
         empty_props(),
         key,
-        IBUS_PROP_TYPE_TOGGLE,
+        IBUS_PROP_TYPE_NORMAL,
         text_value(label),
         "", // icon：面板用 symbol 显示，不需要图标
         text_value(label),

@@ -2057,3 +2057,20 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - 验收：`cargo test -p xwx_engine --lib` **312 passed**、clippy 0。
 - **仍未做的**：(a) 给「原样上屏」单独定层（用户在小写状态下打英文单词仍未解决，
   需要动排序键）；(c) 英文词表数据。
+
+## ⑤⑦ 中英切换的两处修正（用户实测反馈）
+
+- **症状 1：鼠标在输入框里点一下就被切回中文。** 根因是 ⑤④ 加的那条
+  「焦点切换把模式收回中文」——鼠标点输入框会触发 IBus 的 `FocusOut`/`Reset`，
+  于是「英文打一半点一下输入框」直接变中文，等于没法连续打英文。
+  **修法：回退 ⑤④ 的模式复位**（`reset_for_focus_change` 只结束「英文跟随」，
+  不动 `english_mode`），`toggle_ascii` 的文档一并改回「模式跨焦点保持」。
+  ⑤④ 当初的理由是「顶栏没有任何中/英指示」——⑤⑤ 的 IBus Property 做出来之后
+  这条兜底就没有必要了，而且它的代价（点一下就复位）比收益大。
+- **症状 2：状态栏属性显示成开关控件。** 根因是属性类型用了
+  `IBUS_PROP_TYPE_TOGGLE`（面板渲染成开关）。**修法：改成
+  `IBUS_PROP_TYPE_NORMAL`**（普通菜单项，点击即触发 `PropertyActivate`）；
+  因为 NORMAL 属性能拿到的 `state` 恒为 0，`PropertyActivate` 相应改成
+  「按当前模式取反」而不是读 `state`（否则点一下只能切到英文关）。
+- 定向用例：`session/tests/basic.rs::focus_change_keeps_the_mode`——
+  **旧实现实测红**（`焦点切换不应改变中/英模式`，即用户报的现象）。

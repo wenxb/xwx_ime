@@ -400,10 +400,13 @@ impl XwxEngineServer {
         self.register_mode_property(&ctxt).await;
     }
 
-    /// 面板点击属性（中/英切换）：`name` 是属性 key，`state` 是新状态。
+    /// 面板点击属性（中/英切换）：`name` 是属性 key。
     ///
-    /// 只认自己的属性；模式确实要变时才走 Ctrl+空格 那条路（会话里可能还有
-    /// 未上屏的拼音，交给它按原有语义处理），随后同步回面板。
+    /// 面板把本属性当**普通菜单项**（`IBUS_PROP_TYPE_NORMAL`），传来的 `state`
+    /// 恒为 0，所以这里按当前模式**取反**——读 `state` 的话点一下只能切到
+    /// 「英文关」，再也回不到英文。只认自己的属性；模式确实要变时才走
+    /// Ctrl+空格 那条路（会话里可能还有未上屏的拼音，交给它按原有语义处理），
+    /// 随后同步回面板。
     #[zbus(name = "PropertyActivate")]
     async fn property_activate(
         &self,
@@ -414,7 +417,8 @@ impl XwxEngineServer {
         if name != ibus_proto::PROP_KEY_MODE {
             return;
         }
-        let want_english = state == ibus_proto::IBUS_PROP_STATE_CHECKED;
+        let _ = state; // NORMAL 属性恒为 0，只作占位（见本方法的文档）
+        let want_english = !self.session.lock().await.english_mode();
         if self.session.lock().await.english_mode() == want_english {
             return;
         }

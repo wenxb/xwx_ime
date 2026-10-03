@@ -352,7 +352,7 @@ fn toggle_during_composition_commits_pinyin_first() {
 }
 
 #[test]
-fn focus_change_resets_the_mode_to_chinese() {
+fn focus_change_keeps_the_mode() {
     let mut s = session_with_dict();
     s.handle(InputEvent::ToggleAscii).expect("切换不应失败");
     assert!(s.english_mode(), "应已进入英文模式");
@@ -360,8 +360,8 @@ fn focus_change_resets_the_mode_to_chinese() {
     let text = s.reset_for_focus_change();
     assert!(text.is_empty(), "没有已确认段时不该有上屏文本");
 
-    assert!(!s.english_mode(), "焦点切换应收回到中文模式");
-    // 收回后字母重新进拼音串，而不是被英文模式透传掉。
-    let out = s.handle(InputEvent::Char('h')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Updated(ref u) if u.preedit == "h"));
+    // 在输入框里点一下鼠标就会触发 FocusOut/Reset——模式**不能**因此切回中文，
+    // 否则英文打一半点一下输入框就变中文，等于没法连续打英文。模式归用户按
+    // Ctrl+空格 管；顶栏有中/英指示，不再需要「无声复位」来兜底。
+    assert!(s.english_mode(), "焦点切换不应改变中/英模式");
 }
