@@ -3847,3 +3847,22 @@ printf 'ztai\nnhma\nwsm\n' | XWX_TRACE=1 recall_trace 2>&1 | grep 门槛
 `exact_covers_whole` / `covered_whole_real` / `needs_abbrev` 各字段——
 若开关 true 时 `needs_abbrev=false`，则要修的是**门槛里那两个快照的取法**
 （例如在"旧通道被降级"时不应把简拼层候选算作"已有整串读法"）。
+
+## ⑤⑦⑦ 门槛修复：这两类输入改用「只看精确路」的判据（⑤⑦⑥ 的可行解）
+
+**问题**（⑤⑦⑥ 探针实测）：开关打开时 `ztai`/`nhma` 的 `needs_abbrev` 由 `true` 变 `false`——
+因为按类判据里那个忽略 `Abbrev` 的 `covered_whole_real` 仍会被**容错层(Fuzzy)** 的整串读法
+（`ztai` 的「摘」，covered=4）判为真，于是简拼格分支被整个挡掉。
+
+**修法**：`pure_abbrev || leading_abbrev` 这两类改用**只看精确路**的判据 `!exact_covers_whole`
+（精确路没解释整串就建格，不再看容错层）；那个 `covered_whole_real` 快照随之删除。
+
+**验证**：
+- **门槛确认翻转**：开关 `true` 时 `ztai`/`nhma`/`wsm` 三条 `needs_abbrev` 全部为 `true` ✓
+  （修复前 `ztai`/`nhma` 是 `false`）；
+- 开关 `false`（默认/提交状态）：四套语料**全在基线**（1.000 / 0.929 / 0.877 / 0.728）、
+  v1 对拍 44 输入 **0 变化**、clippy **0**、测试 **401 passed / 0 failed**；
+- 开关 `true`：指标仍为 16/20（正确读法在表内）、13/20（首位正确）——**本次修复没有直接
+  改变指标**，但它解除了一个真实阻塞：这两类输入在"旧通道让位"的世界里现在**确实会建简拼格**了。
+  ⇒ 剩下那 4 条（zmgai/ztai/ztailan/nhma）的损失点在**更下游**（边→候选→beam 这一段），
+  这是下一步的排查范围。

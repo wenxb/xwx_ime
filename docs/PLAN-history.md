@@ -1487,3 +1487,9 @@ mixed 0.929→0.503、keystrokes 0.877→0.795。⇒ 格子供给（整串条目
 开关 true 下跑 ztai/nhma，迹里连「简拼段前五」都没有 ⇒ 分支未执行，而非"产出不了状态"。
 可疑点：covered_whole_real 忽略 Abbrev 层，而开关打开后 ranked 里只剩其它 Abbrev 候选
 ⇒ needs_abbrev=false。下一步用门槛迹对比两种开关取值。
+
+## 2026-10-03 门槛修复：这两类改用只看精确路的判据
+
+covered_whole_real（忽略 Abbrev）仍会被容错层整串读法判真 ⇒ 开关打开时 ztai/nhma 的 needs_abbrev=false。
+改为 !exact_covers_whole 后，开关 true 下三条门槛全为 true。默认配置四套语料/对拍/clippy/测试全绿。
+指标未变（16/20、13/20）⇒ 剩余 4 条的损失点在边→候选→beam 更下游。

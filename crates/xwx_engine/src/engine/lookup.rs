@@ -306,14 +306,8 @@ impl ImeEngine {
         // 它不算「已经有读法」，否则门槛永远挡住简拼格（实测 wsm/zgr/xxn/dbq/mgx
         // 五条因此一条简拼候选都拿不到）。
         let covered_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
-        // 「已有整串读法」的**按类**版本：纯缩写输入(`pure_abbrev`)与「开头即缩写」
-        // (`leading_abbrev`)忽略**简拼层**候选。理由见 ⑤⑤⑧：旧通道的整串候选本身
-        // 就满足 `covered >= len`，不忽略的话 `needs_abbrev` 恒为 false、简拼格分支
-        // 从不执行；而全局放宽已实测会打坏 edits(⑤⑤⑨) ⇒ 只对这两类放行，
-        // 让两条供给在同场竞争（旧通道仍保留作回退点）。
-        let covered_whole_real = ranked
-            .iter()
-            .any(|c| c.covered >= pinyin.len() && c.spelling != SpellingKind::Abbrev);
+        // （曾经这里有一个"忽略简拼层候选"的 `covered_whole_real` 快照，⑤⑦⑦ 之后
+        // 这两类输入改用「只看精确路」的判据，该快照不再需要。）
         // **开头即缩写**：首窗口是单字母、且它本身不是完整音节（`z`/`w`/`b`…）。
         // 这类输入的读法必然是「单字母缩写 + 字面尾链」（`ztai` = z + `tai`、
         // `ztailan`、`jttqzenmy`…）——旧判据（`pure_abbrev` 要求**每个**字母都能
@@ -338,7 +332,11 @@ impl ImeEngine {
                 || ((!tolerant_explains || self.ends_one_letter_short(pinyin))
                     && pinyin.len() >= MIN_ABBREV_INPUT_LEN))
             && if pure_abbrev || leading_abbrev {
-                !exact_covers_whole && !covered_whole_real
+                // **只看精确路**是否已经解释整串。不能把容错层(Fuzzy)的整串读法
+                // 也算进来：`ztai` 的「摘」(Fuzzy, covered=4) 会因此让
+                // `needs_abbrev=false`、把简拼格分支整个挡掉（⑤⑦⑥ 实测：
+                // 开关打开时 `ztai`/`nhma` 的 needs_abbrev 由 true 变 false）。
+                !exact_covers_whole
             } else {
                 !covered_whole
             };
