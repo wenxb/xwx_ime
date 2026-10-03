@@ -1207,3 +1207,9 @@ chuzaina/shanghaai/简拼形态与 mixed/keystrokes/edits 全部不变；对拍 
 
 简拼弧补 `r → er`（abbrev_syllables("r") 找不到 er）：zaiyikuair→在一块儿、wanhuir→晚会儿、
 haowanr→好玩儿；验收形态与语料全不变，对拍 44 输入 0 变化。
+
+## 2026-10-03 尝试 D：简拼层整串口径落底时换词串口径（mixed MRR 退化，回退）
+
+在 abbrev_candidates 里对「整串口径落到底且 ≥2 音节」的候选取 max(整串, 词串)：
+验收形态全不变，但 mixed 语料 MRR 0.929→0.821 退化（daily/keystrokes/edits 不变）⇒ 回退。
+教训：只在**部分候选**上换口径会破坏层内可比性——要换就得整层一起换（阶段 3 的活）。

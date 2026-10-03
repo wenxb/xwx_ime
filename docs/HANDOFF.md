@@ -2606,3 +2606,14 @@ LM 的「无证据基线分」按词复付（每个词各付一次 -11.605767）
 正确样本里值得一提的：`beijingdaxue`→北京大学、`qinghuadaxue`→清华大学、
 `jintianjidian`→今天几点、`mingtianzaoshang`→明天早上、`shanghaishimin`→上海市民、
 `chifanlema`→吃饭了吗、`shuijiaoba`→睡觉吧、`zaoshanghao`→早上好、`xiabanle`→下班了。
+
+## ⑤㉙ 尝试 D：简拼层「整串落底时换词串口径」——mixed MRR 退化，已回退
+
+做法：`abbrev_candidates` 里对「整串口径落到底 + key ≥2 音节」的候选
+取 `max(整串口径, 词串口径)`。
+
+实测：验收形态与 daily/keystrokes/edits 全不变，但 **mixed MRR 0.929 → 0.821** ✗ ⇒ **回退**。
+
+教训（与前三次同源）：**只在部分候选上换口径**会破坏层内可比性——
+同一个列表里有的候选按整串算、有的按词串算，排序就失去意义。
+要换必须整层一起换，这正是阶段 3「统一路径搜索/打分」的本职工作。
