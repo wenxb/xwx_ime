@@ -1421,3 +1421,8 @@ needs_abbrev 对 pure_abbrev/leading_abbrev 忽略 Abbrev 层候选 ⇒ 两类�
 为在 merge 处用类别判据而前移 pure_abbrev/leading_abbrev：开关默认 false 却让 edits 0.728→0.680
 ⇒ 是"前移"改变了行为（判据所在表达式依赖 ranked 的求值时机）。已回退。正解：不移动原判据，
 在 merge 处复制一份只依赖 reachable/segmenter/has_abbrev 的轻量版判据供开关使用。
+
+## 2026-10-03 尝试 M：逐类切换开关（默认关闭）
+
+行为指标全绿（首位零变化、四套语料基线、对拍 0、clippy 0），但门禁 400/1（总数 401、无套件中断，
+特征不同于 ⑤⑥② 的 378/1 抖动）⇒ 未定性、按纪律回退。下次：复现后取 FAILED 用例名再分类。
