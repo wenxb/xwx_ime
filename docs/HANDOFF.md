@@ -3241,3 +3241,42 @@ MRR **0.728 → 0.564**、首屏 5/6 → 4/6 退化 ⇒ **n-best 回退到 4**�
 - 验收：20 条清单「正确读法进前 10」（当前 5/20）、四套语料不得低于
   daily 12/12·1.000、mixed 13/14·0.929、keystrokes 12/12·0.877、edits 6/6·0.728、
   v1 对拍 44 输入 0 变化、clippy 0、perf 同条件不可区分。
+
+### ⑤⑤③ 附录：把「条目级匹配」做进格子的施工配方（字段已核对）
+
+**目标**：简拼格里多出一类**整串条目边**——「整串输入按混拼/简拼约束展开后恰好命中某条词库
+条目」的读法，作为**位置 0 的一条边**。18/20 的正确答案就属于这一类（⑤⑤③ 的数据）。
+
+**插入点**：`crates/xwx_engine/src/engine/lattice/build.rs` 的
+`build_abbrev_lattice`（或它调用的 `build_lattice_with(..., abbrev=true, ...)`）在
+返回前，往 `lattice[0]` 追加若干条边。
+
+**边字段**（`LatticeEdge` 定义在 `crates/xwx_engine/src/engine/mod.rs:314`，已核对）：
+```rust
+LatticeEdge {
+    end: pinyin.len(),          // 整串：边终点 = 输入末尾（字节位置）
+    word: entry.word.clone(),   // 词条文本（如「生日快乐」）
+    pinyin: entry.pinyin.clone(), // 词条拼音 key（音节空格分隔）
+    freq: entry.freq,           // 静态词频（条目级命中时 > 0）
+    fuzzy_penalty: 0.0,         // 精确匹配
+    typo_penalty: 0.0,          // 不是打错
+    edit_count: 0,
+    gap: false,                 // 不是空词边
+    abbrev: true,               // 走的是简拼/混拼读法（层序用）
+}
+```
+
+**读法来源**（不要重写匹配，直接复用现成语义）：
+- `self.dict.lookup_abbrev(pinyin)`（纯首字母，副索引）与
+  `self.dict.lookup_mixed(pinyin)`（`MixedDfs`：每位要么消耗字面音节、要么消耗一个首字母
+  并把该音节剩余字母从索引枚举）；
+- 只取 `covered == pinyin.len()` 的结果（整串命中）；`covered` 是字节/字母长度语义，
+  与边上 `end` 对应关系需按同一口径换算。
+
+**为什么要放在建格阶段**：⑤㊽–⑤⑤② 三次排序类尝试全部失败，就是因为
+"格子里根本没有这些读法"；把它们做成**边**之后，beam/排序/置顶全都自动按既有规则处理
+（旧通道仍保留作回退点，两者按 (word, pinyin) 去重）。
+
+**验收**：20 条清单「正确读法进前 10」（当前 **5/20**）+ 四套语料不得低于
+daily 12/12·1.000、mixed 13/14·0.929、keystrokes 12/12·0.877、edits 6/6·0.728
++ v1 对拍 44 输入 0 变化 + clippy 0 + perf 同条件不可区分。

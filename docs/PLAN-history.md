@@ -1356,3 +1356,9 @@ zmgai→这么改、zgdsq→这个多少钱、nzgsm→你在搞什么。结论�
 抓「简拼段前五」中正确读法的 freq：18/20 freq>0（整串即词条：生日快乐/新年快乐/状态…），
 仅 wmjtqbj 是逐词链。⇒ 下一步把条目级匹配做进格子（阶段 2 的可穷尽约束匹配），
 而不是继续调排序或拼链。
+
+## 2026-10-03 ⑤⑤③ 附录：条目级边施工配方入档
+
+LatticeEdge 字段已核对(engine/mod.rs:314；end/word/pinyin/freq/fuzzy_penalty/typo_penalty/edit_count/gap/abbrev)；
+插入点=build_abbrev_lattice 返回前往 lattice[0] 追加 end=pinyin.len() 的整串边；
+读法来源复用 lookup_abbrev/lookup_mixed 中 covered==len 的结果；验收口径见 HANDOFF。
