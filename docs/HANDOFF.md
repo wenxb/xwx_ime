@@ -2277,3 +2277,21 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   这样 `chuzaina` 靠这条规则胜出，而不需要抬多词分，`womenjintianquxian` 也就不会被顶掉。
 - 本次回退后的对拍：v1 漂移 **400 行**（只剩门槛打开带来的新增候选）；两侧改动都在
   `decode.rs` / `lookup.rs`，回退点清晰。
+
+## ⑤⑯ 阶段 4：最低档整串词条不再算「可靠覆盖」（chuzaina → 出在哪）
+
+- **判据**：`engine/mod.rs::FILLER_FREQ_TIER = 100` —— `freq == 100` 是词库源数据的
+  「未知/极低频」约定值（抽样 233,025 条里 164,371 条 ≈70% 落在这一档，其余 1/2/3/5…；
+  生成器只有 `FREQ_MAX`、没有下限）。整串覆盖者**全是**这一档 ⇒ 视为没有可靠覆盖。
+- **落点**：`engine/lookup.rs` 整句段的置顶判据——有可靠覆盖时仍按原规则置顶，
+  没有时置顶**本段刚产出的整句候选**（`sentence_keys`）。等价于上游
+  `has_reliable_phrase`，且**不动任何分数**。
+- **效果**（带 LM 实测首位）：`chuzaina` → **出在哪**（原「杵在那」）；`womenjintianquxian`
+  → 我们今天去西安、`womenjintianqbj` → 我们今天去北京、`wmjtqbj`/`womenjtqbj`/`zmgai`/
+  `nihao`/`ztai`/`ztailan`/`zguor`/`xian`/`daishixian` 全部不变。
+- **门槛**：`cargo test --workspace` 单元 **320 passed / 0 ignored**（两条验收用例都绿，
+  不再有 ignored）；clippy 0；v1 对拍漂移 **400 行、首位变化 0 个**（与改前同量，本规则
+  没有新增漂移）；eval daily 召回 **12/12**、mixed **13/14**（未召回 `jintqbj`，旧问题）。
+- **已知遗留（不粉饰）**：daily 的 **MRR 从 1.000 变成 0.958**——有 1 条目标从第 1 落到
+  第 2（首屏仍 12/12、平均选择 1.00，v1 语料里没有这条）。下一步用逐条跑法定位它，
+  再决定是投影规则的边界问题还是排序问题。

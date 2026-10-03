@@ -312,6 +312,7 @@ impl ImeEngine {
         if reachable && pinyin.len() >= MIN_ABBREV_INPUT_LEN {
             // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
             let sentence_lattice = tolerant_lattice_opt.as_ref().unwrap_or(&lattice);
+            let mut sentence_keys: Vec<(String, String)> = Vec::new();
             for c in
                 self.best_chain_candidates(
                 pinyin,
@@ -322,13 +323,30 @@ impl ImeEngine {
             )?
             {
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
+                    sentence_keys.push((c.word.clone(), c.pinyin.clone()));
                     ranked.push(c);
                 }
             }
             sort_candidates(pinyin, &mut ranked);
             ranked.truncate(MAX_CANDIDATES);
-            // 整句进流内首位（与简拼那条同一个结构性规则，不设阈值）。
-            if let Some(idx) = ranked.iter().position(|c| c.covered >= pinyin.len()) {
+            // **整句进流内首位，但只在没有「可靠整串词条」时**：覆盖整串的词条
+            // 若全是源数据最低档（`FILLER_FREQ_TIER`）就说明这一串在词库里没有
+            // 真实依据，整句（条件概率与词频证据都更强）该占首位。判据取数据
+            // 自身的最低档、等价于上游 `has_reliable_phrase`，不是拍出来的阈值；
+            // **不动分数**，所以不会出现「抬多词读法压坏 womenjintianquxian」。
+            let has_reliable_cover = ranked
+                .iter()
+                .any(|c| c.covered >= pinyin.len() && c.freq > FILLER_FREQ_TIER);
+            let target = if has_reliable_cover {
+                ranked.iter().position(|c| c.covered >= pinyin.len())
+            } else {
+                ranked.iter().position(|c| {
+                    sentence_keys
+                        .iter()
+                        .any(|(w, p)| *w == c.word && *p == c.pinyin)
+                })
+            };
+            if let Some(idx) = target {
                 if idx != 0 {
                     let c = ranked.remove(idx);
                     ranked.insert(0, c);
