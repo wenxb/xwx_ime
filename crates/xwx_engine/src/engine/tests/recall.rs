@@ -31,3 +31,32 @@ fn folding_keeps_the_largest_consumed() {
     assert_eq!(out.len(), 1, "同词同音应折叠成一条");
     assert_eq!(out[0].covered, 8, "保留消费范围更大的那条");
 }
+
+/// 阶段 4 ②：折叠要**带上来源**——展示投影要靠它决定层序/配额/整串置顶。
+#[test]
+fn fold_keeps_the_source_of_the_winner() {
+    let mk = |word: &str, py: &str, covered: usize| Candidate {
+        word: word.to_owned(),
+        pinyin: py.to_owned(),
+        score: 0.0,
+        freq: 0,
+        spelling: SpellingKind::Exact,
+        echo: false,
+        covered,
+    };
+    let out = crate::engine::recall::fold_with_sources(vec![
+        (mk("出在哪", "chu zai na", 5), crate::engine::recall::RecallSource::Abbrev),
+        (
+            mk("出在哪", "chu zai na", 8),
+            crate::engine::recall::RecallSource::Sentence,
+        ),
+        (mk("杵在那", "chu zai na", 8), crate::engine::recall::RecallSource::Lattice),
+    ]);
+    assert_eq!(out.len(), 2, "同词同音折叠成一条");
+    let (c, src) = &out[0];
+    assert_eq!(
+        (c.word.as_str(), c.covered, *src),
+        ("出在哪", 8, crate::engine::recall::RecallSource::Sentence),
+        "保留消费范围最大的那条，并把它的来源一起留下"
+    );
+}

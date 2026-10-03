@@ -5,6 +5,10 @@
 
 use super::*;
 
+/// **区段顺序/范围非法必须拒绝**（Q4）：头部只报三个起点，读取端靠加法定位。
+/// 旧实现直接采信，越界只能等 `get` 兜底——报错离谱，且某些布局能悄悄读到
+/// 别的区段（静默错数据）。这里构造一个「records 起点跑到 strings 之后」的头。
+
 #[test]
 fn corrupt_section_offsets_are_rejected_at_open() {
     use std::io::Write;

@@ -62,6 +62,38 @@ pub(super) fn collect_recall_hits(cands: &[Candidate], source: RecallSource) -> 
 ///
 /// 反例（实测）：把去重键加宽成 `(word, pinyin, covered)` 会让同一个词在候选窗里
 /// 出现两次（v1 对拍重复 word 由 4 条涨到 10 条）。
+/// 把「候选 + 它的召回来源」按 `(word, pinyin)` 折叠。
+///
+/// 规则与 [`fold_display_candidates`] 完全一致（保留消费范围最大的那条、
+/// 并列时保留先到的），额外**保留来源**：阶段 4 的展示投影要靠
+/// `RecallHit::source` 决定层序、配额与整串置顶，而不是靠「排序后第一条
+/// 覆盖整串的候选」这种位置性判断。
+///
+/// 目前还没有调用方（下一步在 `lookup.rs` 接上），先把规则与来源一起钉住。
+#[allow(dead_code)]
+pub(super) fn fold_with_sources(
+    cands: Vec<(Candidate, RecallSource)>,
+) -> Vec<(Candidate, RecallSource)> {
+    let mut out: Vec<(Candidate, RecallSource)> = Vec::with_capacity(cands.len());
+    let mut index: HashMap<(String, String), usize> = HashMap::new();
+    for (c, src) in cands {
+        match index.get(&(c.word.clone(), c.pinyin.clone())) {
+            Some(&i) => {
+                // 同词同音：保留消费范围更大的那条（并列时保留先到的，稳定），
+                // 来源跟着胜出的那条走。
+                if c.covered > out[i].0.covered {
+                    out[i] = (c, src);
+                }
+            }
+            None => {
+                index.insert((c.word.clone(), c.pinyin.clone()), out.len());
+                out.push((c, src));
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn fold_display_candidates(cands: Vec<Candidate>) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::with_capacity(cands.len());
     let mut index: HashMap<(String, String), usize> = HashMap::new();
