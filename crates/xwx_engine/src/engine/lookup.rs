@@ -369,12 +369,27 @@ impl ImeEngine {
                 // **补上词条级证据**：beam 的路径词（`WordSpot`）不带 freq，所以在这里
                 // 用 (word, pinyin) 回查词库——整串命中词条（freq>0）的读法因此能和
                 // "逐词拼链"区分开。层序/投影口径需要这个区分（见 ⑤⑦⑧/⑤⑦⑨）。
-                if c.freq == 0 {
-                    if let DictStore::Mmap(d) = &self.dict {
-                        if let Some(e) =
-                            d.lookup(&c.pinyin)?.iter().find(|e| e.word == c.word)
-                        {
+                if let DictStore::Mmap(d) = &self.dict {
+                    if let Some(e) = d.lookup(&c.pinyin)?.iter().find(|e| e.word == c.word) {
+                        if c.freq == 0 {
                             c.freq = e.freq;
+                        }
+                        // **整串命中词条 ⇒ 按词条口径重算分数**（`dict_logp +
+                        // (lm - floor) * lm_weight`，与旧通道同式）：beam 的分是
+                        // 逐词先验 + 每弧惩罚的累加，不反映词条词频（实测 `ztai`：
+                        // 状态 freq=503366 被「这台」64585 压到 #3）。
+                        // **必须挂开关**：默认世界里格子与旧通道候选同场竞争，直接改分
+                        // 会扰动全局排序（⑤⑧④ 实测 mixed 0.929→0.893、zgr/smsh 首位变错）。
+                        if super::DEMOTE_OLD_ABBREV_CHANNEL && c.covered >= pinyin.len() {
+                            let total = self.dict.total_freq()?;
+                            if total > 0 {
+                                let dict_logp = ((e.freq.max(1) as f64).log10()
+                                    - (total as f64).log10()) as f32;
+                                let st = self.lm.state_from_context(ctx);
+                                let lm = self.lm.score_only(&st, &c.word);
+                                let evidence = lm - self.lm.floor_log10();
+                                c.score = dict_logp + evidence * self.lm_weight;
+                            }
                         }
                     }
                 }

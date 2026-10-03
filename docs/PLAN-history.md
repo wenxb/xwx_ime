@@ -1539,3 +1539,9 @@ sort_candidates/sort_key/plain_key 加 entry_tier_exception；lookup.rs 简拼�
 
 mixed 0.929→0.893、zgr/smsh 首位变错。原因：默认世界里格子与旧通道候选同场竞争，改分即扰动。
 结论：改格子候选分数/序必须挂 DEMOTE_OLD_ABBREV_CHANNEL；剩余 5 条排序应在"开关按类置 true"之后再做。
+
+## 2026-10-03 词条口径重算挂开关 ⇒ 格子独立供给下 20/20 首位
+
+开关 false 四套语料基线、对拍 0、401 passed/0 failed、clippy 0；开关 true 时 20 条首位 20/20、
+召回 20/20、mixed 0.662→0.760。剩余差距在语料里其它类别输入（mixed 混拼、keystrokes 打字中状态）。
+下一步按语料逐条看退化输入，据此按类限定开关范围。
