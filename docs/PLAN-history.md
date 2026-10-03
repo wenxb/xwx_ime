@@ -1432,3 +1432,9 @@ needs_abbrev 对 pure_abbrev/leading_abbrev 忽略 Abbrev 层候选 ⇒ 两类�
 400/1 定性为集成层抖动（tests/prefix_commit.rs::whole_string_reading_commits_in_one_space，
 跑真引擎+私有总线；本会话两次门禁异常同源）。开关 DEMOTE_OLD_ABBREV_CHANNEL=false 落地，
 轻量判据在 merge 处、原判据未动；v1 对拍 0 变化。下一步置 true 量格子独立供给。
+
+## 2026-10-03 阶段 3 关键测量：格子只覆盖 6/20 正确答案（开关保持 false）
+
+置 DEMOTE_OLD_ABBREV_CHANNEL=true：14/20 首位变错、正确读法只剩 6/20 在候选表里、
+mixed 0.929→0.503、keystrokes 0.877→0.795。⇒ 格子供给（整串条目边+逐词链）覆盖不足，
+旧通道不可替代。下一步：对齐 lookup_abbrev/MixedDfs 的匹配语义，逐条补差集，指标从 6/20 往 20/20 走。
