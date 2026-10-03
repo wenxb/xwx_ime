@@ -1,48 +1,23 @@
-//! 回归探针:把「候选列表 + 会话行为 + 单次延迟」钉成文本,改动前后逐字节对拍。
+//! 回归探针：把「候选列表 + 会话行为 + 单次延迟」钉成文本，改动前后逐字节对拍。
 //!
-//! docs/HANDOFF.md 定的判退化方式就是它:改动前先跑一遍存成基线,改完再跑
-//! 同一个探针 `diff`——**不靠「前 10 重合率」这类指标**,而是逐位比对候选
-//! 列表本身(顺序、词、拼音、层、分数都要一致)。
+//! 判退化的方式是**逐位比对候选列表本身**（顺序、词、拼音、层、分数），
+//! 不用「前 10 重合率」这类指标。三段分开看：
+//! - A：`lookup_candidates` 的完整候选列表（对拍主体）；
+//! - B：`commit_immediately` 取第 1 个候选后的剩余串；
+//! - C：真实按键序列（`Char`/`Space`/`Backspace`/`CandidateClicked`/`PageDown`/
+//!   `DeleteCandidate`）的每一步输出。
 //!
-//! ## 三段内容,读结果时分开看
+//! B 与真实交互**不等价**：`commit_immediately` 立即学习并返回文本；`handle` 把
+//! 选中的一段留在组合里、上推学习到组合结束。确认/回退/学习时序只看 C 段。
+//! 每块的 `min_ms` 是 30 次查询的最短耗时，用来盯延迟门槛。
 //!
-//! - **A 段**:`lookup_candidates` 的完整候选列表(逐字节对拍的主体);
-//! - **B 段**:`commit_immediately`(立即提交接口)取第 1 个候选后的剩余串;
-//! - **C 段**(v2 起):**真实按键序列**——`handle(Char/Space/Backspace/
-//!   CandidateClicked/PageDown/DeleteCandidate)` 的每一步输出。
-//! - 每块的 `min_ms` 是单次查询最短耗时(30 次取最小),用于盯住延迟门槛。
+//! 打对的输入基线必须逐字节不变；为容错解码**故意**改变的输入要在改动说明里点名，
+//! 其余差异都算退化。
 //!
-//! **B 段与真实交互不等价**:`commit_immediately` 跳过确认段、
-//! 立即学习、立即返回文本;`handle` 则把选中的一段留在组合里、上屏与学习推迟
-//! 到整个组合结束。确认/回退/学习时序的验收看 C 段,不要拿 B 段代替。
-//!
-//! 打对的输入(A 段里没有错拼的那些)基线必须**逐字节不变**;为了容错解码
-//! 而**故意**改变的输入(错拼、乱码段)在改动说明里点名列出,其余差异都算
-//! 退化。
-//!
-//! ## 身份与自校验
-//!
-//! 词库/副索引/万象模型三个文件**必须存在且真的加载成功**,否则直接报错
-//! 退出——引擎自身会「文件缺失就退回空库」静默降级(`engine/api.rs` 的
-//! `new_with_lm`),探针不能跟着降级,否则一份空库基线看着也是绿的。写出
-//! 文件时另存 `<out>.id.txt`:输出哈希与行数、Git SHA/是否有改动、三个数据
-//! 文件的 sha256 与字节数——基线因此可追溯(`tests/baselines/`)。
-//!
-//! ## 两种输出格式
-//!
-//! - `--format v1`:**逐字节兼容的历史格式**(只有 A/B 段),用来跟
-//!   `/tmp/codex_batch1_nt.txt` 这类老基线直接 `diff`;
-//! - `--format v2`(默认):候选行加 `bits=`(`score.to_bits()`,浮点位模式
-//!   级对拍)与 `covered=`(分段上屏的取值范围),并加 C 段。
-//!
-//! 用法:
-//! ```sh
-//! cargo run --release --offline -p xwx_engine --example regression_probe -- \
-//!     --data "$HOME/.local/share/xwx" tests/baselines/regression_v2.txt
-//! cargo run --release --offline -p xwx_engine --example regression_probe -- \
-//!     --format v1 --stdout | grep -v 'min_ms=' | diff - /tmp/codex_batch1_nt.txt
-//! ```
-//! 不接用户层(确定性):只量词库 + 万象 LM + 切分/解码的固有行为。
+//! 词库/副索引/万象模型三个文件必须存在且真的加载成功，否则直接报错退出——引擎自身
+//! 会「缺文件就退回空库」静默降级（`engine/api.rs::new_with_lm`），探针不能跟着降级，
+//! 否则空库基线看着也是绿的。写文件时另存 `<out>.id.txt`：输出哈希与行数、Git SHA/
+//! 是否有改动、三个数据文件的 sha256 与字节数，基线因此可追溯（`tests/baselines/`）。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
