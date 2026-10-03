@@ -3645,3 +3645,44 @@ super::trace::note(|| {
   修正判据即可；
 - 通过过滤有「生日快乐」⇒ 边加进去了，问题在**抽候选**这一步
   （`lattice_candidates`/beam 没把它变成候选），改去查抽取。
+
+## ⑤⑦⓪ 那行 trace 的**正确插法**（我上一轮插错作用域，构建失败已回退）
+
+⑤⑥⑨ 的 trace 必须放在 `build_abbrev_lattice` 里 **`if self.dict.has_abbrev() { … }` 块的内部**、
+**`for c in whole { … }` 循环之后**——`whole` / `kept` / `n_abbrev` / `n_mixed` 都是这个块内的
+局部量，插到 `Ok(lattice)` 之前（函数级）会因为作用域不对而编译失败（已实测）。
+
+推荐的完整补丁（三处，都在同一块内）：
+```rust
+        if self.dict.has_abbrev() {
+            let DictStore::Mmap(d) = &self.dict else { return Ok(lattice); };
+            let mut whole: Vec<Candidate> = d.lookup_abbrev(pinyin)?;
+            let n_abbrev = whole.len();
+            let mixed = d.lookup_mixed(pinyin)?;
+            let n_mixed = mixed.len();
+            whole.extend(mixed);
+            let mut kept: Vec<String> = Vec::new();          // ← 新增
+            for c in whole {
+                if c.covered != pinyin.len() { continue; }
+                if lattice[0].iter().any(|e| e.word == c.word && e.end == pinyin.len()) { continue; }
+                kept.push(format!("{}|cov{}|f{}", c.word, c.covered, c.freq));   // ← 新增
+                lattice[0].push(LatticeEdge { … });
+            }
+            crate::engine::trace::note(|| {                 // ← 新增（块内、循环后）
+                format!("整串条目边: abbrev={n_abbrev} mixed={n_mixed} kept={kept:?}")
+            });
+        }
+        Ok(lattice)
+```
+
+**怎么读这条迹**：
+- `abbrev=0 mixed=0` ⇒ 这个调用点上 `lookup_abbrev`/`lookup_mixed` 返回空
+  （而 `abbrev_candidates` 用同一个 `MmapDict` 却能返回「生日快乐」⇒ 多半是**入参形态不同**，
+  例如这里的 `pinyin` 与那边的清洗结果不一致）；
+- 二者非 0 但 `kept=[]` ⇒ **`covered` 的语义与假设不符**（不是"吃掉的输入字节数"），修判据；
+- `kept` 里有「生日快乐」⇒ 边加进去了，问题在**抽候选**（改查 `lattice_candidates`/beam）。
+
+**运行方式**（跑完即 `git checkout -- crates/xwx_engine/src/engine/lattice/build.rs`）：
+```bash
+printf 'srkl\nztai\nwsm\n' | XWX_TRACE=1 /mnt/hdd/target/xwx_ime/release/examples/recall_trace 2>&1 | grep 整串条目边
+```

@@ -1449,3 +1449,8 @@ mixed 0.929→0.503、keystrokes 0.877→0.795。⇒ 格子供给（整串条目
 
 提上限到 60 并开关打开搜全部候选：srkl/ztai/smsh/nhma/gxfc/zgdsq 的期望读法**一条都不在**。
 ⇒ ⑤⑤④ 的整串条目边未生效。下一步一行 trace 打印 whole.len()/过滤后条数/词列表即可定性。
+
+## 2026-10-03 trace 插法修正（⑤⑦⓪）
+
+⑤⑥⑨ 的 trace 必须插在 build_abbrev_lattice 的 if has_abbrev 块内、for 循环之后（kept/whole 是块内局部量）；
+插到 Ok(lattice) 前会作用域编译错（已实测并回退）。完整补丁与三种读法见 HANDOFF ⑤⑦⓪。
