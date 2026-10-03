@@ -2033,3 +2033,27 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
     `tests/focus_lifecycle.rs::focus_in_and_enable_are_noops_that_preserve_a_live_composition`
     的空闲断言相应改成「FocusIn 不发信号、Enable 只发 `RegisterProperties`」；
     用例原本要保的那条语义（不碰活的组合）不变。
+
+## ⑤⑥ 第三批第 5 项：受控中英混输——大写字母起头的英文单词
+
+- **用户症状**：中文模式下敲 `Shift+H` 只上屏一个 `H`，后面的 `ello` **回到拼音**
+  （候选列表给出「额/饿/恶…」）⇒ 英文单词没法自然打出来，只能先按 Ctrl+空格
+  切模式、打完再切回来。
+- **做法（显式控制，不是猜）**：会话新增 `english_run` 状态——
+  - **进入**：`Verbatim(大写字母)` 且身上没有未上屏的组合（即 Shift+大写字母**起头**）；
+  - **持续**：跟随态里的字母逐字上屏（走 `commit_raw`：不进候选、不学习、不进
+    造词缓冲，与单字母 Verbatim 同一条路）；大写字母也照走（`Abc` 这种词能打）；
+  - **结束**：任何**非字母**事件（空格/标点/回车/退格/Esc/翻页/模式切换）——
+    落在 `handle` 开头的一行 `matches!` 里，不散落在各分支；焦点切换
+    （`reset_for_focus_change`）另加一条显式清除。
+- **为什么是「大写起头」而不是「判断这串像不像英文」**：后者已被实测证伪三次
+  （见看板卡 `t-mur20d0m-kvtj99` 的评论 `c-murwgd04-px27ev`）：简拼层对**任何**
+  字母串都能造出覆盖整串的读法（`hello` → 赫拉利），所以「像不像拼音」不是结构
+  问题而是词频问题；而「原样上屏」这条候选目前还没有自己的层与桶（借用 `Exact`
+  + `ESCAPE_HATCH_SCORE`），一推到列表里就会插到简拼层前面，破坏两个排序不变量
+  用例。因此先做**不需要新层、不需要数据**的那一半。
+- 定向用例：`session/tests/punct_verbatim.rs::uppercase_start_keeps_the_rest_of_the_word_in_english`；
+  **旧实现实测红**：`e 应逐字上屏而不是进拼音: Updated(SessionUpdate { preedit: "e", … })`。
+- 验收：`cargo test -p xwx_engine --lib` **312 passed**、clippy 0。
+- **仍未做的**：(a) 给「原样上屏」单独定层（用户在小写状态下打英文单词仍未解决，
+  需要动排序键）；(c) 英文词表数据。

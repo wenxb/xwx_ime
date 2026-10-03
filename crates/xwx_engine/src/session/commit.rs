@@ -334,6 +334,7 @@ impl InputSession {
         // Ctrl+空格，切到 B 应用打出来的全是字母，且没有任何线索。收回中文是
         // 保守的一侧：用户看到中文，再按一次就能进英文；反过来用户无从判断。
         self.english_mode = false;
+        self.english_run = false;
         text
     }
 

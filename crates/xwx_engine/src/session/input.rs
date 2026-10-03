@@ -7,12 +7,25 @@ impl InputSession {
     ///
     /// 出错时返回 `Err`（词典/模型查询失败等），会话状态不变。
     pub fn handle(&mut self, event: InputEvent) -> Result<SessionOutput, EngineError> {
+        // 「英文跟随」只在连续字母里活着：任何别的按键都结束它（空格、标点、
+        // 回车、退格、Esc、模式切换……）。字母本身由下面 Verbatim 分支与
+        // `Char` 分支接住。
+        if !matches!(event, InputEvent::Char(_) | InputEvent::Verbatim(_)) {
+            self.english_run = false;
+        }
         match event {
             // —— 英文模式：字母等按键透传给应用 ——
             // 英文模式下拼音串必为空，方向键/空格/回车等自然落入相应 Noop；
             // 只有字符在这里被挡掉，不进拼音串。
             InputEvent::Char(c) if self.english_mode && c.is_ascii() => {
                 Ok(SessionOutput::Noop)
+            }
+
+            // —— 英文跟随：大写起头的英文单词，后面的字母直接上屏 ——
+            // 见 `english_run` 的文档。与 Verbatim 同一条路：不进候选、
+            // 不学习，逐字交给应用（旧实现里 `H` 之后的 `ello` 会回到拼音）。
+            InputEvent::Char(c) if self.english_run && c.is_ascii_alphabetic() => {
+                Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
             }
 
             // —— Ctrl+空格：切换中英文模式（引擎自己的逻辑） ——
@@ -247,6 +260,11 @@ impl InputSession {
             // 但两者都只用 push_tail 进上屏尾部、不学、不动 last_word。
             InputEvent::Verbatim(c) => {
                 if self.pinyin.is_empty() && self.confirmed.is_empty() {
+                    // 大写字母**起头**（身上没有未上屏的组合）＝ 用户明说这是
+                    // 英文单词的第一个字母，后面的字母跟着走英文。
+                    if c.is_ascii_uppercase() {
+                        self.english_run = true;
+                    }
                     Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
                 } else {
                     // 标点/英文字符结束这次组合:已确认段 + 当前候选(或原样

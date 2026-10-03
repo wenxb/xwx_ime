@@ -349,3 +349,34 @@ fn unmapped_ascii_symbols_still_passthrough() {
         assert_eq!(s.pinyin(), "ni", "{c:?} 不应改动拼音串");
     }
 }
+
+/// 大写字母起头的英文单词继续按英文走：`Shift+H` 上屏 `H` 之后，
+/// 后面的 `ello` 逐字上屏，不再回到拼音（旧实现里它们会进拼音串）。
+///
+/// 这是「受控中英混输」的显式控制：非字母事件结束跟随态。
+#[test]
+fn uppercase_start_keeps_the_rest_of_the_word_in_english() {
+    let mut s = session_with_dict();
+    let out = s.handle(InputEvent::Verbatim('H')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "H"),
+        "大写首字母直接上屏: {out:?}"
+    );
+
+    for c in ['e', 'l', 'l', 'o'] {
+        let out = s.handle(InputEvent::Char(c)).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == &c.to_string()),
+            "{c} 应逐字上屏而不是进拼音: {out:?}"
+        );
+        assert!(!s.is_active(), "英文跟随期间不该有拼音组合");
+    }
+
+    // 非字母事件结束跟随：之后的字母重新进拼音串。
+    s.handle(InputEvent::Backspace).expect("不应失败");
+    let out = s.handle(InputEvent::Char('n')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "n"),
+        "跟随结束后字母应回到拼音: {out:?}"
+    );
+}
