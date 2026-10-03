@@ -35,3 +35,4 @@ mod dag_reachability;
 mod typo_budget;
 mod quota;
 mod recall;
+mod blocklist;

@@ -1924,3 +1924,17 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   → `ImeEngine::{delete_candidate, unblock_last_candidate}` → `InputEvent::{DeleteCandidate, UnblockCandidate}`
   → IBus `Ctrl+Delete` / `Ctrl+Shift+Delete`。
 - 验收：workspace **379 passed / 0 failed**、clippy **0**、v1 对拍 **0 行**、perf 通过。
+
+## ⑤① 解屏蔽的引擎层闭环用例（第三批第 1 项收尾）
+
+- `engine/tests/blocklist.rs::delete_then_unblock_last_round_trips`：挂**内存用户层**
+  （`ImeEngine::new(...).with_user_lm(crate::UserLM::in_memory())`）后
+  `delete_candidate` → `snapshot().is_blocked` 为真 → `unblock_last_candidate()` 为真
+  → 状态翻转 → 槽位空后再撤返回 `false`。
+- **依赖前提**：屏蔽/撤销都发生在用户层，**没挂用户层时两个动作都是空操作**，
+  所以用例必须挂 `in_memory()`；依赖真实词库，缺失时跳过（必需数据的红由
+  `tests/required_data.rs` 负责）。
+- **踩坑记录（同一类错误这轮犯了三次）**：`with_user_lm` 的签名、
+  `UserLM` 的路径（是 `crate::UserLM`，不是 `crate::user_lm::UserLM`）、
+  `is_blocked` 的宿主（在 `snapshot()` 上，不在 `UserLM` 上）都是**猜的**，
+  每次都编译失败。**规矩：写用例前先用一条命令把签名抓出来。**
