@@ -1285,3 +1285,9 @@ zhuang→状(#2)、tai→态(#3)、zhuangtai→状态(#1)、zhuang t→状态(#1
 临时迹打印简拼格位置 0 的边——空。门槛迹显示 pure_abbrev=false（判据要求每字母能起音节，
 而 ztai 的 i 是 tai 的字面尾巴）+ tolerant_explains=true ⇒ needs_abbrev=false ⇒ 不建格。
 ⇒ 阶段 3 的入口是门槛判据（"输入能被简拼弧+字面尾链覆盖"），不是 beam/弧枚举/排序。
+
+## 2026-10-03 「开头即缩写」判据落地
+
+!reachable + 首两字母都不成音节 + 非 zh/ch/sh + has_abbrev ⇒ 建简拼格（用合并前快照判整串覆盖）。
+三个坑：只看首字母会让 edits 0.728→0.680；不排除 zh/ch/sh 会让 zhongguor 的「中国」掉出前 10；
+漏 has_abbrev 会破降级契约。实测首位零变化、10/20 候选变长、四套语料与对拍全不变、401 passed/0 failed。

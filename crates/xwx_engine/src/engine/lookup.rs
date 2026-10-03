@@ -288,11 +288,30 @@ impl ImeEngine {
         // 它不算「已经有读法」，否则门槛永远挡住简拼格（实测 wsm/zgr/xxn/dbq/mgx
         // 五条因此一条简拼候选都拿不到）。
         let covered_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
+        // **开头即缩写**：首窗口是单字母、且它本身不是完整音节（`z`/`w`/`b`…）。
+        // 这类输入的读法必然是「单字母缩写 + 字面尾链」（`ztai` = z + `tai`、
+        // `ztailan`、`jttqzenmy`…）——旧判据（`pure_abbrev` 要求**每个**字母都能
+        // 起一个音节）把它们整个排除，连简拼格都不建，读法无处产生
+        // （实测 `ztai` 的门槛迹：pure_abbrev=false ⇒ needs_abbrev=false）。
+        // 判据是结构事实：单字母不成音节 ⇒ 开头那一段只能当缩写读。
+        // 收紧：要求**前两个字母都不能**构成音节。只看首字母会把「打错的正常输入」
+        // 也算进来（`nihso` 的 `n` 不成音节，但它开头其实是正常的 `ni`），
+        // 实测那样会让 `edits` 语料 MRR 0.728 → 0.680 退化。
+        let leading_abbrev = self.dict.has_abbrev()
+            && !reachable
+            && pinyin.len() >= 3
+            && self.segmenter.segment(&pinyin[..1]).is_empty()
+            && self.segmenter.segment(&pinyin[..2]).is_empty()
+            // `zh`/`ch`/`sh` 是**合法双字母声母**（`zhongguor` 的开头），
+            // 不是"开头即缩写"——不排除它们会把全拼输入也拉进这一支
+            // （实测 `zhongguor` 的「中国」被挤出前 10）。
+            && !matches!(&pinyin[..2], "zh" | "ch" | "sh");
         let needs_abbrev = !reachable
             && (pure_abbrev
+                || leading_abbrev
                 || ((!tolerant_explains || self.ends_one_letter_short(pinyin))
                     && pinyin.len() >= MIN_ABBREV_INPUT_LEN))
-            && if pure_abbrev {
+            && if pure_abbrev || leading_abbrev {
                 !exact_covers_whole
             } else {
                 !covered_whole
