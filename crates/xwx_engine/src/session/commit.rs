@@ -129,6 +129,10 @@ impl InputSession {
             candidate: c.clone(),
             letters: prefix,
         });
+        // **确认段也要进打分的字符级窗口**：方案 b 下它还没上屏，但用户意图已定，
+        // 剩余串的候选必须看得见它——否则「先确认『北京』再打 daxue」不会倾向「大学」。
+        // 走 `push_tail` 而不是直接 push：那里有长度窗口（COMMITTED_TAIL_LIMIT）。
+        self.push_tail(&c.word);
         Ok(SessionOutput::Updated(self.update()))
     }
 

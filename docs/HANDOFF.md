@@ -1950,3 +1950,19 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   2. `space_after_mid_caret_insert_commits_the_whole_string`：同样的插入后按空格 →
      `Commit("你好")`（证明上屏取整串）。
 - **不做无谓改动**：这一项没有可修的缺陷，结论是「已覆盖」；为做而做地改代码只会引入风险。
+
+## ⑤③ 第三批第 3 项：确认段进打分的字符级窗口
+
+- **根因**（`session/view.rs:67-72`）：`lm_context()` 的 `tail` 用的是 `committed_tail`
+  ——只有**已经上屏**的文本；而方案 b 的**确认段**（选完一段留在组合里、上屏与学习
+  都推迟到组合结束）不在其中 ⇒ 确认一段后，剩余串的候选看不见那一段。
+- **修法（一行，落在确认处）**：在 `commit.rs` 写入 `ConfirmedSegment` 之后调
+  `self.push_tail(&c.word)`——`committed_tail` 本来就是「打分的字符级窗口」
+  （中文标点走的就是这条，见 `push_tail` 的文档），确认段也属于「用户意图已定、
+  但还没上屏」的文本，进这个窗口语义一致；走 `push_tail` 而不是直接 push 是为了
+  复用它的长度窗口（`COMMITTED_TAIL_LIMIT`）。
+- 效果：先确认「北京」再打 `daxue`，剩余串的打分会看到上文「北京」。
+- **范围说明**：只补 **LM 上文**；**用户层的学习仍然推迟到组合结束**（那是刻意的设计，
+  不改）。所以「个人化补召回」这一半不在本次范围内。
+- 验收：`cargo test -p xwx_engine --lib` **309 passed**、`--workspace` 各套件全绿、
+  clippy 0。
