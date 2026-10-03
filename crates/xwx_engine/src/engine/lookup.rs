@@ -312,7 +312,7 @@ impl ImeEngine {
         if reachable && pinyin.len() >= MIN_ABBREV_INPUT_LEN {
             // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
             let sentence_lattice = tolerant_lattice_opt.as_ref().unwrap_or(&lattice);
-            let mut sentence_keys: Vec<(String, String)> = Vec::new();
+            let mut sentence_keys: Vec<(String, String, f32)> = Vec::new();
             for c in
                 self.best_chain_candidates(
                 pinyin,
@@ -323,7 +323,7 @@ impl ImeEngine {
             )?
             {
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
-                    sentence_keys.push((c.word.clone(), c.pinyin.clone()));
+                    sentence_keys.push((c.word.clone(), c.pinyin.clone(), c.score));
                     ranked.push(c);
                 }
             }
@@ -346,10 +346,14 @@ impl ImeEngine {
                 c.covered >= pinyin.len() && c.freq > 0 && c.freq <= FILLER_FREQ_TIER
             });
             let target = if top_is_filler_entry {
+                // 按 **(词, 音, 分)** 三元组认「本段刚产出的那条」：同文本同拼音
+                // 的词条（如最低档的「你好时节」）与整句拼出的组合会撞 key，
+                // 只比 (word, pinyin) 会把词条本身顶上去（实测 daily 第 1 条
+                // `nihaoshijie` 因此从「你好世界」变成「你好时节」）。
                 ranked.iter().position(|c| {
-                    sentence_keys
-                        .iter()
-                        .any(|(w, p)| *w == c.word && *p == c.pinyin)
+                    sentence_keys.iter().any(|(w, p, s)| {
+                        *w == c.word && *p == c.pinyin && (*s - c.score).abs() < f32::EPSILON
+                    })
                 })
             } else {
                 ranked.iter().position(|c| c.covered >= pinyin.len())
