@@ -2211,3 +2211,25 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   把「每次扩展都重新二分」换成「查一次转移表」。
 - 验收：`regression_probe --format v1` 对拍 **0 行**（计时只在 `XWX_TRACE` 下开）、
   单元 314 passed、clippy 0。
+
+## ⑤⑬ 阶段 2B：音节级转移索引（缩写弧剪枝不再走 186 万条 key 的二分）
+
+- **索引**：`scripts/build_syllable_graph.py` 把 key 空间编成音节级树（60B 头 +
+  16B/节点 + 6B/边 + 412 条音节名表）。dict.bin 的 key 本就是字典序，按「与上一条
+  key 的最长公共前缀」单趟 O(深度) 建树。实测 1,730,725 词条 → 2,819,021 节点 /
+  2,819,020 边 / 62.0MB / 生成 42s；产物自检（头自洽 + 抽 400 条 key 走通到底）。
+- **读取器** `dict/syllable_graph.rs`：`open / child / children_starting_with / walk / node`。
+  与 `abbrev.bin` 同一套约定：可选数据、损坏只报错不 panic、**同代校验用头部 n_keys
+  与词库记录数比对**，不符就不装配。`Dictionary::syllable_graph()` 默认 None；
+  `DictStore` 必须转发——漏转发＝静默退回二分（与 key_prefix_state 同一个坑）。
+- **接线**：`engine/lattice/build.rs::collect_chain_edges` 新增 `node: Option<u32>`
+  （链在索引里的节点，随递归下传）：缩写弧的 prefix_state 改成**内存子表二分**；
+  链已不是任何词条 key 前缀时直接剪整棵子树。索引缺失/节点未知时原样退回
+  key_prefix_state，回退路径仍被全部单测覆盖。装载点：`src/main.rs`
+  （XWX_SYLLABLE_GRAPH_PATH 可覆盖）+ 六个 example。
+- **等价性（本次最重要的证据）**：同一个二进制，有索引 vs 无索引（把
+  `data/syllable_graph.bin` 移开）跑 `regression_probe --format v1`，**2444 行逐字节一致**。
+- **收益**：引擎迹里的「建简拼格」**7.641ms → 2.590ms**（同条件各 5 次取最小值）。
+- **未取到**：端到端 `perf_probe` 在本机负载 14.2（20 核）下 p95 15.9ms，而回退路径
+  自身也 12.4~22ms ⇒ 无法与 12ms 门槛比较，**需要安静环境复测**（历史安静值 11.1~11.8ms）。
+- 门槛：`cargo test --workspace` **391 passed / 0 failed / 1 ignored**、clippy 0。
