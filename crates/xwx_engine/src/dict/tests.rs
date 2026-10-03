@@ -524,3 +524,30 @@ fn real_abbrev_index_never_returns_more_characters_than_letters() {
         res.iter().take(5).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
     );
 }
+
+/// **区段顺序/范围非法必须拒绝**（Q4）：头部只报三个起点，读取端靠加法定位。
+/// 旧实现直接采信，越界只能等 `get` 兜底——报错离谱，且某些布局能悄悄读到
+/// 别的区段（静默错数据）。这里构造一个「records 起点跑到 strings 之后」的头。
+#[test]
+fn corrupt_section_offsets_are_rejected_at_open() {
+    use std::io::Write;
+    let dir = std::env::temp_dir().join(format!("xwx-bad-header-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    let path = dir.join("bad.bin");
+    let mut hdr = Vec::new();
+    hdr.extend_from_slice(MMAP_MAGIC);
+    hdr.extend_from_slice(&MMAP_VERSION.to_le_bytes());
+    hdr.extend_from_slice(&1u64.to_le_bytes()); // pinyin_count
+    hdr.extend_from_slice(&0u64.to_le_bytes()); // total_entries
+    hdr.extend_from_slice(&200u64.to_le_bytes()); // records_off（跑到 strings 之后）
+    hdr.extend_from_slice(&100u64.to_le_bytes()); // strings_off
+    hdr.extend_from_slice(&300u64.to_le_bytes()); // entries_off
+    hdr.resize(512, 0);
+    std::fs::File::create(&path)
+        .and_then(|mut f| f.write_all(&hdr))
+        .expect("写坏文件");
+    let err = MmapDict::open(&path).expect_err("区段顺序非法的头必须被拒绝");
+    let msg = format!("{err}");
+    assert!(msg.contains("区段") || msg.contains("越界"), "报错应点名区段问题: {msg}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

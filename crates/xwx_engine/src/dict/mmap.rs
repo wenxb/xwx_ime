@@ -41,6 +41,24 @@ impl MmapDict {
         let records_off = read_u64(bytes, 28)? as usize;
         let strings_off = read_u64(bytes, 36)? as usize;
         let entries_off = read_u64(bytes, 44)? as usize;
+        // **区段顺序与范围校验（Q4）**：头部只报三个起点，而每次 `record()` /
+        // `slice()` 都拿它们做加法。先在这里证明「header ≤ records ≤ strings ≤
+        // entries ≤ 文件长」且记录数组落在 strings 区之前，后面的加法才有意义——
+        // 否则越界只能靠 `get` 兜底，报错信息也离谱（「偏移 2^60 越界」而不是
+        // 「头部损坏」）。
+        if !(MMAP_HEADER_LEN <= records_off
+            && records_off <= strings_off
+            && strings_off <= entries_off
+            && entries_off <= bytes.len())
+        {
+            return Err(DictError::Corrupt("区段顺序/范围不合法: records/strings/entries 起点必须递增且落在文件内"));
+        }
+        let records_len = pinyin_count
+            .checked_mul(MMAP_RECORD_LEN)
+            .ok_or_else(|| DictError::Corrupt("记录数溢出"))?;
+        if records_off + records_len > strings_off {
+            return Err(DictError::Corrupt("记录数组越界: pinyin_count × 记录长度超出 strings 区"));
+        }
         Ok(Self {
             map,
             pinyin_count,

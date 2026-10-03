@@ -1762,3 +1762,16 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   这一条也让它可独立演示——本脚本的源是 sqlite3（仓库里没有），无法端到端跑。
 - **实测**：现有 `data/dict.bin`（76 MB）**通过自检**（说明判据与真实格式一致）；
   人为篡改魔数被拦下；`data/dict.bin data/dict.bin` 被提前拒绝。
+
+## ㊳ Q4 第四步：读取端的区段校验
+
+- **问题**（Q4）：`dict/mmap.rs::from_bytes` 只校验长度/魔数/版本，**三个区段起点直接
+  采信**；每次 `record()`/`slice()` 都拿它们做加法，越界只能靠 `get` 兜底——报错离谱
+  （「偏移 2^60 越界」而不是「头部损坏」），某些布局还能悄悄读到别的区段（静默错数据）。
+- **做法**：读完头部后立刻校验「header ≤ records ≤ strings ≤ entries ≤ 文件长」，
+  并对 `pinyin_count × RECORD_LEN` 做 **checked 乘法**、证明记录数组落在 strings 区
+  之前；不合法返回 `DictError::Corrupt("区段顺序/范围不合法…")`。
+- **用例**：`dict/tests.rs::corrupt_section_offsets_are_rejected_at_open` 构造
+  「records 起点跑到 strings 之后」的头（临时文件 + `MmapDict::open`），断言必须报错
+  且信息点名区段问题——旧实现会**照常返回 Ok**，所以这条在旧实现上是红的。
+- **待做**：`dict/abbrev.rs` 套用同一套；主副索引同源标识/哈希（发布契约）。
