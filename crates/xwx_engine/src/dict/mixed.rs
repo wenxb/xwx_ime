@@ -401,6 +401,18 @@ impl MixedDfs<'_> {
         // 「没有」丢了),而完全不设上界会让 DFS 跑满 20_000 步预算
         // (`zhongg` 0.343ms → 4.13ms)。8 倍是一个实测标定的折中。
         if self.budget == 0 || self.out.len() >= MAX_MIXED_COLLECT {
+            crate::engine::trace::note(|| {
+                format!(
+                    "混合 DFS 提前停止: 剩余步数={} 已收集={} 原因={}",
+                    self.budget,
+                    self.out.len(),
+                    if self.budget == 0 {
+                        "步数预算耗尽"
+                    } else {
+                        "收集池满"
+                    }
+                )
+            });
             return Ok(());
         }
         let input = self.input;

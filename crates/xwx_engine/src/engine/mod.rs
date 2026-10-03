@@ -440,6 +440,7 @@ mod decode;
 mod input;
 mod lattice;
 mod lookup;
+pub mod trace;
 mod rank;
 mod recall;
 

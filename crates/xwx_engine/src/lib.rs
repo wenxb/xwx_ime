@@ -20,6 +20,7 @@
 //! }
 //! ```
 
+pub use engine::trace;
 pub mod candidate;
 pub mod corrector;
 pub mod dict;

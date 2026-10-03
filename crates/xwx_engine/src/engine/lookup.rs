@@ -89,6 +89,7 @@ impl ImeEngine {
         // 把用户存储访问也从 `LmStore::Mixed` 内部抽出来是后续工作。
         let user_snapshot = crate::user_lm::user_entries_snapshot(&self.lm);
 
+        super::trace::begin();
         let lattice = self.build_lattice(pinyin, bounds, user_snapshot.as_ref())?;
         // **布尔 DAG 可达性替代 beam**:这里只需要
         // 知道「精确格上存在覆盖整串的读法吗」,旧实现为此跑完整 beam
@@ -242,6 +243,12 @@ impl ImeEngine {
             && !tolerant_explains
             && pinyin.len() >= MIN_ABBREV_INPUT_LEN
             && !ranked.iter().any(|c| c.covered >= pinyin.len());
+        super::trace::note(|| {
+            format!(
+                "门槛: reachable={reachable} tolerant_explains={tolerant_explains} len={} needs_abbrev={needs_abbrev}",
+                pinyin.len()
+            )
+        });
         if needs_abbrev {
             let abbrev_lattice =
                 self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref())?;
@@ -364,6 +371,13 @@ impl ImeEngine {
         }
         self.filter_blocked(&mut ranked, user_snapshot.as_ref());
         Self::fill_covered(&mut ranked, &input);
+        super::trace::note(|| {
+            format!(
+                "最终: {} 条, 前 5 = {:?}",
+                ranked.len(),
+                ranked.iter().take(5).map(|c| &c.word).collect::<Vec<_>>()
+            )
+        });
         Ok(super::recall::fold_display_candidates(ranked))
     }
 

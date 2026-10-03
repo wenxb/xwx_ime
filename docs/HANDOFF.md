@@ -2094,3 +2094,30 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - `just dev` 另外加了一行提示，打印它要 exec 的调试二进制路径。
 - 注意：`just install` 仍然是「装到系统、给 GNOME 输入源用」的那条路；
   **调试验证不需要它**。
+
+## ⑤⑨ 阶段 0：把「首次丢失在哪里」变成可观测（召回诊断）
+
+- **为什么要它**：`ztailan` 这类「打不出来」我们先后猜过三次（音节长度顺序、6 字母族、
+  门槛），每次都被数据否掉。codex 诊断后明确：先要有**运行证据**，再决定改哪一层。
+- **新增**（默认关闭、关闭时零行为差异）：
+  - `crates/xwx_engine/src/engine/trace.rs`：`XWX_TRACE=1` 才记录的线程本地诊断；
+    关闭时每个记录点只是一次 `OnceLock` 读，**不增加任何词典查询**；`lib.rs` 里
+    `pub use engine::trace;` 供 example 使用。
+  - 观测点：`engine/lookup.rs`（查询开始 / 门槛判定 / 最终条数与前 5）、
+    `dict/mixed.rs`（混合 DFS 提前停止及原因：步数预算 vs 收集池）。
+  - `crates/xwx_engine/examples/recall_trace.rs`：逐输入打印 `[迹]` 行 + 前 10 候选
+    （带 `spelling`/`covered`）。
+- **首个硬结论（`ztailan`，真词库 + 真 .gram）**：
+  ```
+  [迹] 混合 DFS 提前停止: 剩余步数=0 已收集=0 原因=步数预算耗尽   ← 重复 31 次
+  [迹] 门槛: reachable=false tolerant_explains=true len=7 needs_abbrev=false
+  [迹] 最终: 100 条, 前 5 = ["爱蓝","爱兰","艾岚","摘","宅"]
+  #1 爱蓝 Fuzzy covered=7
+  ```
+  ⇒ **首次丢失点 = 副索引那条混合 DFS 把 `MAX_MIXED_DFS_STEPS=20000` 步烧光、
+  且一条都没收进池**；随后容错层用 `Fuzzy covered=7` 的候选占住整串，
+  `tolerant_explains=true` 直接关掉简拼格，「状态栏」在任何名次都不可达。
+  （这解释了为什么调「音节长度顺序」无效——那根本不是丢失的那一层。）
+- 验收：单元 **312 passed**、clippy **0**、`regression_probe --format v1` 对拍 **0 行**、
+  `cargo test --workspace` 21 个套件全 ok；不带 `XWX_TRACE` 时输出与生产一致。
+- 用法：`printf 'ztailan\n' | XWX_TRACE=1 cargo run --release --offline --example recall_trace`
