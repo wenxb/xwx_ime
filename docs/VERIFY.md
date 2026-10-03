@@ -243,7 +243,7 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 
 | 门槛 | 状态 |
 |---|---|
-| `cargo test --workspace` | 单元 **323 passed / 0 failed / 0 ignored** ✓ |
+| `cargo test --workspace` | 单元 **325 passed / 0 failed / 0 ignored** ✓ |
 | clippy `-D warnings` | **0** ✓ |
 | 单文件 ≤600 行 | 全部达标 ✓ |
 | v1 对拍 | 9/44 输入内容变化、**2 个首位变化**（均已点名）✓ |
@@ -255,3 +255,8 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 
 `shanghaai`（多打一个字母）首位由逐字读法「上哈爱」变成纠正后的「上海」。
 v1 对拍 44 个输入 **0 行差异**；`tests/corpora/edits.jsonl` 召回 6/6。
+
+## 已知有意差异（2026-10-03 末尾半音节补全进格子）
+
+`nihaobeijin`→你好北京、`womenjintianqugongyua`→我们今天去公园 从「不可召回」变成首位；
+v1 对拍 44 输入 **0 行差异**；keystrokes 语料召回 10/12→12/12。

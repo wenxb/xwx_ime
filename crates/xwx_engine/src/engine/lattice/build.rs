@@ -312,6 +312,38 @@ impl ImeEngine {
                     readings.push((s, ABBREV_PENALTY, 0, true));
                 }
             }
+            // **末尾半音节补全**(与上面几支互斥的读法选择**并行**,不是 else):
+            // 输入在这里到头,窗口是某个更长音节的前缀(`beijin` 的 `jin` →
+            // `jing`、`gongyua` 的 `yua` → `yuan`)。单看它只多一个词
+            // (`beijin` 早就能出「北京」),真正要的是让**前面的词**能跟它串
+            // 起来——`nihaobeijin` → 你好北京、`womenjintianqugongyua` →
+            // 我们今天去公园。所以补全必须进格子,不能只留在候选池里
+            // (池里只收单词条,前面有词时串不起来)。
+            //
+            // **两条排除**,都是「别去抢字面已经读通的读法」:
+            // - 窗口**自己就是一个音节**、同时还能切成 ≥2 个音节时不补全
+            //   (`xian` = 先 也是 `xi`+`an` 西安):实测不排除的话
+            //   `womenjintianquxian` 的首位会从「我们今天去西安」变成
+            //   「我们今天去想」。反过来 `yua`(不是音节)与 `jin`(是音节但切
+            //   不开)都放行——它们才是真正的「少打一个字母」。
+            // - `p = 0`(整串都当半截)只在整串不是合法全拼时启用:整串已是
+            //   合法全拼时它变成「音节前缀补全」(`xian` → `xiang*` 整个区间),
+            //   不是补全要的能力,端到端实测多花 4.5ms(与候选池同一条判据)。
+            //
+            // 补全读法**不加惩罚**、不算编辑:与候选池里那批「精确前缀补全」
+            // 同层(最终标 `Exact`),让词频与 LM 决定胜负。加过上游那个
+            // 惩罚(`ln 0.05` → 1.301)反而坏:`beijin` 的首位会退回「被禁」。
+            if pos + len == n
+                && len >= crate::dict::MIN_PARTIAL_TAIL
+                && Self::window_has_vowel(syl)
+                && !(segmenter::syllable_at(syl, 0, syl.len()).is_some()
+                    && Self::window_splits_into_multiple_syllables(syl))
+                && !(pos == 0 && self.segmenter.is_fully_segmentable(pinyin))
+            {
+                for full in Self::syllables_with_prefix(syl) {
+                    readings.push((full, 0.0, 0, false));
+                }
+            }
             for (syl, arc_cost, arc_edits, arc_abbrev) in readings {
                 if *budget == 0 {
                     return Ok(());

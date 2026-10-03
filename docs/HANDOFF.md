@@ -2430,3 +2430,33 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 「这条读法消费了输入的全部字母吗」区分两类事实，再放它进格子。全部回退，
 HEAD `9edd81f`，工作区干净；四个关键形态复核正常（womenjintianquxian→我们今天去西安、
 beijin→北京、shanghaai→上海、wmjtqbj→我们今天去北京）。
+
+## ⑤㉑ 末尾半音节补全**进格子**：与前面的词串起来
+
+`nihaobeijin` → 你好北京 #1（原「你好被禁」）；`womenjintianqugongyua` →
+我们今天去公园 #1（原「我们今天去公寓啊」）。
+
+- **根因**：半音节补全只活在**候选池**里（`lookup_mixed` 的 `partial_tail_readings`
+  + `MixedDfs::collect` 只收与整串 key 相等的**单词条**），进不了格子 ⇒ 前面还有词
+  时串不成一条路径。
+- **改法**：`engine/lattice/build.rs` 的 `collect_chain_edges` 新增末尾半音节补全
+  读法弧（`syllables_with_prefix` + `MIN_PARTIAL_TAIL` 门槛 + 「`p = 0` 只在整串
+  不是合法全拼时启用」那条与池子相同的判据）；补全读法**不加惩罚、不算编辑**，
+  与池里那批「精确前缀补全」同层，由词频与 LM 决定胜负。
+- **两条排除**（都由结构决定，没有阈值）：
+  1. 纯声母窗口（`zh`，无元音）还在打字中，不是「少打一个字母」——沿用既有的
+     `window_has_vowel` 判据。不排除时 `zh` 会把 `zha/zhei/zhong…` 整族当补全
+     读法灌进来，两条既有用例当场红（多音字重复占位、`zha` 系配额头）。
+  2. 窗口**自己就是音节**、同时还能切成 ≥2 个音节时不补全（`xian` = 先 = `xi`+`an`
+     西安）。不排除时 `womenjintianquxian` 首位会从「我们今天去西安」变成
+     「我们今天去想」。**判据是「存在 ≥2 段的切法」而不是「最少段数 ≥ 2」**：
+     `xian` 整个就是一个音节，按最少段数写会恒为 false——第一版就是这么错的，
+     靠临时迹（`补全判定: 窗口=xian 最少段数=1`）抓到。
+- **否定过的做法**：给补全读法加上游那个惩罚（master `ln 0.05` → log10 1.301）——
+  `beijin` 首位会退回「被禁」（字面读法反超），比不罚更差。
+- **验收**：`cargo test --workspace` **399 passed / 0 failed**、clippy 0、
+  **v1 对拍 44 输入 0 行差异**（同源码 stash A/B）、perf 同条件交替
+  before {12.97, 13.53, 12.71} / after {12.59, 14.10, 13.06}（两版不可区分，
+  均随本机负载在 12ms 线上下摆动）、语料 **keystrokes 召回 10/12 → 12/12**
+  （MRR 0.710 → 0.877、首屏 9/12 → 11/12）、新增
+  `crates/xwx_engine/src/engine/tests/tail_completion.rs` 两条钉子用例。

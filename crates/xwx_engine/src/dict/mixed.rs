@@ -59,7 +59,7 @@ pub(super) const MAX_PREFIX_READINGS: usize = 96;
 /// 2 个字母(`zho`、`sh`、`ha`)不是任何音节的完整写法时,才是真正需要
 /// 「当成长音节的半个」的形态——这正是用户报的 `zho`→中国、`niha`→你好、
 /// `beijin`→北京、`meiyo`→没有。
-pub(super) const MIN_PARTIAL_TAIL: usize = 2;
+pub(crate) const MIN_PARTIAL_TAIL: usize = 2;
 
 /// 输入能否被**完整**切成一串音节(即「整串都是合法全拼」)。
 ///

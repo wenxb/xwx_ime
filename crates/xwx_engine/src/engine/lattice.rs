@@ -19,6 +19,54 @@ fn window_has_vowel(window: &str) -> bool {
         .any(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u' | b'v'))
 }
 
+/// 窗口自己能不能切成 **≥2 个音节**。
+///
+/// `xian` 能切成 `xi`+`an`(西安)——这种窗口「字面已经读通」,再把它补成
+/// `xiang`(想)就是抢:实测 `womenjintianquxian` 的首位会从「我们今天去西安」
+/// 变成「我们今天去想」。`jin`/`yua` 切不开,才是真正的「少打一个字母」
+/// (`nihaobeijin` → 你好北京、`womenjintianqugongyua` → 我们今天去公园)。
+fn window_splits_into_multiple_syllables(window: &str) -> bool {
+    let n = window.len();
+    // ⚠️ 判据是「**存在**切成 ≥2 个音节的切法」,不是「最少段数 ≥ 2」:
+    // `xian` 整个就是一个音节(先/现),最少段数是 1,但它同时能切成
+    // `xi`+`an`(西安)——后者才是「字面已经读通」的那一面。
+    let mut from_start = vec![false; n + 1];
+    from_start[0] = true;
+    for i in 0..n {
+        if !from_start[i] {
+            continue;
+        }
+        let max_len = (n - i).min(segmenter::MAX_SYLLABLE_LEN);
+        for len in 1..=max_len {
+            if segmenter::syllable_at(window, i, len).is_some() {
+                from_start[i + len] = true;
+            }
+        }
+    }
+    let mut from_end = vec![false; n + 1];
+    from_end[n] = true;
+    for i in (0..n).rev() {
+        let max_len = (n - i).min(segmenter::MAX_SYLLABLE_LEN);
+        for len in 1..=max_len {
+            if from_end[i + len] && segmenter::syllable_at(window, i, len).is_some() {
+                from_end[i] = true;
+                break;
+            }
+        }
+    }
+    (1..n).any(|k| from_start[k] && from_end[k])
+}
+
+/// 以 `prefix` 为**前缀**、比它长的音节(`jin`→`jing`、`yua`→`yuan`)——
+/// 末尾半音节补全用。只在输入末尾的少数窗口上调用,线性扫 412 条足够;
+/// 简拼那条路走 [`segmenter::abbrev_syllables`](按声母建的索引),别混用。
+fn syllables_with_prefix(prefix: &str) -> impl Iterator<Item = &'static str> + '_ {
+    segmenter::SYLLABLES
+        .iter()
+        .copied()
+        .filter(move |s| s.len() > prefix.len() && s.starts_with(prefix))
+}
+
 /// 窗口里有没有叠字母。拼音里没有 `aa`/`ii`/`oo` 这种写法,所以叠字母是
 /// 「多打了一个字母」的**结构证据**——不是阈值,不需要标定。
 fn has_doubled_letter(window: &str) -> bool {

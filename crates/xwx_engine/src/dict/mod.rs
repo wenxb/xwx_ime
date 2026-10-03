@@ -25,6 +25,9 @@ mod mixed;
 mod mmap;
 mod sqlite;
 mod syllable_graph;
+// 末尾半音节补全的门槛:**唯一来源**在 `mixed`(那里有「为什么是 2」的依据),
+// 引擎侧的补全弧要用同一条判据,所以在这里转出去。
+pub(crate) use mixed::MIN_PARTIAL_TAIL;
 pub use abbrev::AbbrevIndex;
 pub use sqlite::SqliteDict;
 pub use syllable_graph::{GraphNode, NO_ENTRY, SyllableGraph};
