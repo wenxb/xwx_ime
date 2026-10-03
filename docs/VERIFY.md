@@ -395,8 +395,10 @@ python3 scripts/probe_diff.py baseline_v1.txt new.txt   # 退出码非 0 ⇒ 首
 在那之后被改过 **5 次**（`da72f89` `67f2e3a` `bf0762d` `8f33502` `55e0ddd`），
 v2 输出格式新增了 `bits=`/`echo=` 字段 ⇒ 现在的输出是 **3079 行**、与基线 `diff` **3008 行**。
 
-⇒ **对拍以第 4 步的 `scripts/probe_diff.py` + v1 口径为准**；v2 基线要么重生成
-（连同 `.id.txt` 里的 sha256/行数/git_head/数据文件 sha256），要么直接删掉以免误用。
+⇒ **对拍以第 4 步的 `scripts/probe_diff.py` + v1 口径为准**。
+**2026-10-03 处置：已删除**（`git rm` `tests/baselines/regression_v2.txt` 与其
+`.id.txt`，commit 见 `git log`）——重生成无意义：v2 格式一直在变，基线必须跟着探针
+重出，那正是它过期两次的原因；现行判据是 v1 输出 + `probe_diff.py`，退出码即判据①。
 
 ## keystrokes 线**回到 0.877**（2026-10-03 第 7 步，取代上节的「放开到 0.876」）
 

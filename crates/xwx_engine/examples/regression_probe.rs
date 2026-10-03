@@ -17,7 +17,12 @@
 //! 词库/副索引/万象模型三个文件必须存在且真的加载成功，否则直接报错退出——引擎自身
 //! 会「缺文件就退回空库」静默降级（`engine/api.rs::new_with_lm`），探针不能跟着降级，
 //! 否则空库基线看着也是绿的。写文件时另存 `<out>.id.txt`：输出哈希与行数、Git SHA/
-//! 是否有改动、三个数据文件的 sha256 与字节数，基线因此可追溯（`tests/baselines/`）。
+//! 是否有改动、三个数据文件的 sha256 与字节数，基线因此可追溯（随输出文件一起生成）。
+//!
+//! **仓库内不再放基线文件**（2026-10-03）：原 `tests/baselines/regression_v2.txt`
+//! 过期已久（其 `.id.txt` 记 `git_head=ef35658`，此后本探针改过 5 次、v2 格式新增
+//! `bits=`/`echo=` 字段），对拍判据改用 v1 输出 + `scripts/probe_diff.py`
+//! （首位 0 变化 + 漂移逐条点名，见 `docs/VERIFY.md`）。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
