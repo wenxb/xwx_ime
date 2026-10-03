@@ -4501,3 +4501,19 @@ out.retain(|c| c.pinyin.split(' ').count() <= letters);          // 一字一字
 mixed 从 0.893 → **≥0.929**；开关 false ⇒ 四套语料基线、v1 对拍 0 变化、
 `cargo test --workspace --no-fail-fast` 401 passed/0 failed、clippy 0。
 **回退点**：三处改动都很小，任一处出问题 `git checkout` 对应文件即可。
+
+### ⑤⑨⑨ 附录三：一次**未生效**的补丁（记录以免误解）
+
+按施工单第一步改 `dict/abbrev.rs::lookup_prefix` 时，用正则定位"候选构造处"**没匹配到**
+（`Candidate {` 不在 `lookup_prefix` 前 3000 字符内）⇒ **文件根本没被改写**。
+但当时的防护链（构建成功 → `cargo test -p xwx_engine` 327/0 → "测试全绿，继续"）却打印了
+"成功/全绿"——**那是针对未修改的文件**，属于**假阳性守卫**（守卫只证明了未改动的树是好的）。
+
+**⇒ 教训（写死）**：任何"改动 + 守卫"的脚本，必须**先断言补丁真的落地**
+（例如断言目标字符串被替换、或 `git diff --stat` 非空），再跑构建与测试；
+否则守卫会为"什么都没改"的树背书，给出虚假的安全感。
+
+**下一步的定位提示**：`lookup_prefix` 的候选构造在更靠后的位置（该函数遍历词块、
+逐个 `Candidate { … }` 地推入 `out`），直接
+`grep -n "Candidate" crates/xwx_engine/src/dict/abbrev.rs | head` 取行号后精确插入
+`covered: s.chars().count()`（`s` 是被匹配到的 key）。
