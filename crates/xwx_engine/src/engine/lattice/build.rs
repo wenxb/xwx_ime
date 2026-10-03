@@ -104,6 +104,7 @@ impl ImeEngine {
 
     /// [`Self::build_lattice_with`] 的带全部门槛开关版本:`tolerant` 打开容错
     /// 弧,`abbrev` 打开简拼弧。两者互不影响,各自只在需要时才打开。
+    #[inline]
     pub(in crate::engine) fn build_lattice_flags(
         &self,
         pinyin: &str,
@@ -195,6 +196,7 @@ impl ImeEngine {
 
     /// 链枚举 DFS：延长当前音节链，把每个「链覆盖区间 → 词」记为格边。
     #[allow(clippy::too_many_arguments)]
+    #[inline]
     pub(in crate::engine) fn collect_chain_edges<'a>(
         &self,
         pinyin: &'a str,
