@@ -2593,3 +2593,16 @@ LM 的「无证据基线分」按词复付（每个词各付一次 -11.605767）
 `r → er`（同代价、同缩写标记；它本来就是缩写读法）。实测：
 `zaiyikuair` → 在一块儿 #1、`wanhuir` → 晚会儿、`haowanr` → 好玩儿。
 验收形态与四套语料全不变（daily 12/12 · MRR 1.000、mixed 13/14、keystrokes 12/12、edits 6/6）。
+
+## ⑤㉘ 质量扫描第二轮（时间/地点/数字/常用语，28 条）
+
+24/28 完全正确，4 条偏差经查**都不是缺陷**：
+- `xiwusandian` → 习武三点：需要「中间音节的补全」（`xi`→`xia` 才能出「下午三点」），
+  而补全按设计只管**最后一个音节**（上游 `enable_completion` 同此）⇒ 不是缺口；
+- `zhoumoyouquma` → 周末游去买：末尾半音节补全按设计生效（窗口 `ma` → `mai`），
+  排序由 LM/词频定，属读法选择而非召回问题；
+- `yibaiershi` → 一百二十、`shangbanle` → 上班了：本就正确。
+
+正确样本里值得一提的：`beijingdaxue`→北京大学、`qinghuadaxue`→清华大学、
+`jintianjidian`→今天几点、`mingtianzaoshang`→明天早上、`shanghaishimin`→上海市民、
+`chifanlema`→吃饭了吗、`shuijiaoba`→睡觉吧、`zaoshanghao`→早上好、`xiabanle`→下班了。
