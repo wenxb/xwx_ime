@@ -5081,3 +5081,40 @@ sh  #0 所 −3.3349 Abbrev      #1 三 −3.4442 Abbrev      #2 色 −3.5846 A
   `dict/syllable_graph.rs` 交叉核对写出的，非转抄一处；脚本文档字符串里
   悬空的「syllable_graph.bin 二进制格式」指引已改指真实节名。
   确定性重建验证：重跑脚本产物 sha256 前后一致（`86df70c1…`）。
+
+## ⑤⑩⑩ 前置B落地：折叠变体的音节校验（阶段 5 第 7 步 2/2 的第一块）
+
+**机制**：`abbrev_variants` 升级为 `abbrev_variant_reads`（`dict/abbrev.rs`）——每个
+变体自带**折叠真值** `(音节序号, 声母首字母)`：被去掉的 h 意味着「用户把 zh/ch/sh
+当整体声母敲」，对应音节必须真的以「声母+h」开头。`lookup_abbrev`（`dict/lookup.rs`）
+在合并前按真值校验（`syllables_carry_digraphs`，折叠点升序单趟扫描，无折叠变体零
+成本）。旧包装函数 `abbrev_variants` 成死代码，删除。校验只能放 dict 侧：只有这里
+知道每个候选是哪个变体命中的——`是(shi)` 与 `三(san)` 的 key 都是 `s`，
+`matched_len`（key 长度）分不出（⑤⑩⓪/⑤⑩⑥ 的机制结论兑现）。
+
+**路上抓到的 bug（已修 + 回归守卫）**：校验初版用 `split().nth(n)` 逐点定位，
+`nth` 是**相对**前进——折叠 ≥2 个声母时校验点全部错位，`zhzhzhzh`（4 个折叠点）
+整池误杀 90→0。改为单趟顺序扫描；`engine/tests/abbrev.rs` 加多折叠点回归守卫
+（`zhzhzhzh` 仍须命中 重中之重）。
+
+**语义裁决（chh→策划）**：策划=ce hua，ce 不是 ch 声母，「chh」的整体声母读法
+[ch]+[h] 给不出它；RIME 同样不会召回。`744b895` 当时把 (chh,策划) 与
+shh→时候/zhh→只会 对称补进语料与测试，属宽松匹配的伪召回。处置：`mixed.jsonl`
+第 12 条 target 策划→称号（真 [ch][h] 词，现为首位）；`engine/tests/abbrev.rs`
+钉 (chh,称号) + 负向 (chh,策划)、并钉 `ch`→策划（两字母字面写法不受校验影响）。
+
+**对拍点名（90 段：83 逐字节同；首位变化 2，全部是伪命中被清出首位）**：
+- `sh`：所(suo)→谁(shei)——旧首位即无校验伪命中；+上海/似乎/时候 −三/四/所；
+- `zh`：在(zai)→这(zhe)；+之后/只会/最后 −做/在/子；
+- `zho`：条数 67→55（作呕/做偶像/在哦 = [z][o] 读法，h 无法解释，删）；
+- `zhzhzhzh`：条数 100→71（做张做智/作战指挥中心类 zuo 开头伪 [zh] 读法删除，
+  重中之重/专制政治 回归）。
+`scripts/probe_diff.py` 加 `APPROVED_FIRST_CHANGE` 点名例外（sh、zh 两条，附本条
+裁决记录）；门槛不变——**未点名的首位变化照样置退出码**。
+
+**门槛**：401/0 · clippy 0 · daily 1.000 / mixed 13/14·0.929（唯一未召回仍是已
+归档的 jintqbj）/ keystrokes 12/12·0.877 / edits 6/6·0.728 · 清单 20/20+20/20 ·
+形态 10/10 · perf p95 5.575ms、超线 0（与第 7 步稳态持平，校验成本不可见）。
+
+**遗留**：前置A（`MAX_LOOKUP_RESULTS` 早停放宽）挪到扩围步、以 smsh 类清单为判据；
+扩围 W1（demote_scope 移除 zh/ch/sh 排除）/ W2（混拼类进格）未动。

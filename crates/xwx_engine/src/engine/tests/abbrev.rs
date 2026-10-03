@@ -371,6 +371,12 @@ fn engine_without_abbrev_index_degrades_gracefully() {
 /// `sh`——用户敲的第三个字母 `h` 是「整体声母」写法留下的。只查字面串时
 /// `shh` 的候选里**根本没有「时候」**(实测第一是「社会化」,靠 `s h h` 三个
 /// 单字母读法命中),这正是用户报的「zh 这种需要特殊处理」。
+///
+/// **折叠校验(2026-10-03,⑤⑩⑥)**:「去 h」变体声称整体声母读法,对应音节
+/// 必须真的以 zh/ch/sh 开头。`chh` 因此**不再**给出「策划」(ce hua:ce 不是
+/// ch 声母,`chh` 只能读成 [ch]+[h])——旧断言钉住的是无校验宽松匹配的伪
+/// 召回,同类的还有 `sh` 经折叠变体 `s` 命中 三/色/死(它们的 key 都是 `s`)。
+/// 真 [ch]+[h] 词(称号/场合/窗户)不受影响,`ch`(两字母)仍给 策划。
 #[test]
 fn real_dict_two_letter_initial_abbreviations_hit_the_side_index() {
     let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
@@ -383,7 +389,7 @@ fn real_dict_two_letter_initial_abbreviations_hit_the_side_index() {
         .with_abbrev(&abbrev_path);
     assert!(dict.has_abbrev(), "副索引应已装配");
 
-    for (input, want) in [("shh", "时候"), ("zhh", "只会"), ("chh", "策划")] {
+    for (input, want) in [("shh", "时候"), ("zhh", "只会"), ("chh", "称号")] {
         let got = dict.lookup_abbrev(input).expect("简拼查询失败");
         assert!(
             got.iter().any(|c| c.word == want),
@@ -391,6 +397,31 @@ fn real_dict_two_letter_initial_abbreviations_hit_the_side_index() {
             got.iter().take(5).map(|c| (&c.word, c.freq)).collect::<Vec<_>>()
         );
     }
+    // 折叠校验的负向断言:整体声母读法不许带出「声母对不上」的词。
+    // (取单读音字:色 有 sè/shǎi 两读,shǎi 经校验合法保留,不能当负例。)
+    for (input, bad) in [("chh", "策划"), ("sh", "所"), ("sh", "四"), ("zh", "在")] {
+        let got = dict.lookup_abbrev(input).expect("简拼查询失败");
+        assert!(
+            !got.iter().any(|c| c.word == bad),
+            "`{input}` 不该给出「{bad}」(它不是该输入的整体声母读法): 前 5: {:?}",
+            got.iter().take(5).map(|c| (&c.word, c.freq)).collect::<Vec<_>>()
+        );
+    }
+    // **多折叠点的音节定位**:`zhzhzhzh` 的 4 个折叠点各落在第 0/1/2/3 音节,
+    // 校验必须逐点对位(曾是 split().nth() 相对前进的错位 bug 的回归守卫)。
+    let got = dict.lookup_abbrev("zhzhzhzh").expect("zhzhzhzh 查询失败");
+    assert!(
+        got.iter().any(|c| c.word == "重中之重"),
+        "`zhzhzhzh`(4 个折叠点)仍须给出「重中之重」: 前 5: {:?}",
+        got.iter().take(5).map(|c| (&c.word, c.freq)).collect::<Vec<_>>()
+    );
+    // 两字母字面写法不受校验影响:`ch` = c+h 两个首字母,策划(ce hua)照常。
+    let got = dict.lookup_abbrev("ch").expect("ch 查询失败");
+    assert!(
+        got.iter().any(|c| c.word == "策划"),
+        "`ch` 仍须给出「策划」: 前 5: {:?}",
+        got.iter().take(5).map(|c| (&c.word, c.freq)).collect::<Vec<_>>()
+    );
 }
 
 /// 末尾**单字母**尾巴也应补全成词库里的真实整串键。

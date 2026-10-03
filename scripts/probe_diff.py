@@ -11,9 +11,21 @@
 用法：
     regression_probe --format v1 --stdout 2>/dev/null | grep -v 'min_ms=' > new.txt
     python3 scripts/probe_diff.py baseline_v1.txt new.txt
+
+点名例外（APPROVED_FIRST_CHANGE）：首位变化里**已被语义裁决接受**的段。
+门槛不变：不在名 list 里的首位变化照样置退出码。入 list 必须附带裁决记录
+（docs/HANDOFF.md 对应条目）。
 """
 import re
 import sys
+
+# ⑤⑩⑩（2026-10-03，折叠变体音节校验）：`sh` 的旧首位 所(suo)、`zh` 的旧首位
+# 在(zai) 来自「去 h」折叠变体的**无校验**命中——suo/zai 不是 sh/zh 声母，
+# 打 "sh"/"zh" 不可能是指它们。校验后新首位 谁(shei)/这(zhe) 都是真 sh/zh 声母词。
+APPROVED_FIRST_CHANGE = {
+    "A:sh": ("所", "谁"),
+    "A:zh": ("在", "这"),
+}
 
 
 def parse(path):
@@ -58,6 +70,7 @@ def main():
         return 1
     same = diff_lines = 0
     first_changed, count_changed, named = [], [], []
+    unexpected_first = []
     for a, b in zip(old, new):
         tag = f"{a[0][:1]}:{a[1]}"  # 节名首字母 + 输入
         if a[2] == b[2]:
@@ -66,7 +79,10 @@ def main():
         diff_lines += sum(1 for l in a[2] if l not in b[2])
         diff_lines += sum(1 for l in b[2] if l not in a[2])
         if first_word(a) != first_word(b):
-            first_changed.append(f"{tag}: {first_word(a)} → {first_word(b)}")
+            pair = (first_word(a), first_word(b))
+            first_changed.append(f"{tag}: {pair[0]} → {pair[1]}")
+            if APPROVED_FIRST_CHANGE.get(tag) != pair:
+                unexpected_first.append(tag)
         if len(a[2]) != len(b[2]):
             count_changed.append(f"{tag}: {len(a[2])} → {len(b[2])}")
         added, gone = words_of(b) - words_of(a), words_of(a) - words_of(b)
@@ -83,8 +99,9 @@ def main():
         print("  [条数] " + x)
     for x in named:
         print("  [点名] " + x)
-    # 判据①：首位变化必须为 0（这是脚本的退出码，方便挂进门槛）
-    return 1 if first_changed else 0
+    # 判据①：未点名的首位变化必须为 0（这是脚本的退出码，方便挂进门槛）。
+    # 已裁决的例外见 APPROVED_FIRST_CHANGE；对不上例外记录的照样红。
+    return 1 if unexpected_first else 0
 
 
 if __name__ == "__main__":

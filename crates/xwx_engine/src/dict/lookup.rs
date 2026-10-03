@@ -21,6 +21,24 @@ const PREFIX_READING_QUOTA: usize = 8;
 /// 读法各一份),否则 96 条读法 × 20000 步会把兜底分支拖垮。
 const MAX_PREFIX_COLLECT_STEPS: usize = 8_000;
 
+/// 折叠读法的音节校验：第 `idx` 个音节必须真的以「声母 + h」开头。
+/// 音节数不足同样算不匹配（该读法需要的音节根本不存在）。
+/// 折叠点升序，单趟扫描；注意 `split().nth()` 是**相对**前进，不能连用
+/// （实测 `zhzhzhzh` 的 4 个折叠点因此全部错位、整池误杀）。
+fn syllables_carry_digraphs(pinyin: &str, digraphs: &[(usize, u8)]) -> bool {
+    let mut seen = 0usize; // 已扫过的音节数
+    for (i, s) in pinyin.split(' ').enumerate() {
+        seen = i + 1;
+        if let Some(&(_, initial)) = digraphs.iter().find(|&&(idx, _)| idx == i) {
+            let b = s.as_bytes();
+            if b.first() != Some(&initial) || b.get(1) != Some(&b'h') {
+                return false;
+            }
+        }
+    }
+    digraphs.last().is_none_or(|&(last, _)| seen > last)
+}
+
 impl MmapDict {
     /// 主索引里以 `prefix` 为前缀的 key 存在性（见 [`Dictionary::key_prefix_state`]）。
     ///
@@ -105,12 +123,22 @@ impl MmapDict {
         let Some(idx) = &self.abbrev else {
             return Ok(Vec::new());
         };
-        // **双字母声母的两种写法都要查**（见 [`abbrev_variants`]）：副索引按
+        // **双字母声母的两种写法都要查**（见 [`abbrev_variant_reads`]）：副索引按
         // 「每音节一个字母」建 key，`shh`（时候）在表里对应 `sh`，
         // 只查字面串会漏掉它——实测 `shh` 的候选里根本没有「时候」。
         let mut out: Vec<Candidate> = Vec::new();
-        for variant in super::abbrev::abbrev_variants(abbrev) {
-            for c in idx.lookup_prefix(&variant)? {
+        for read in super::abbrev::abbrev_variant_reads(abbrev) {
+            // **折叠校验（⑤⑩⑥）**：「去 h」变体声称用户把 zh/ch/sh 当整体声母
+            // 敲，对应音节必须真的以该声母开头。不放行它，`sh` 会经折叠变体
+            // `s` 命中**一切 s 开头的音节**——三(san)/色(se)/死(si) 与 是(shi)
+            // 的 key 都是 `s`，`matched_len`（key 长度）分不出二者；只有这里
+            // （知道每个候选是哪个变体命中的）能校验，引擎侧放不了。
+            for c in idx.lookup_prefix(&read.query)? {
+                if !read.digraphs.is_empty()
+                    && !syllables_carry_digraphs(&c.pinyin, &read.digraphs)
+                {
+                    continue;
+                }
                 if let Some(e) = out
                     .iter_mut()
                     .find(|e| e.word == c.word && e.pinyin == c.pinyin)

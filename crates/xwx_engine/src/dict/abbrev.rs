@@ -36,19 +36,28 @@ pub struct AbbrevIndex {
     entries_off: usize,
 }
 
-/// 简拼查询的**写法变体**：把每个 `zh`/`ch`/`sh` 的 `h` 要么保留、要么去掉。
+/// 简拼查询写法变体的**带真值**版本：每个变体自带「哪些音节是整体声母」。
 ///
-/// 上游（RIME 的简拼代数）两条规则**并存**：
-/// - `abbrev/^(\l).+$/$1/`：每个音节取首字母（`shi hou` → `sh`）
-/// - `abbrev/^([zcs]h).+$/$1/`：`zh`/`ch`/`sh` 作为一个声母整体（`shi hou` → `shh`）
+/// 折叠（去掉 h）不是免费的简写：它声称「用户把 zh/ch/sh 当**整体声母**敲」，
+/// 因此对应音节必须**真的**以该双字母声母开头。这条真值只有生成变体的这里
+/// 知道——查完副索引再从词条拼音反推是推不出来的：`是(shi)` 与 `三(san)`
+/// 的 key 都是 `s`，`matched_len`（= key 长度）分不出二者（⑤⑩⓪/⑤⑩⑥）。
+/// 校验的消费者在 `MmapDict::lookup_abbrev`。
+pub struct VariantRead {
+    /// 拿去查副索引的 key 前缀（旧 `abbrev_variants` 的元素）。
+    pub query: String,
+    /// 折叠声母 `(音节序号, 声母首字母)`：该音节必须以「首字母 + h」开头。
+    /// 按音节序号升序；无折叠时为空（校验零成本）。
+    pub digraphs: Vec<(usize, u8)>,
+}
+
+/// 枚举一次简拼查询的全部写法变体，并带出每个变体的折叠真值。
 ///
-/// 副索引是**按「每音节一个字母」建的 key**，所以用户敲的 `shh`（3 个字母、
-/// 2 个音节）在表里对应的是 `sh`：多出来的 `h` 是「整体声母」写法留下的。
-/// 因此查询要把所有写法都查一遍再合并——`shh` → {`shh`, `sh`}，`zgr` 不变。
-///
-/// 变体数 2^k（k = 命中的 `zh`/`ch`/`sh` 个数），k 超过 4 就只保留原串——
-/// 病态输入（`zhzhzhzh`）不该把一次查询放大成几十次二分。
-pub fn abbrev_variants(abbrev: &str) -> Vec<String> {
+/// 走法与旧逻辑同一步进（marks 的判定逐字节一致），只是额外记录：被去掉的
+/// h 意味着「这个 zh/ch/sh 是一个整体声母音节」；保留的 h 则是**下一个
+/// 音节**的首字母（`shh` = `s`+`h`+`h` 三个音节，或 `sh`+`h` 两个——两种
+/// 读法各对应一个变体）。
+pub fn abbrev_variant_reads(abbrev: &str) -> Vec<VariantRead> {
     let bytes = abbrev.as_bytes();
     let mut marks: Vec<usize> = Vec::new();
     let mut i = 0;
@@ -61,26 +70,55 @@ pub fn abbrev_variants(abbrev: &str) -> Vec<String> {
         }
     }
     if marks.is_empty() || marks.len() > 4 {
-        return vec![abbrev.to_string()];
+        return vec![VariantRead { query: abbrev.to_string(), digraphs: Vec::new() }];
     }
-    let mut out = Vec::with_capacity(1 << marks.len());
+    let mut out: Vec<VariantRead> = Vec::with_capacity(1 << marks.len());
     for bits in 0..(1u32 << marks.len()) {
         let drop: Vec<bool> = (0..marks.len()).map(|k| bits & (1 << k) != 0).collect();
         let mut s = String::with_capacity(abbrev.len());
-        for (idx, ch) in abbrev.char_indices() {
-            let is_h = marks.contains(&idx);
-            if is_h && drop[marks.iter().position(|&m| m == idx).unwrap_or(0)] {
-                continue;
+        let mut digraphs: Vec<(usize, u8)> = Vec::new();
+        let (mut i, mut syl) = (0usize, 0usize);
+        while i < bytes.len() {
+            if i + 1 < bytes.len()
+                && matches!(bytes[i], b'z' | b'c' | b's')
+                && bytes[i + 1] == b'h'
+            {
+                if drop[marks.iter().position(|&m| m == i + 1).unwrap_or(usize::MAX)] {
+                    // 折叠：键里只贡献声母首字母，且该音节必须真的以 `Xh` 开头。
+                    digraphs.push((syl, bytes[i]));
+                    s.push(bytes[i] as char);
+                    i += 2;
+                } else {
+                    // 保留：h 归下一个音节，下一轮按普通字母走。
+                    s.push(bytes[i] as char);
+                    i += 1;
+                }
+                syl += 1;
+            } else {
+                s.push(bytes[i] as char);
+                i += 1;
+                syl += 1;
             }
-            s.push(ch);
         }
-        out.push(s);
+        out.push(VariantRead { query: s, digraphs });
     }
-    out.sort();
-    out.dedup();
+    out.sort_by(|a, b| a.query.cmp(&b.query));
+    out.dedup_by(|a, b| a.query == b.query);
     out
 }
 
+/// 简拼查询的**写法变体**：把每个 `zh`/`ch`/`sh` 的 `h` 要么保留、要么去掉。
+///
+/// 上游（RIME 的简拼代数）两条规则**并存**：
+/// - `abbrev/^(\l).+$/$1/`：每个音节取首字母（`shi hou` → `sh`）
+/// - `abbrev/^([zcs]h).+$/$1/`：`zh`/`ch`/`sh` 作为一个声母整体（`shi hou` → `shh`）
+///
+/// 副索引是**按「每音节一个字母」建的 key**，所以用户敲的 `shh`（3 个字母、
+/// 2 个音节）在表里对应的是 `sh`：多出来的 `h` 是「整体声母」写法留下的。
+/// 因此查询要把所有写法都查一遍再合并——`shh` → {`shh`, `sh`}，`zgr` 不变。
+///
+/// 变体数 2^k（k = 命中的 `zh`/`ch`/`sh` 个数），k 超过 4 就只保留原串——
+/// 病态输入（`zhzhzhzh`）不该把一次查询放大成几十次二分。
 impl AbbrevIndex {
     /// 打开并 mmap 映射一个 abbrev.bin 副索引文件。
     ///
