@@ -1328,3 +1328,8 @@ tail_is_syllable 判据下格子单独仍 5/20 ⇒ 守卫不是唯一堵点。�
 zhuang tai(状态) 这条链 ok=true、边存在；但关旧通道后简拼段前五全是 Fuzzy、Abbrev=0
 ⇒ 缺口在 best_chain_candidates(beam+n-best=4) 没选出它。另：⑤㊲/⑤㊳ 的 n-best 实验在门槛修复前跑的，
 结论无效，需重做。
+
+## 2026-10-03 n-best 宽度排除（测法正确）
+
+门槛已修好的前提下 4→16：格子单独仍 5/20，且 edits 0.728→0.564 退化 ⇒ 回退到 4。
+结论：缺口在分支内 beam 的路径选择/打分，不是截断。测量纪律：迹在 stderr，自检勿用 2>/dev/null。
