@@ -313,7 +313,13 @@ impl ImeEngine {
             // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
             let sentence_lattice = tolerant_lattice_opt.as_ref().unwrap_or(&lattice);
             for c in
-                self.best_chain_candidates(pinyin, ctx, sentence_lattice, SpellingKind::Exact, 0.0)?
+                self.best_chain_candidates(
+                pinyin,
+                ctx,
+                sentence_lattice,
+                SpellingKind::Exact,
+                ABBREV_PER_WORD_PENALTY,
+            )?
             {
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                     ranked.push(c);

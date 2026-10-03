@@ -2258,3 +2258,22 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
 - **门槛**：`cargo test --workspace` **393 passed / 0 failed / 1 ignored**、clippy 0；
   perf 在负载约 13 时 p95 **12.305ms**（超线 0.3ms；此前同负载下未改动的基线也在
   12.6~15.9ms，安静时历史值 11.1~11.8ms）——记为待安静环境复测。
+
+## ⑤⑮ 阶段 3B 的**部分回退**：干净基线优先于单项战果
+
+- **实测暴露的交易**（eval 语料是 v1 对拍漏掉的网）：`decode.rs` 的基线补偿与「整句层
+  `per_word_penalty = 0`」**必须成对**才够把「出+在+哪」推过 freq=100 的「杵在那」；
+  但成对之后多词读法被**双重加权**，把「我们今天去县」顶到「我们今天去西安」之上 ⇒
+  daily 语料 **12/12 → 11/12**。单独关任一处：daily 12/12、`womenjintianquxian` 正确，
+  但 `chuzaina` 回到「杵在那」。
+- **决定**：退回两处打分改动，先拿回干净基线（daily **12/12 · MRR 1.000**、
+  `womenjintianquxian` → 我们今天去西安、`womenjintianqbj` → 我们今天去北京、
+  `wmjtqbj`/`womenjtqbj`/`zmgai`/`nihao` 全对），`chuzaina` 暂回「杵在那」。
+- **目标用例** `engine/tests/sentence_gate.rs::unreliable_whole_string_entry_yields_to_the_sentence`
+  转 `#[ignore]`（附原因）：当前实现红，正是「旧实现必红」的状态。
+- **下一步（已定，作用在投影层）**：数据取证显示 **freq == 100 是源数据的「最低档约定」**
+  （抽样 233,025 条里 164,371 条是 100 ≈ 70%，其余 1/2/3/5…；生成器只有 `FREQ_MAX`、
+  没有下限）⇒「整串覆盖者全是该档词条」时应视为**没有可靠覆盖**（不否决整句、不占首位）。
+  这样 `chuzaina` 靠这条规则胜出，而不需要抬多词分，`womenjintianquxian` 也就不会被顶掉。
+- 本次回退后的对拍：v1 漂移 **400 行**（只剩门槛打开带来的新增候选）；两侧改动都在
+  `decode.rs` / `lookup.rs`，回退点清晰。
