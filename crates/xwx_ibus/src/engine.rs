@@ -28,28 +28,10 @@ use crate::ibus_proto::{self, ENGINE_NAME, ENGINE_PATH};
 /// zbus 要求接口类型 `Send + Sync`：`ImeEngine` 经 `Mutex<Connection>`
 /// 变成 `Sync`（见 xwx_engine 的 dict.rs），会话放在 `tokio::sync::Mutex`
 /// 里保证同一实例的按键串行处理。
-/// 上一次发出的 UI 状态快照（见 [`XwxEngineServer::last_ui`]）。
-struct UiSnapshot {
-    preedit: String,
-    caret: u32,
-    /// 同一张候选表（`Arc::ptr_eq` 为真）⇒ 内容没变，只有光标可能动。
-    candidates: std::sync::Arc<Vec<xwx_engine::Candidate>>,
-    /// **全局** cursor（不是页内下标）：翻页时页内下标可能不变（都是 0），
-    /// 但显示的页变了，必须重发查找表。
-    cursor: usize,
-    page_size: usize,
-    hidden_table: bool,
-}
-
 pub struct XwxEngineServer {
-    /// **上一次发给面板的 UI 状态**（P2 第 3 项）：`(preedit, caret, 候选表, 页内 cursor, page_size)`。
-    ///
-    /// 面板刷新分两类：**内容变化**（新查询/选词/翻页 ⇒ 候选表或文本变了）与
-    /// **仅光标变化**（左右移动插入点、翻页时高亮移动）。后者不必重建
-    /// `UpdateLookupTable` 的值（实测 9 条 146µs、500 条 7.5ms，见下面注释），
-    /// 预编辑文本也没变就不必重发。候选表用 `Arc::ptr_eq` 判断「还是同一张表」，
-    /// 与 `SessionUpdate.candidates` 的 Arc 共享（P2 前两项）配套。
-    last_ui: tokio::sync::Mutex<Option<UiSnapshot>>,
+    /// **上一次发出去的预编辑文本**（P2 第 3 项）：文本与插入点都没变就不重发
+/// `UpdatePreeditText`（纯光标移动/翻页时）。候选表每次都发（见 `refresh_ui`）。
+    last_ui: tokio::sync::Mutex<Option<(String, u32)>>,
     /// 输入会话状态机。
     session: tokio::sync::Mutex<InputSession>,
 }
@@ -121,27 +103,13 @@ impl XwxEngineServer {
         let hidden_table = page.is_empty();
         // `cursor` 与 `page` 同源（`page = cursor / page_size`），这里就是取模。
         let cursor_in_page = u.cursor - u.page_start();
-        let (send_preedit, send_table) = {
+        let send_preedit = {
             let mut last = self.last_ui.lock().await;
-            let same_preedit = last
+            let same = last
                 .as_ref()
-                .is_some_and(|s| s.preedit == u.preedit && s.caret == caret);
-            let same_table = last.as_ref().is_some_and(|s| {
-                s.page_size == u.page_size
-                    && s.hidden_table == hidden_table
-                    && s.cursor == u.cursor
-                    && (hidden_table
-                        || std::sync::Arc::ptr_eq(&s.candidates, &u.candidates))
-            });
-            *last = Some(UiSnapshot {
-                preedit: u.preedit.clone(),
-                caret,
-                candidates: std::sync::Arc::clone(&u.candidates),
-                cursor: u.cursor,
-                page_size: u.page_size,
-                hidden_table,
-            });
-            (!same_preedit, !same_table)
+                .is_some_and(|(p, c)| p == &u.preedit && *c == caret);
+            *last = Some((u.preedit.clone(), caret));
+            !same
         };
 
         // 预编辑区：UpdatePreeditText(text, cursor_pos, visible, mode)
@@ -174,7 +142,10 @@ impl XwxEngineServer {
         // 条映射），而页码由唯一权威的全局 cursor 推导（见 `InputSession::page`）。
         // 旧实现的缺陷不在页内方案本身，而在**映射缺失**：会话把页内下标
         // 当成全局下标，第 2 页点第 1 条会上屏第 1 页第 1 条。
-        if send_table {
+        // **候选表每次都发**：既有保证「翻页、空操作也要刷新面板」（tests/paging.rs
+        // 钉着它）——面板状态与引擎快照不是一回事，省这一次信号换来的风险不值。
+        // P2 第 3 项真正省下的是上面那条 preedit：文本与插入点没变就不重发。
+        {
             if hidden_table {
                 let _ = self.hide_lookup_table(ctxt).await;
             } else {
@@ -193,6 +164,9 @@ impl XwxEngineServer {
 
     /// 收起预编辑区与候选窗（信号层面）。
     async fn hide_ui(&self, ctxt: &zbus::SignalContext<'_>) {
+        // 面板收起后「上次发出去的状态」不再有效（下次露面必须整份重发），
+        // 否则焦点切回来时会因为「和上次一样」而一条信号都不发、面板空白。
+        *self.last_ui.lock().await = None;
         if let Err(e) = self.hide_preedit_text(ctxt).await {
             tracing::warn!(error = %e, "HidePreeditText 信号发送失败");
         }
