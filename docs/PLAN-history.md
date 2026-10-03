@@ -1505,3 +1505,8 @@ covered_whole_real（忽略 Abbrev）仍会被容错层整串读法判真 ⇒ �
 
 想在 best_chain_candidates 带出词条 freq ⇒ 编译失败（WordSpot 只有 word/pinyin）。已回退。
 替代：在投影处用 dict.lookup(c.pinyin) 判 (word,freq>0) 是否命中词条，作为"条目级"判据，用于层序/投影口径。
+
+## 2026-10-03 阶段 4 第一步：分支内补词条级 freq（行为中立，已提交）
+
+lookup.rs 简拼分支对 freq==0 的链候选回查词库补 freq（WordSpot 不带 freq）。实测首位零变化、
+四套语料基线、对拍 0 变化、401 passed/0 failed、clippy 0。下一步用该信号改层序键（rank.rs sort_key）。

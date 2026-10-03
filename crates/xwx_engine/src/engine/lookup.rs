@@ -356,13 +356,25 @@ impl ImeEngine {
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），整串读法
             // 由带 LM 状态的 beam 自己重建（见 `best_chain_candidate`）。
-            for c in self.best_chain_candidates(
+            for mut c in self.best_chain_candidates(
                 pinyin,
                 ctx,
                 &abbrev_lattice,
                 SpellingKind::Abbrev,
                 ABBREV_PER_WORD_PENALTY,
             )? {
+                // **补上词条级证据**：beam 的路径词（`WordSpot`）不带 freq，所以在这里
+                // 用 (word, pinyin) 回查词库——整串命中词条（freq>0）的读法因此能和
+                // "逐词拼链"区分开。层序/投影口径需要这个区分（见 ⑤⑦⑧/⑤⑦⑨）。
+                if c.freq == 0 {
+                    if let DictStore::Mmap(d) = &self.dict {
+                        if let Some(e) =
+                            d.lookup(&c.pinyin)?.iter().find(|e| e.word == c.word)
+                        {
+                            c.freq = e.freq;
+                        }
+                    }
+                }
                 if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                     ranked.push(c);
                 }
