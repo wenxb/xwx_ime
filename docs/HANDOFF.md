@@ -2373,3 +2373,31 @@ codex 审查第二批 P2「去掉查询内重复字符串复制和无用 LM 状�
   门槛 12ms），与前几轮一样在 11.5~13.1ms 之间摆动 ⇒ 仍记为「边界、需安静环境复测」。
 - 新增诊断：简拼段的分数级迹（`XWX_TRACE=1` 打印前五条 `word|freq|covered|spelling|score`，
   默认关闭），与整句段那条同款。
+
+## ⑤⑲ 叠字母纠错：`shanghaai` → 上海
+
+- **症状**：`shanghaai`（上海，多打一个 `a`）首位是逐字读法「上哈爱」，
+  候选表里没有「上海」。
+- **根因两层，都是「结构判据漏了这条例外」**：
+  1. `engine/lookup.rs` 的容错门槛只认「不可达 / 整串切不开」，而 `shanghaai`
+     能切成 `shang`+`ha`+`ai`（可达、切得开、也没有卡死位置 `stalls`）⇒
+     **容错格压根没建**。注释里「整句候选优先在含纠错的格上取，否则
+     `shanghaai` 会出『上哈爱』」的意图因此一直没生效（实测首位就是「上哈爱」）。
+  2. 就算建了格，`MAX_TYPO_READINGS_PER_WINDOW = 1` 只留**代价最低**的读法：
+     窗口 `haai` 的替换读法 `huai`（`TYPO_P_SUBST_DEFAULT=0.01` → 代价 2.0）
+     比删除读法 `hai`（`TYPO_P_DELETE_DEFAULT=0.004` → 2.4）便宜 ⇒
+     「上海」在截断处被丢掉，出来的是「上坏/上怀」。
+- **修法（两处都由结构决定，无新阈值、无新权重）**：
+  1. `lookup.rs`：**叠字母是「多打了一个字母」的结构证据**（拼音里没有
+     `aa`/`ii`/`oo` 这种写法）⇒ 叠字母位置并入容错门槛与 `stalls`。
+  2. `lattice/build.rs`：窗口内有叠字母时**只认「删掉一个字母」得来的读法**
+     （`lattice.rs` 新增 `has_doubled_letter` / `is_one_char_deletion`），
+     替换读法整批丢弃——读法由结构定，不由代价定。
+- **验收**：新增 `crates/xwx_engine/src/engine/tests/typo_repeat.rs` 两条
+  （叠字母→上海；打对的输入不动）。**红绿双向实测**：旧实现
+  `left: "上哈爱" / right: "上海"` 红，新实现绿。
+  `cargo test --workspace` **397 passed / 0 failed**（21 套件，单元 323）、
+  clippy 0；**v1 对拍 44 个输入 0 行差异**（同源码 A/B：stash 前后各跑一次）；
+  perf 同条件 A/B：改动前后都在 15~19ms 带内（本机负载 12~18 主导；该场景不含
+  叠字母、不进新分支）；`eval_rank tests/corpora/edits.jsonl` **召回 6/6**
+  ——`shanghaai` 是这张语料里此前的已知未召回。

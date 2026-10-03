@@ -266,9 +266,28 @@ impl ImeEngine {
                 && Self::window_has_vowel(syl)
             {
                 let mut typo: Vec<(&str, f32)> = segmenter::TypoSyllables::lookup(syl).to_vec();
-                // 最便宜的读法最像用户本意:只留前几条,避免分支数相乘。
-                typo.sort_by(|a, b| a.1.total_cmp(&b.1));
-                typo.truncate(MAX_TYPO_READINGS_PER_WINDOW);
+                // **窗口里有叠字母时,由结构决定读法,不由代价决定**:
+                // 拼音里不存在 `aa`/`ii`/`oo`…,所以叠字母只能解释成「多打
+                // 了一个」⇒ 只认「删掉一个字母」得来的读法,替换读法全部丢弃。
+                //
+                // 实测依据(`shanghaai`):窗口 `haai` 的替换读法 `huai`
+                // (概率 0.01→代价 2.0)比删除读法 `hai`(0.004→2.4)便宜,
+                // 按代价截断到 1 条就把「上海」丢成「上坏/上怀」。
+                let deletions: Vec<(&str, f32)> = if Self::has_doubled_letter(syl) {
+                    typo.iter()
+                        .copied()
+                        .filter(|(r, _)| Self::is_one_char_deletion(syl, r))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                if !deletions.is_empty() {
+                    typo = deletions;
+                } else {
+                    // 最便宜的读法最像用户本意:只留前几条,避免分支数相乘。
+                    typo.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    typo.truncate(MAX_TYPO_READINGS_PER_WINDOW);
+                }
                 for (typo_syl, cost) in typo {
                     readings.push((typo_syl, cost, 1, false));
                 }

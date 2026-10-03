@@ -109,8 +109,16 @@ impl ImeEngine {
         // 前缀联想结果(实测 `sh` 的第 28 名候选拼音从 `shei` 变成 `shui`,
         // 同名同分,属于对拍噪音)。单音节最多 6 个字母,4 个字母起才谈得上
         // 「组合里打错一处」。
+        // 「多打一个字母」有**结构信号**:拼音里不存在叠字母(`aa`/`ii`/`oo`…),
+        // 输入里出现叠字母就一定是多打了。它落在哪个音节里,那个音节的窗口
+        // 就要按「≤1 次编辑」重读——`shanghaai`(shang+haai)能切成
+        // `shang`+`ha`+`ai`,精确路走得通,所以只看「可达/能否切分」这两条
+        // 结构判据永远发现不了它。叠字母是事实,不是阈值。
+        let doubled: Vec<usize> = (1..pinyin.len())
+            .filter(|&i| pinyin.as_bytes()[i] == pinyin.as_bytes()[i - 1])
+            .collect();
         let tolerant_due = pinyin.len() >= MIN_TOLERANT_INPUT_LEN
-            && (!reachable || !self.segmenter.is_fully_segmentable(pinyin));
+            && (!reachable || !self.segmenter.is_fully_segmentable(pinyin) || !doubled.is_empty());
 
         // 精确路能解 → 格边候选(含整串读法);解不了 → **原有**的兜底联想。
         // 兜底不能因为有了容错就省掉:它给的「最长可切分前缀 + 首音节」
@@ -161,7 +169,14 @@ impl ImeEngine {
         // 容错弧的定位:精确格上「走不动」的位置(见 `first_stalls`)。
         // 一个都没有 ⇒ 精确解码本来就能走到底 ⇒ 不需要容错。
         //
-        let stalls = Self::first_stalls(&lattice, pinyin.len());
+        let mut stalls = Self::first_stalls(&lattice, pinyin.len());
+        // 叠字母位置也是「可疑位置」:精确格在这些地方走得通(`haai` 切成
+        // `ha`+`ai`),但读法是错的,需要容错重读一次才谈得上被纠正。
+        if !doubled.is_empty() {
+            stalls.extend(doubled.iter().copied());
+            stalls.sort_unstable();
+            stalls.dedup();
+        }
         // 容错格由下面的分支按需构建；整句候选优先在**含纠错**的格上取
         // （上游的整句也是建在含纠错的音节图上的）——否则 `shanghaai` 这种
         // 打错一个字母的输入会出「上哈爱」，把纠正后的「上海」挤下去。

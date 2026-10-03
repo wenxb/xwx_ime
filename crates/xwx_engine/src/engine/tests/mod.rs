@@ -33,6 +33,7 @@ mod prewarm;
 mod query_snapshot;
 mod dag_reachability;
 mod typo_budget;
+mod typo_repeat;
 mod quota;
 mod recall;
 mod sentence_gate;

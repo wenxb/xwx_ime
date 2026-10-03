@@ -19,6 +19,28 @@ fn window_has_vowel(window: &str) -> bool {
         .any(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u' | b'v'))
 }
 
+/// 窗口里有没有叠字母。拼音里没有 `aa`/`ii`/`oo` 这种写法,所以叠字母是
+/// 「多打了一个字母」的**结构证据**——不是阈值,不需要标定。
+fn has_doubled_letter(window: &str) -> bool {
+    window.as_bytes().windows(2).any(|p| p[0] == p[1])
+}
+
+/// `syl` 是不是窗口 `w` **删掉一个字母**后得到的读法(即 `w` 由 `syl` 插入
+/// 一个字母而来)。用来在叠字母窗口里挑出唯一说得通的那个读法。
+fn is_one_char_deletion(w: &str, syl: &str) -> bool {
+    let (w, s) = (w.as_bytes(), syl.as_bytes());
+    if w.len() != s.len() + 1 {
+        return false;
+    }
+    (0..w.len()).any(|skip| {
+        w.iter()
+            .enumerate()
+            .filter(|(j, _)| *j != skip)
+            .map(|(_, b)| *b)
+            .eq(s.iter().copied())
+    })
+}
+
 // 把「干净串里的字节前缀长度」映射回**原始输入串**里的长度,已收进
 // `super::input::NormalizedInput::to_raw_len`。
 //

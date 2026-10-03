@@ -243,10 +243,15 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 
 | 门槛 | 状态 |
 |---|---|
-| `cargo test --workspace` | 单元 **321 passed / 0 failed / 0 ignored** ✓ |
+| `cargo test --workspace` | 单元 **323 passed / 0 failed / 0 ignored** ✓ |
 | clippy `-D warnings` | **0** ✓ |
 | 单文件 ≤600 行 | 全部达标 ✓ |
 | v1 对拍 | 9/44 输入内容变化、**2 个首位变化**（均已点名）✓ |
 | 验收形态 | 全绿（chuzaina→出在哪、ztai→状态、ztailan→状态栏、wmjtqbj/womenjtqbj→我们今天去北京、zmgai→怎么改、zguor→中国人、nihao→你好、xian→先、daishixian/daishix→待实现）✓ |
 | eval 语料 | edits **5/6 · MRR 0.478**、daily 12/12（MRR 0.958）、mixed 13/14 |
 | perf p95 ≤ 12ms | **未稳定达标** ✗：引擎内部只占 4.0ms（建精确格 1.1 + 建简拼格 2.8 + 合并/折叠 0.04），A/B 显示本轮改动 ≤0.5ms；本机负载 13~18 下同负载反复在 11.5~14.4ms 之间摆动，需安静环境复测 |
+
+## 已知有意差异（2026-10-03 叠字母纠错）
+
+`shanghaai`（多打一个字母）首位由逐字读法「上哈爱」变成纠正后的「上海」。
+v1 对拍 44 个输入 **0 行差异**；`tests/corpora/edits.jsonl` 召回 6/6。
