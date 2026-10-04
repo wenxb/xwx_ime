@@ -34,10 +34,10 @@ pub const COMMITTED_TAIL_LIMIT: usize = 16;
 ///
 /// > **溯源更正(2026-10-01)**:本常量原先的注释称它「对应 librime
 /// > `unity_table_encoder` 对单次编码片段的长度上限」。实读 librime
-/// > 头文件与 `gear-audit.md` 的对照后发现这个溯源是错的:
+/// > 头文件逐项对照后发现这个溯源是错的:
 /// > `UnityTableEncoder` 是 **`table_translator`**(码表输入法)的组件,
 /// > 挂在 `/usr/include/rime/gear/unity_table_encoder.h`,而拼音走的是
-/// > **`script_translator`**(`gear-audit.md` 第 3 节确认 script_translator
+/// > **`script_translator`**(librime 源码逐项对照确认 script_translator
 /// > 没有 encoder)。也就是说 xwx 在拼音引擎上移植了一个**码表特性**。
 /// > 24 这个数值本身仍是合理的工程选择(覆盖人名/诗句),保留;
 /// > 但「librime 也这么做」不再是它的理由——见

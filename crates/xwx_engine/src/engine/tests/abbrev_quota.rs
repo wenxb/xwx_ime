@@ -57,7 +57,7 @@ fn assert_bucket_layer_order(inp: &str, cands: &[Candidate], seg: &Segmenter, ha
     }
 }
 
-/// 简拼层保底配额(PLAN.md 第三节缺口的修法):
+/// 简拼层保底配额(当年配额缺口长尾的修法):
 /// 精确+兜底层装满 `MAX_CANDIDATES` 时,简拼层仍有 `ABBREV_QUOTA`
 /// 条进候选列表,且目标词必须出现。真实词库 + 万象 gram,
 /// 与 probe 对拍同一装配;缺文件时跳过(同 `real_wanxiang_routes_through_engine`)。

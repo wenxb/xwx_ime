@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// 不用「连续 credibility 混排」的理由不变:简拼候选动辄上千条(`xx`
 /// 命中 10,816),一旦允许与精确候选按分混排,全拼第一页立刻被冲垮
-/// (见 `docs/design-batch1.md` B4 与 `PLAN.md` 第三节)——所以分层
+/// (B4 与层序裁决)——所以分层
 /// 语义保留,只是降为第二键,不是拆掉。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpellingKind {
@@ -156,8 +156,7 @@ pub struct Candidate {
     ///
     /// **不复用 `covered`**:`covered` 的语义是「该候选在原文串里覆盖到第几字节」,
     /// 被多处依赖(上屏消耗、分段、前缀混拼的真实覆盖),改它等于改一个共享字段的
-    /// 全局含义——实测那样做会把 mixed 的召回从 13/14 打到 10/14(见 HANDOFF ⑤⑨⑨
-    /// 附录五)。本字段只回答一个问题:「这次前缀匹配吃掉了整串吗」。
+    /// 全局含义——实测那样做会把 mixed 的召回从 13/14 打到 10/14(历史对拍记录)。本字段只回答一个问题:「这次前缀匹配吃掉了整串吗」。
     ///
     /// 值 = 被匹配到的副索引 key 的字母数(副索引 key 是「每音节一个字母」,
     /// `zh`/`ch`/`sh` 计两个字母,故 `smsh` 的 key 长 4)。与输入字母数相等

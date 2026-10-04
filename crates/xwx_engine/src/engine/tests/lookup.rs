@@ -455,7 +455,7 @@ fn full_coverage_word_outranks_prefix_word() {
 /// 用玩具词库而不是真实 `dict.bin`:容错的机制(音节级索引 + 容错格 +
 /// 分层)与词库大小无关,而玩具词库的期望值是确定的——真实词库里同一
 /// 输入会有几十条长尾候选,断言容易写成「恰好第 1 名是某词」那种脆弱的
-/// 形式。真实词库上的实测数据见 `docs/HANDOFF.md`。
+/// 形式。真实词库上的实测数据随交付记录归档(git 历史可查)。
 #[test]
 fn typo_pinyin_still_yields_the_intended_word() {
     let engine = ImeEngine::new(None).expect("内存引擎创建失败");
@@ -467,7 +467,7 @@ fn typo_pinyin_still_yields_the_intended_word() {
     // 真实词库永远有,玩具词库要显式建出来。
     engine.dict.upsert("深", "shen", 400).expect("插入失败");
     // 四类编辑各一条代表 + 一条「少打一个字母」的反面样本(它不属于本
-    // 阶段能力,见 HANDOFF 的已知缺口)。
+    // 阶段能力,历史已知缺口)。
     for (input, want) in [
         ("nihoa", "你好"),  // 调换相邻字母(o/a)
         ("niqhao", "你好"), // 中间多打一个字母

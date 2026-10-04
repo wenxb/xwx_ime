@@ -221,7 +221,7 @@ cargo test -p xwx_ibus                    # 协议序列化与按键翻译测试
 
 > **集成层的正确性要求比单测更严**：它跨进程、跨 D-Bus，
 > 「没收到信号」和「断言不成立」必须能分开（一次交付里六处设施缺陷
-> 让整个套件『看起来全绿/全红但都指向引擎』，见 `docs/HANDOFF.md` 第 ⑫ 条）。
+> 让整个套件『看起来全绿/全红但都指向引擎』）。
 > 写新集成用例前请先读那一条——尤其：**不要用 `let Ok(x) = .. else { continue }`
 > 静默吞掉解析失败**，**每个 D-Bus 调用必须有超时**。
 
@@ -275,10 +275,8 @@ XWX_DICT_PATH=$PWD/data/dict.bin XWX_ABBREV_PATH=$PWD/data/abbrev.bin \
 │           └── lib.rs         适配层导出入口
 tests/                      D-Bus 端到端集成测试（单测摸不到的那几条路径）
 docs/
-├── PLAN.md                 进度与设计裁决（改默认值/常量前先读）
-├── HANDOFF.md              定过又推翻的判断、刻意代价、指标的坑
-├── gear-audit.md           librime 36 个组件逐项对照
-└── VERIFY.md               实机验证清单（37 条）
+├── VERIFY.md               实机验证清单（37 条）
+└── offline-install.md      离线交付清单
 data/
 ├── dict.bin              运行时只读二进制词库（dict_to_bin.py 生成，mmap 映射）
 ├── abbrev.bin           简拼(首字母)副索引(abbrev_to_bin.py 生成,mmap 映射)
@@ -293,7 +291,7 @@ scripts/
 └── abbrev_to_bin.py      dict.bin → abbrev.bin(简拼副索引,只读主索引)
 tools/
 ├── rime_oracle/           librime 1.10.0 驱动的差分对拍台
-├── compare.py             对拍指标（注意 TOP10_OVERLAP 是陈旧标签，见 PLAN.md）
+├── compare.py             对拍指标（注意 TOP10_OVERLAP 是陈旧标签）
 └── corpus/basic.txt       81 行 9 组分类语料
 justfile                    任务入口：build / dev / install / deb
 ```
@@ -324,7 +322,7 @@ justfile                    任务入口：build / dev / install / deb
       （`feicde`、`nhao`）。实测与算法原型见 `tools/spike_abbrev/walk.py`
 - [ ] **裸 `xian` 的排序**：「西安」第 18 名。已完整诊断（空上下文下
       通用层 LM 返回常数，见 `examples/lm_ctx_probe.rs`），
-      绕行手段是 `xi'an`。跨候选归一化是唯一未试过的方向，见 `PLAN.md` 第四节
+      绕行手段是 `xi'an`。跨候选归一化是唯一未试过的方向
 - [ ] **实机验证**：`docs/VERIFY.md` 的清单。集成层是当前可信度最低的部分
 
 ## 环境变量

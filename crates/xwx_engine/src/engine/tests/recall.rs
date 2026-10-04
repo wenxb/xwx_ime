@@ -1,4 +1,4 @@
-//! `RecallHit` 纯结构层（`docs/recall-hit.md` 第 ① 步）。
+//! `RecallHit` 纯结构层（A2 第 ① 步）。
 
 use super::*;
 use crate::engine::recall::{collect_recall_hits, RecallSource};

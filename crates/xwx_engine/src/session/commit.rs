@@ -313,7 +313,7 @@ impl InputSession {
     /// 换了输入焦点就是换了上下文，跨焦点的上屏片段不该粘成一个词——
     /// 在微信里逐字选「张」「三」、切到浏览器逐字选「李」「四」，
     /// 不该造出「张三李四」。librime 的 memory 同样把焦点切换当作
-    /// 真正的边界（见 `docs/gear-audit.md` 第 3 节）。
+    /// 真正的边界（librime 源码逐项对照）。
     pub fn reset_for_focus_change(&mut self) -> String {
         // 已确认的段是用户明确选过的,焦点切换不能把它们丢掉——返回给
         // 调用方(xwx_ibus)去 `CommitText`;未确认的剩余字母按原有语义丢弃

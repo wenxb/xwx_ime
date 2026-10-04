@@ -260,7 +260,7 @@ impl UserLM {
         })
     }
 
-    /// 删候选(editor 的 Ctrl+Delete,gear-audit 第 6 节):
+    /// 删候选(editor 的 Ctrl+Delete,librime 对照确认):
     /// 「屏蔽 + 连根拔」一体完成。
     ///
     /// 对一条候选 `(word, pinyin_key)` 做三件事:

@@ -342,7 +342,7 @@ fn fuzzy_env_parsing_table() {
 ///
 /// **如果这条断言红了**,说明有人改了默认值——请先重跑
 /// `fuzzy_bench` 并更新 `DEFAULT_FUZZY_ENABLED` 文档里那张表,
-/// 而不是直接改这里的期望值。判据本身会腐烂(HANDOFF.md
+/// 而不是直接改这里的期望值。判据本身会腐烂(历史教训:
 /// 「判据本身会腐烂,要定期重验」),这张表就是它现在的口径。
 #[test]
 fn fuzzy_default_matches_measured_verdict() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """dict.bin → abbrev.bin(简拼/首字母副索引,只读 mmap 二进制)。
 
-路线 (c)(见 docs/design-batch1.md「B3 spike 结论」):给每个词条算「拼音各
+路线 (c)(B3 spike 实测结论):给每个词条算「拼音各
 音节首字母串」作为副索引 key(`"zhong guo ren"` → `"zgr"`),建成与主索引
 同构的排序 mmap 数组。运行时 `MmapDict` 对纯简拼(`zgr`)直接二分这张表,
 无需回主索引。

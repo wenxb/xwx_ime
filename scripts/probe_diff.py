@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """v1 对拍判据：**首位 0 变化 + 漂移逐条点名**（取代旧的「逐字节 0 变化」）。
 
-为什么改判据（docs/VERIFY.md「对拍判据」、docs/HANDOFF.md ⑤⑩④）：
+为什么改判据（docs/VERIFY.md「对拍判据」）：
 `distribution_probe --format v1` 的输出分 A（`lookup_candidates`）/ B（会话层）两节，
 每节按输入切段。降级世界（`DEMOTE_OLD_ABBREV_CHANNEL = true`）里旧简拼通道退出供给，
 **分数刻度会整体重算**（同一个词的分从 −15.7892 变 −4.1834），逐字节比对必然大面积
@@ -13,8 +13,7 @@
     python3 scripts/probe_diff.py baseline_v1.txt new.txt
 
 点名例外（APPROVED_FIRST_CHANGE）：首位变化里**已被语义裁决接受**的段。
-门槛不变：不在名 list 里的首位变化照样置退出码。入 list 必须附带裁决记录
-（docs/HANDOFF.md 对应条目）。
+门槛不变：不在名 list 里的首位变化照样置退出码。入 list 必须附带裁决记录。
 """
 import re
 import sys

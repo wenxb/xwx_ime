@@ -67,8 +67,7 @@ rime-ice 词表(dict.yaml) → build_dict.py → dict.sqlite3 → dict_to_bin.py
 
 ## 一点五、简拼副索引 abbrev.bin(运行时只读二进制)
 
-简拼(`zgr` → 中国人)的存储层,路线 (c)(见
-`docs/design-batch1.md`「B3 spike 结论」)。由 `scripts/abbrev_to_bin.py`
+简拼(`zgr` → 中国人)的存储层,路线 (c)(B3 spike 实测结论)。由 `scripts/abbrev_to_bin.py`
 **只读** `dict.bin` 生成,产物是**独立文件 `data/abbrev.bin`**(不改动主索引)。
 
 key 是「拼音各音节首字母串」(`"zhong guo ren"` → `"zgr"`);每个词条只进
@@ -109,7 +108,7 @@ python3 scripts/abbrev_to_bin.py in.bin out.bin   # 自定义路径
 实测(rime-ice 全量词表):唯一首字母 key 569,250 个,产物 68.9 MB
 (主索引的 0.90×),构建约 16s。混合简拼(`zhongguor`)不走这张表,
 由 `MmapDict::lookup_mixed` 用「音节切分 + 空格拼回主索引前缀」实现,
-见 `docs/design-batch1.md`「设计更正」。
+(「设计更正」)。
 
 ## 一点六、音节级词典转移索引 syllable_graph.bin(运行时只读二进制)
 

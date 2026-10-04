@@ -20,8 +20,7 @@ use super::{read_u16, read_u32, read_u64, DictError, MmapDict, MmapRecord, ABBRE
 /// 二进制布局（小端）见 `data/README.md`「dict.bin 二进制格式」。
 /// 简拼(首字母)副索引:`zgr` → 词条,与主索引同构的只读 mmap 二进制。
 ///
-/// 由 `scripts/abbrev_to_bin.py` 从 `dict.bin` 生成(路线 (c),见
-/// `docs/design-batch1.md`「B3 spike 结论」)。key 是「拼音各音节首字母串」
+/// 由 `scripts/abbrev_to_bin.py` 从 `dict.bin` 生成(路线 (c),B3 spike 实测结论)。key 是「拼音各音节首字母串」
 /// (`"zhong guo ren"` → `"zgr"`),词条区每条比主索引多带一个「全拼」字段,
 /// 好让查出的词能回送后续打分流程。布局见 `data/README.md`「abbrev.bin
 /// 二进制格式」。文件只读,天然线程安全。

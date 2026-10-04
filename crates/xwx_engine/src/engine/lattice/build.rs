@@ -106,7 +106,7 @@ impl ImeEngine {
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let mut lattice =
             self.build_lattice_flags(pinyin, bounds, false, true, None, user_entries)?;
-        // **整串条目边**（见 docs/HANDOFF.md ⑤⑤③ 附录）：整串输入按简拼/混拼
+        // **整串条目边**：整串输入按简拼/混拼
         // 约束展开后**恰好命中词库条目**的读法，作为位置 0 的一条边。
         // 数据依据：20 条纯缩写输入里 18 条的正确答案属于这一类（生日快乐/
         // 新年快乐/状态…都是词条级命中），而格子原先只会逐词拼链。
