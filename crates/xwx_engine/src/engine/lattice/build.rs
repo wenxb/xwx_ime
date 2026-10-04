@@ -464,9 +464,11 @@ impl ImeEngine {
             //   合法全拼时它变成「音节前缀补全」(`xian` → `xiang*` 整个区间),
             //   不是补全要的能力,端到端实测多花 4.5ms(与候选池同一条判据)。
             //
-            // 补全读法**不加惩罚**、不算编辑:与候选池里那批「精确前缀补全」
-            // 同层(最终标 `Exact`),让词频与 LM 决定胜负。加过上游那个
-            // 惩罚(`ln 0.05` → 1.301)反而坏:`beijin` 的首位会退回「被禁」。
+            // 补全读法**不加惩罚**、不算编辑:惩罚在**排序层**收
+            // (`rank.rs` 的 `sort_key` 对「Exact 层且拼音字母数 > 输入」的
+            // 候选扣 [`COMPLETION_PENALTY`])——在边上扣会经 `typo_penalty`
+            // 把补全边错标成容错层(`beijin` 的北京被单字墙压到 #35)。
+            // 历史裁决的 1.301(`ln 0.05`)也太大:`beijin` 首位退回「被禁」。
             if pos + len == n
                 && len >= crate::dict::MIN_PARTIAL_TAIL
                 && Self::window_has_vowel(syl)

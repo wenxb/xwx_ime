@@ -254,11 +254,23 @@ pub(super) fn sort_key<'a>(
         umin[cp_len]
     };
     let u_local = u.saturating_sub(u_min) as f32;
+    // **补全候选的不确定性代价**(仅 Exact 层):拼音字母数超过输入 ⇒ 尾音节
+    // 是按更长音节补全的读法(`qingxi` 的 `xi`→`xing`),是「猜测还没打完」,
+    // 要让位给精确命中(`qingxi`→清晰、`xuexi`→学习)。Abbrev 层豁免:简拼
+    // 读法的弧已付过 `ABBREV_PENALTY`,不确定性与补全不同源(`yiwanc` 的
+    // 「已完成」拼音同样比输入长,不是补全)。标定见 `mod.rs` 的
+    // [`COMPLETION_PENALTY`] 文档(qingxi 差 0.09 须翻转,beijin 差 1.93
+    // 不得翻转)。
+    let completion_cost = if cp_len > inp.len() && c.spelling == SpellingKind::Exact {
+        COMPLETION_PENALTY
+    } else {
+        0.0
+    };
     let layer = effective_layer(c.spelling, c.freq, c.covered, inp.len(), entry_tier_exception);
     SortKey {
         bucket: u_min,
         spelling: layer,
-        score: ScoreDesc(c.score - COVERAGE_PENALTY * u_local),
+        score: ScoreDesc(c.score - COVERAGE_PENALTY * u_local - completion_cost),
         freq: std::cmp::Reverse(c.freq),
         word: c.word.as_str(),
         pinyin: c.pinyin.as_str(),

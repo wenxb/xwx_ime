@@ -68,3 +68,18 @@ fn splittable_complete_syllable_is_not_completed() {
     assert_eq!(first(&engine, "womenjintianquxian"), "我们今天去西安");
     assert_eq!(first(&engine, "quxian"), "曲线");
 }
+
+/// 精确命中优先于补全:补全是「猜测用户还没打完」,在排序层付
+/// `COMPLETION_PENALTY`;没有它时常见补全词靠词频微差压住精确命中
+/// (`qingxi` 的情形 f500326 压住清晰 f403760)。
+#[test]
+fn exact_match_ranks_above_completion() {
+    let Some(engine) = real_engine() else {
+        return;
+    };
+    assert_eq!(first(&engine, "qingxi"), "清晰", "补全读法(xing/xian)不得压住精确命中");
+    assert_eq!(first(&engine, "xuexi"), "学习", "补全读法(xiao)不得压住精确命中");
+    // 补全之间不互斥:北京(f1119506)对被禁(f13150)的差距 1.93 远大于
+    // 惩罚 0.25,补全读法在无精确竞争者时照常登顶。
+    assert_eq!(first(&engine, "beijin"), "北京", "小惩罚不得翻转北京-被禁");
+}
