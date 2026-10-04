@@ -14,11 +14,18 @@
 词库管线：
 
 ```text
-Rime .dict.yaml → build_dict.py → dict.sqlite3 → dict_to_bin.py → dict.bin → MmapDict（mmap 只读）
+rime-ice 词表(dict.yaml) → build_dict.py → dict.sqlite3 → dict_to_bin.py → dict.bin → MmapDict（mmap 只读）
 ```
 
 `dict.sqlite3` 只是构建**中间格式**；运行时引擎只读 `dict.bin`，
 不再触碰 SQLite。
+
+**词表来源**：`build_dict.py` 自动优先读 fcitx5-rime 的
+`rime_ice.dict.yaml`（雾凇拼音），按 `import_tables` 展开其词表——
+主体是**腾讯词向量词库**（`cn_dicts/tencent`，约 98 万条）加字表
+（8105）/基础（base）/扩展（ext）表。Rime 官方自带的
+`luna_pinyin` 只是脚本找不到 rime_ice 时的第二优先级兜底。
+「Rime」在这里只是词表的**打包格式与渠道**，词库内容不是 Rime 的。
 
 ## 一、词库 dict.bin（运行时只读二进制）
 
@@ -232,26 +239,23 @@ ni hao	你好	12623
 打分方式：log10 概率，加一平滑 + unigram/未知词两级回退，任何输入都
 返回有限分数（详见 `lm.rs` 的 `log10_prob` 注释）。
 
-### 二进制格式规划（bigram.bin，未实现）
+### 二进制格式规划（bigram.bin，已废弃，未实现）
 
-`memmap2` 依赖已就位，目标是 O(1) 映射加载、避免解析文本的开销。
-规划的布局（实现前可再调整，`TODO` 在 `lm.rs`）：
+这份二进制规划**不再做**：通用语言模型走了**万象 `.gram`**（mmap
+字符级窗口模型，本文件开头与 `lm/` 模块文档），加载与打分都比自研
+bigram 二进制更省事，效果也更好。
 
-```text
-偏移      内容
-0         magic: "XWXLM001" (8 字节)
-8         u32 LE: 一元条目数 N1
-12        u32 LE: 二元条目数 N2
-16        u32 LE: 词表大小 V（加一平滑分母项）
-20        u32 LE: 一元计数总和（归一化分母）
-24..      一元区：N1 × (词长度 u32 + UTF-8 字节 + 计数 u64)
-...       二元区：N2 × (前词长度 u32 + 后词长度 u32 + 计数 u64)
-```
+`bigram.txt` 文本格式至今仍有用武之地——它现在是**用户学习模型**的
+存储格式（会话上屏回写 `user_bigram.txt`，`UserLM`/`MixedLM` 把用户层
+叠在通用模型之上），上文的一元/二元计数语义就是它的格式。
 
-词在区内按字典序排列以支持二分查找。文件整体 mmap 后零拷贝读取，
-加载时间为 O(1)。
+## 四、从 Rime 词库导入词库（rime_ice 为主，luna_pinyin 为兜底教程）
 
-## 四、从 Rime luna_pinyin 导入词库
+**实际构建走的是 rime_ice**（见开头「词表来源」）：`build_dict.py`
+自动优先读 fcitx5-rime 的 `rime_ice.dict.yaml`，词表主体是腾讯词向量
+词库。本节保留作为 **luna_pinyin 兜底教程**——机器上没有 rime_ice
+（也没装 `rime-data-luna-pinyin` 时）的替代路径；不装 Rime 的话，
+直接按第二节的 TSV 格式手工导入亦可。
 
 Rime 的 `luna_pinyin.dict.yaml` 是公开的现代汉语词库（几十万词条），
 可以转成我们的 TSV 格式导入。

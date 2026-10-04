@@ -170,11 +170,17 @@ gdbus call --session --dest org.freedesktop.IBus --object-path /org/freedesktop/
 
 首次运行词库为空，输入法不会出候选。准备词库：
 
-1. 按 `data/README.md` 第四节教程从 Rime `luna_pinyin` 导入（产出
-   `dict.sqlite3` 中间格式），再运行
+1. 运行 `python3 scripts/build_dict.py` 构建词库：脚本自动优先读
+   fcitx5-rime 的 **rime_ice** 词表（雾凇拼音，主体是腾讯词向量词库；
+   需已装 fcitx5-rime），找不到时回落系统 `luna_pinyin`
+   （`sudo apt install rime-data-luna-pinyin`），产出 `dict.sqlite3`
+   中间格式；再运行
    `python3 scripts/dict_to_bin.py ~/.local/share/xwx/dict.sqlite3 ~/.local/share/xwx/dict.bin`
-   转成运行时二进制（也可直接用 `XWX_DICT_PATH` 指向自己生成的 dict.bin）；
-2. 可选：按第五节用语料训练语言模型 `bigram.txt`。
+   转成运行时二进制（也可直接用 `XWX_DICT_PATH` 指向自己生成的 dict.bin；
+   详细说明与 luna_pinyin 兜底教程见 `data/README.md` 第四节）；
+2. 语言模型：下载**万象 `.gram`** 放到 `~/.local/share/xwx/`
+   （引擎自动探测 `wanxiang-lts-zh-hans.gram`），或可选按 `data/README.md`
+   第五节用语料训练 `bigram.txt`。
 
 数据文件路径 `xwx_ime` 默认从 `$XDG_DATA_HOME/xwx/`(通常
 `~/.local/share/xwx/`)读取。环境变量方向不同,别搞混:
@@ -307,12 +313,14 @@ justfile                    任务入口：build / dev / install / deb
 - [x] ~~候选生成算法升级~~ — 已完成（`build_lattice` + `decode_beam`
       的 beam search，`BEAM_WIDTH = 16`）
 - [x] ~~全角标点~~ — 已完成（`punctuator.rs`）
-- [ ] **`bigram.bin` mmap 格式**：`lm.rs` 的 TODO，布局见 `data/README.md`。
-      优先级低——万象 `.gram` 已经覆盖了这条路径
+- [x] ~~`bigram.bin` mmap 格式~~ — 已废弃：通用语言模型走了**万象
+      `.gram`**（mmap 字符级窗口模型），不再自研 bigram 二进制；
+      `bigram.txt` 格式保留为用户学习模型（`user_bigram.txt`）的存储格式
 - [ ] **配置化**：目前只有模糊拼音做成了环境变量开关；候选页大小、
       模糊音**按组**开关（`,` 里 `weight` 已就位）、词库路径等仍是硬编码/环境变量
-- [ ] **混合简拼支持任意位置缩写**：`lookup_mixed` 目前只支持
-      「完整音节前缀 + 尾部残余声母」，缩写出现在开头或中间召回为 0
+- [x] ~~混合简拼支持任意位置缩写~~ — 已完成（交错 DFS：缩写在开头
+      `nhao`→您好、中间 `feicde`→非常地、尾部 `zhongg`→中国 都能召回，
+      见 `dict/mixed.rs`）
       （`feicde`、`nhao`）。实测与算法原型见 `tools/spike_abbrev/walk.py`
 - [ ] **裸 `xian` 的排序**：「西安」第 18 名。已完整诊断（空上下文下
       通用层 LM 返回常数，见 `examples/lm_ctx_probe.rs`），
