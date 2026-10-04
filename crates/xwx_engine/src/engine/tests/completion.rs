@@ -327,6 +327,9 @@ fn real_dict_initial_only_prefix_first_page() {
 /// - `yiwanch`（尾 ch 双字母声母）首位同样是「已完成」——
 ///   `ends_one_letter_short` 必须认识 zh/ch/sh 尾；
 /// - 「以往」仍须在列（容错备选不消失，用户真打错 g→c 时有得选）；
+/// - `buyy`（bu + yi/yang 两个连续首字母）首位必须是「不一样」——
+///   尾部连续 k≥2 个单字母声母由 `ends_one_letter_short` 第三个形状
+///   放行（`pure_abbrev` 不认 `u`、`leading_abbrev` 不认 `bu`）；
 /// - `mqweizhi`（mq+wei+zhi，开头即缩写）的「目前为止」须在前 3——
 ///   整串块置顶：只提第一个整串候选时它被尾音节单字墙压在 #76。
 #[test]
@@ -356,7 +359,9 @@ fn mixed_initial_tail_prefers_entry_reading() {
         engine.dict = engine.dict.with_syllable_graph(&graph_path);
     }
 
-    for (input, want_top1) in [("yiwanc", "已完成"), ("yiwanch", "已完成")] {
+    for (input, want_top1) in
+        [("yiwanc", "已完成"), ("yiwanch", "已完成"), ("buyy", "不一样")]
+    {
         let cands = engine
             .lookup_candidates(input, &LmContext::empty())
             .expect("查询失败");

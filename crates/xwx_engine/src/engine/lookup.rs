@@ -799,23 +799,42 @@ impl ImeEngine {
     /// 时才走，走通的路径必然用过至少一条简拼弧）。
     /// 「末尾只差一个声母」：去掉末尾字母后仍能**完整切成音节**。
     ///
-    /// 两种放行形状：
+    /// 三种放行形状：
     /// - 去掉最后 1 个字母：`daishix` → 去尾 `daishi` ✓；
     /// - 去掉最后 2 个字母且它们是双字母声母 `zh`/`ch`/`sh`：`yiwanch` →
     ///   去尾 `yiwan` ✓。格子与混合 DFS 都把双字母声母当一个声母
     ///   （`collect_chain_edges` 的 `len==2 && zh|ch|sh` 弧），门槛必须同构,
-    ///   否则「全拼+ch 尾」打字中状态没有供给。
+    ///   否则「全拼+ch 尾」打字中状态没有供给；
+    /// - 尾部连续 k≥2 个单字母声母：`buyy`（bu + yi/yang 两个首字母）→
+    ///   去尾 `bu` ✓。两个连续首字母的打字中状态没有别的类别认领——
+    ///   `pure_abbrev` 不认（`u` 不能起音节）、`leading_abbrev` 不认
+    ///   （`bu` 是音节）、去尾 1 字母剩 `buy` 切不开。
+    ///
+    /// 连续声母分支只认**真声母**字母（`INITIAL_LETTERS`）：零声母
+    /// `a`/`e`/`o` 与自成音节的 `i`/`u`/`v` 不算——它们要么本身是完整
+    /// 音节要么不是任何音节的声母，不能给任意垃圾尾放行面。
     ///
     /// 不放行的形状不变：`shanghaai` → 去尾 `shanghaa` ✗、`jintqbj` →
-    /// 去尾 `jintqb` ✗（后者尾巴不构成声母）。
+    /// 去尾 `jintqb` ✗（后者去 2 字母剩 `jintq` 也切不开）。
     fn ends_one_letter_short(&self, pinyin: &str) -> bool {
         let n = pinyin.len();
         if n >= 2 && !self.segmenter.segment(&pinyin[..n - 1]).is_empty() {
             return true;
         }
-        n >= 3
+        if n >= 3
             && matches!(&pinyin[n - 2..], "zh" | "ch" | "sh")
             && !self.segmenter.segment(&pinyin[..n - 2]).is_empty()
+        {
+            return true;
+        }
+        // 尾部连续 k≥2 个真声母字母(`buyy` 的 `yy`)。
+        const INITIAL_LETTERS: &[u8] = b"bpmfdtnlgkhjqxrzcsyw";
+        (2..n).any(|k| {
+            !self.segmenter.segment(&pinyin[..n - k]).is_empty()
+                && pinyin[n - k..]
+                    .bytes()
+                    .all(|c| INITIAL_LETTERS.contains(&c))
+        })
     }
 
     pub(super) fn best_chain_candidates(
