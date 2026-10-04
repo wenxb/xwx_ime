@@ -379,24 +379,38 @@ impl ImeEngine {
                         .filter(|r| (r.1 - cheapest).abs() <= f32::EPSILON)
                         .take(MAX_TYPO_READINGS_PER_WINDOW)
                         .collect();
-                    // 名额还有剩就补一条**不同编辑类别**的读法(类别相同者只
-                    // 白占分支预算),优先取**不是窗口子序列**的:「窗口只多打
-                    // 了几个字母」那类读法(如 `xang`→`ang`)已由「吃掉一段
-                    // 字母」的空词弧 + 精确音节表达,代价同域。实测 `xang`
-                    // (想)就是名额落到 `ang`(2.30)而不是 `xiang`(2.40,漏打
-                    // 中间的 i)时「想」整个进不了候选。
+                    // 剩余名额,先补**漏打型**读法(音节比窗口长 ⇒ 用户比想打
+                    // 的音节少敲了一个字母),再按上面的排序补下一条。
+                    //
+                    // 名额 3 + 漏打型保底,是四条实测共同压出来的:
+                    // - `xang`(想):要漏打型 `xiang`(2.40)进格子——它按代价
+                    //   排在十几条替换读法(2.00)之后,纯按代价取永远轮不上;
+                    // - `nohao`(你好):窗口 `no` 的最便宜读法是混淆对 `lo`
+                    //   (0.10),漏打型 `nao`(2.40)占一个名额后,第三个名额
+                    //   才轮得到邻键 `ni`(1.30)——「你好」就靠它;
+                    // - `mem`(我们):`mei`/`men` 同价 2.0 并列,都要留;
+                    // - `xaing`(想):`xiang`(调换 1.52)本身最便宜,漏打型
+                    //   名额自动让位。
+                    // 「谁对」最终交给打分器(LM/词频),选取阶段只保证
+                    // **每一类可能的本意都至少有一个代表**进了格子。
                     if keep.len() < MAX_TYPO_READINGS_PER_WINDOW {
-                        let first_is_subst = keep[0].2;
-                        let pick = |skip_subseq: bool| {
-                            typo.iter().copied().find(|(r, _, is_subst)| {
-                                *is_subst != first_is_subst
-                                    && !(skip_subseq && is_subsequence_of(r, syl))
-                            })
-                        };
-                        if let Some(second) = pick(true).or_else(|| pick(false)) {
-                            if !keep.iter().any(|k| k.0 == second.0) {
-                                keep.push(second);
-                            }
+                        let in_keep = |r: &(&str, f32, bool)| keep.iter().any(|k| k.0 == r.0);
+                        // 漏打型:音节比窗口长(窗口是它删掉一个字母的变体)。
+                        // 子序列读法(窗口只多打了字母)不在此列——那类读法由
+                        // 「吃掉一段字母」的空词弧 + 精确音节表达,代价同域。
+                        if let Some(o) = typo
+                            .iter()
+                            .copied()
+                            .find(|t| t.0.len() > syl.len() && !in_keep(t))
+                        {
+                            keep.push(o);
+                        }
+                    }
+                    while keep.len() < MAX_TYPO_READINGS_PER_WINDOW {
+                        let in_keep = |r: &(&str, f32, bool)| keep.iter().any(|k| k.0 == r.0);
+                        match typo.iter().copied().find(|r| !in_keep(r)) {
+                            Some(next) => keep.push(next),
+                            None => break,
                         }
                     }
                     typo = keep;
@@ -660,13 +674,4 @@ impl ImeEngine {
         }
         Ok(())
     }
-}
-
-/// `reading` 是否是 `window` 的子序列(= 窗口只是多打了几个字母)。
-///
-/// 这类读法在容错弧里**让位**:窗口多打字母的形态由「吃掉一段字母」的空词
-/// 弧 + 精确音节表达,代价同域(见 `segmenter::gap_cost`),不需要第二个名额。
-fn is_subsequence_of(reading: &str, window: &str) -> bool {
-    let mut it = window.chars();
-    reading.chars().all(|c| it.any(|w| w == c))
 }

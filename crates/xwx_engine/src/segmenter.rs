@@ -236,13 +236,38 @@ const TYPO_P_INSERT_DEFAULT: f64 = 0.005;
 const TYPO_P_DELETE_DEFAULT: f64 = 0.004;
 /// 调换相邻两字母的概率——单次编辑里最常见的一类(`shenem`→`shen me`)。
 const TYPO_P_TRANSPOSE: f64 = 0.03;
+/// 键盘**邻键误触**的概率:手指挪到隔壁键,与方言型插入同档(0.05)。
+const TYPO_P_ADJACENT: f64 = 0.05;
+
+/// QWERTY 同一行的键位排布(参照 libime `PinyinCorrectionProfile` 的
+/// `mappingFromRows`:只取**同行左右邻键**,不含上下行)。
+///
+/// 依据:MS Pinyin(ACL 2000)对真实拼写错误的类型学统计,同行邻键占
+/// 替换类错误的 ~43%(同列 15%);librime 的 `keyboard_map` 同样只收同行。
+const QWERTY_ROWS: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+
+/// `a`、`b` 是否是键盘同一行的相邻键(如 `i`↔`o`、`m`↔`n`)。
+fn is_qwerty_neighbor(a: char, b: char) -> bool {
+    for row in QWERTY_ROWS {
+        if let (Some(i), Some(j)) = (row.find(a), row.find(b)) {
+            return i.abs_diff(j) == 1;
+        }
+    }
+    false
+}
 
 /// 把概率换算成对数域的**加性惩罚**(越小越像用户本意)。
 fn penalty(p: f64) -> f32 {
     -((p.log10()) as f32)
 }
 
-/// 单字母替换的代价:命中只含单字符的混淆对就用它的权重,否则用默认概率。
+/// 单字母替换的代价,证据从强到弱:
+/// ①混淆对(方言音系,是语言层面的强证据)→ ②键盘邻键误触(手指挪到
+/// 隔壁键,MS Pinyin 类型学里占替换错误的 ~43%)→ ③毫不相干的字母。
+///
+/// 实测意义:`nohao`(想打 `nihao`,`i` 被邻键 `o` 打掉)里 `o→i` 只 1.3,
+/// 独占「最便宜读法」的位置,「你好」才进得了候选——邻键模型没有时它与
+/// `na`/`ne`/`nu` 同价 2.0,谁上全看 `HashMap` 迭代顺序。
 fn substitution_penalty(a: char, b: char) -> f32 {
     for pair in crate::corrector::COMMON_CONFUSION_PAIRS {
         let (mut x, mut y) = (pair.a.chars(), pair.b.chars());
@@ -251,6 +276,9 @@ fn substitution_penalty(a: char, b: char) -> f32 {
                 return penalty(pair.weight.max(0.001) as f64).max(0.1);
             }
         }
+    }
+    if is_qwerty_neighbor(a, b) {
+        return penalty(TYPO_P_ADJACENT);
     }
     penalty(TYPO_P_SUBST_DEFAULT)
 }
@@ -614,15 +642,4 @@ mod tests {
 }
 
 
-#[cfg(test)]
-mod typo_dump_tmp {
-    use super::*;
-    #[test]
-    fn dump() {
-        let mut v = TypoSyllables::lookup("xang").to_vec();
-        v.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
-        for (s, c, sub) in v.iter() {
-            println!("xang -> {s} cost={c:.2} subst={sub}");
-        }
-    }
-}
+

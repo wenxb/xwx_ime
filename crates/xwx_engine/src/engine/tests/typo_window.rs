@@ -99,6 +99,21 @@ fn tied_readings_are_both_kept() {
     assert_eq!(top(&engine, "womemjintian", 1)[0], "我们今天");
 }
 
+/// 邻键误触 + 漏打型读法保底:`nohao` 的窗口 `no` 里最便宜的读法是
+/// 混淆对 `lo`(0.10),漏打型 `nao` 占一个名额,邻键 `ni`(1.30)靠第三个
+/// 名额进格子——「你好」由此登顶(名额 2 时它整个缺席)。
+#[test]
+fn neighbor_typo_with_omission_slot_reaches_nihao() {
+    let Some(engine) = real_engine() else {
+        return;
+    };
+    assert_eq!(
+        top(&engine, "nohao", 1),
+        vec!["你好"],
+        "nohao(i 被邻键 o 打掉)的首位应是「你好」"
+    );
+}
+
 /// 打对的输入一律不碰:窗口上限放宽只影响容错格,精确格逐字节不变。
 #[test]
 fn correctly_typed_inputs_are_untouched() {

@@ -194,7 +194,7 @@ const MIN_TYPO_WINDOW: usize = 2;
 /// 窗口的替换读法 `sang`(2.0)比插入读法 `xiang`(2.3,漏打 i)便宜,只按
 /// 代价截断到 2 条时插入读法照样轮不上——而「漏打一个字母」恰恰是打字
 /// 行为上最常见的一类。
-const MAX_TYPO_READINGS_PER_WINDOW: usize = 2;
+const MAX_TYPO_READINGS_PER_WINDOW: usize = 3;
 
 /// 每走一条**简拼弧**（`j` → `jin`）的加性扣分（log10 量纲）。
 ///
