@@ -219,7 +219,11 @@ pub(crate) fn syllable_at(input: &str, pos: usize, len: usize) -> Option<&str> {
 /// 哈希查找。真正贵的是随后的词库查询,由 `MAX_CHAINS_PER_START` 与容错
 /// 编辑预算一起封顶。
 pub(crate) struct TypoSyllables {
-    map: HashMap<String, Vec<(&'static str, f32)>>,
+    /// 窗口 → (规范音节, 代价, 是否替换类读法)。
+    /// 第三项供调用方做「每窗口按编辑类别留读法」的选取
+    /// (替换类与非替换类各留最便宜一条,见 `engine/mod.rs`
+    /// `MAX_TYPO_READINGS_PER_WINDOW`)。
+    map: HashMap<String, Vec<(&'static str, f32, bool)>>,
 }
 
 /// 默认替换概率(即「两个毫不相干的字母」):代价 2.0。
@@ -296,14 +300,20 @@ impl TypoSyllables {
     }
 
     fn build() -> Self {
-        let mut map: HashMap<String, Vec<(&'static str, f32)>> = HashMap::new();
-        let mut push = |window: String, syl: &'static str, cost: f32| {
+        let mut map: HashMap<String, Vec<(&'static str, f32, bool)>> = HashMap::new();
+        let mut push = |window: String, syl: &'static str, cost: f32, is_subst: bool| {
             let slot = map.entry(window).or_default();
             // 同一窗口可能有多条路径到达同一音节(如「少一个字母」既能解释成
-            // 删除、也能解释成调换),只保留**代价最小**的那条。
-            match slot.iter_mut().find(|(s, _)| *s == syl) {
-                Some((_, c)) => *c = c.min(cost),
-                None => slot.push((syl, cost)),
+            // 删除、也能解释成调换),只保留**代价最小**的那条,并记住那条
+            // 属于哪个编辑类别。
+            match slot.iter_mut().find(|(s, _, _)| *s == syl) {
+                Some((_, c, sub)) => {
+                    if cost < *c {
+                        *c = cost;
+                        *sub = is_subst;
+                    }
+                }
+                None => slot.push((syl, cost, is_subst)),
             }
         };
         for &syl in SYLLABLES {
@@ -316,7 +326,7 @@ impl TypoSyllables {
                     }
                     let mut v = chars.clone();
                     v[i] = c;
-                    push(v.iter().collect(), syl, substitution_penalty(orig, c));
+                    push(v.iter().collect(), syl, substitution_penalty(orig, c), true);
                 }
             }
             // 插入(用户漏打了一个字母)
@@ -324,20 +334,30 @@ impl TypoSyllables {
                 for c in 'a'..='z' {
                     let mut v = chars.clone();
                     v.insert(i, c);
-                    push(v.iter().collect(), syl, insertion_penalty(c, i.checked_sub(1).map(|j| chars[j])));
+                    push(
+                        v.iter().collect(),
+                        syl,
+                        insertion_penalty(c, i.checked_sub(1).map(|j| chars[j])),
+                        false,
+                    );
                 }
             }
             // 删除(用户多打了一个字母)
             for i in 0..chars.len() {
                 let mut v = chars.clone();
                 v.remove(i);
-                push(v.iter().collect(), syl, deletion_penalty(chars[i], i.checked_sub(1).map(|j| chars[j])));
+                push(
+                    v.iter().collect(),
+                    syl,
+                    deletion_penalty(chars[i], i.checked_sub(1).map(|j| chars[j])),
+                    false,
+                );
             }
             // 调换相邻两字母
             for i in 0..chars.len().saturating_sub(1) {
                 let mut v = chars.clone();
                 v.swap(i, i + 1);
-                push(v.iter().collect(), syl, penalty(TYPO_P_TRANSPOSE));
+                push(v.iter().collect(), syl, penalty(TYPO_P_TRANSPOSE), false);
             }
         }
         Self { map }
@@ -345,8 +365,9 @@ impl TypoSyllables {
 
     /// 查一个输入窗口(未被 `'` 打断的一段字母)的容错候选。
     ///
-    /// 返回空 = 这个窗口不像任何音节的 1-编辑变体(调用方据此放弃这条弧)。
-    pub(crate) fn lookup(window: &str) -> &'static [(&'static str, f32)] {
+    /// 返回 `(规范音节, 代价, 是否替换类)`;空 = 这个窗口不像任何音节的
+    /// 1-编辑变体(调用方据此放弃这条弧)。
+    pub(crate) fn lookup(window: &str) -> &'static [(&'static str, f32, bool)] {
         Self::get()
             .map
             .get(window)
@@ -559,13 +580,13 @@ mod tests {
     #[test]
     fn typo_index_covers_four_edit_kinds_and_orders_costs() {
         let has = |w: &str, syl: &str| {
-            TypoSyllables::lookup(w).iter().any(|(s, _)| *s == syl)
+            TypoSyllables::lookup(w).iter().any(|(s, _, _)| *s == syl)
         };
         let cost = |w: &str, syl: &str| {
             TypoSyllables::lookup(w)
                 .iter()
-                .find(|(s, _)| *s == syl)
-                .map(|(_, c)| *c)
+                .find(|(s, _, _)| *s == syl)
+                .map(|(_, c, _)| *c)
                 .unwrap_or_else(|| panic!("{w} 应能容错到 {syl}"))
         };
         // 替换:`shenem` 里的 `mem` → men
@@ -589,5 +610,19 @@ mod tests {
             cost("em", "me") < cost("haai", "hai"),
             "调换(单次编辑里最常见)应比一般删除便宜"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod typo_dump_tmp {
+    use super::*;
+    #[test]
+    fn dump() {
+        let mut v = TypoSyllables::lookup("xang").to_vec();
+        v.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+        for (s, c, sub) in v.iter() {
+            println!("xang -> {s} cost={c:.2} subst={sub}");
+        }
     }
 }

@@ -340,7 +340,7 @@ impl ImeEngine {
                 && (MIN_TYPO_WINDOW..=MAX_TYPO_WINDOW).contains(&syl.len())
                 && Self::window_has_vowel(syl)
             {
-                let mut typo: Vec<(&str, f32)> = segmenter::TypoSyllables::lookup(syl).to_vec();
+                let mut typo: Vec<(&str, f32, bool)> = segmenter::TypoSyllables::lookup(syl).to_vec();
                 // **窗口里有叠字母时,由结构决定读法,不由代价决定**:
                 // 拼音里不存在 `aa`/`ii`/`oo`…,所以叠字母只能解释成「多打
                 // 了一个」⇒ 只认「删掉一个字母」得来的读法,替换读法全部丢弃。
@@ -348,22 +348,60 @@ impl ImeEngine {
                 // 实测依据(`shanghaai`):窗口 `haai` 的替换读法 `huai`
                 // (概率 0.01→代价 2.0)比删除读法 `hai`(0.004→2.4)便宜,
                 // 按代价截断到 1 条就把「上海」丢成「上坏/上怀」。
-                let deletions: Vec<(&str, f32)> = if Self::has_doubled_letter(syl) {
+                let deletions: Vec<(&str, f32, bool)> = if Self::has_doubled_letter(syl) {
                     typo.iter()
                         .copied()
-                        .filter(|(r, _)| Self::is_one_char_deletion(syl, r))
+                        .filter(|(r, _, _)| Self::is_one_char_deletion(syl, r))
                         .collect()
                 } else {
                     Vec::new()
                 };
                 if !deletions.is_empty() {
                     typo = deletions;
-                } else {
-                    // 最便宜的读法最像用户本意:只留前几条,避免分支数相乘。
-                    typo.sort_by(|a, b| a.1.total_cmp(&b.1));
-                    typo.truncate(MAX_TYPO_READINGS_PER_WINDOW);
+                } else if !typo.is_empty() {
+                    // 排序键:代价升序 → 同价优先**首字母一致**的读法(音节最
+                    // 显著的是声母,用户极少漏掉整串开头的字母)→ 同价同首字母
+                    // 再按音节字典序(只为结果确定,不代表语言证据)。
+                    let win_first = syl.chars().next();
+                    let same_init = |s: &str| s.chars().next() == win_first;
+                    typo.sort_by(|a, b| {
+                        a.1.total_cmp(&b.1)
+                            .then_with(|| same_init(b.0).cmp(&same_init(a.0)))
+                            .then_with(|| a.0.cmp(b.0))
+                    });
+                    // **代价并列的读法一起留下**(并列 = 现有证据不足,不当场
+                    // 用字典序替用户决定谁对):实测 `mem` 窗口的 `mei`/`men`
+                    // 同价 2.0,只留字典序第一个会把「我们」丢成「我没/我妹」。
+                    let cheapest = typo[0].1;
+                    let mut keep: Vec<(&str, f32, bool)> = typo
+                        .iter()
+                        .copied()
+                        .filter(|r| (r.1 - cheapest).abs() <= f32::EPSILON)
+                        .take(MAX_TYPO_READINGS_PER_WINDOW)
+                        .collect();
+                    // 名额还有剩就补一条**不同编辑类别**的读法(类别相同者只
+                    // 白占分支预算),优先取**不是窗口子序列**的:「窗口只多打
+                    // 了几个字母」那类读法(如 `xang`→`ang`)已由「吃掉一段
+                    // 字母」的空词弧 + 精确音节表达,代价同域。实测 `xang`
+                    // (想)就是名额落到 `ang`(2.30)而不是 `xiang`(2.40,漏打
+                    // 中间的 i)时「想」整个进不了候选。
+                    if keep.len() < MAX_TYPO_READINGS_PER_WINDOW {
+                        let first_is_subst = keep[0].2;
+                        let pick = |skip_subseq: bool| {
+                            typo.iter().copied().find(|(r, _, is_subst)| {
+                                *is_subst != first_is_subst
+                                    && !(skip_subseq && is_subsequence_of(r, syl))
+                            })
+                        };
+                        if let Some(second) = pick(true).or_else(|| pick(false)) {
+                            if !keep.iter().any(|k| k.0 == second.0) {
+                                keep.push(second);
+                            }
+                        }
+                    }
+                    typo = keep;
                 }
-                for (typo_syl, cost) in typo {
+                for (typo_syl, cost, _) in typo {
                     readings.push((typo_syl, cost, 1, false));
                 }
             } else if abbrev
@@ -622,4 +660,13 @@ impl ImeEngine {
         }
         Ok(())
     }
+}
+
+/// `reading` 是否是 `window` 的子序列(= 窗口只是多打了几个字母)。
+///
+/// 这类读法在容错弧里**让位**:窗口多打字母的形态由「吃掉一段字母」的空词
+/// 弧 + 精确音节表达,代价同域(见 `segmenter::gap_cost`),不需要第二个名额。
+fn is_subsequence_of(reading: &str, window: &str) -> bool {
+    let mut it = window.chars();
+    reading.chars().all(|c| it.any(|w| w == c))
 }

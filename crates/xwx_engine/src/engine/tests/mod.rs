@@ -62,6 +62,7 @@ mod query_snapshot;
 mod dag_reachability;
 mod typo_budget;
 mod typo_repeat;
+mod typo_window;
 mod tail_completion;
 mod projection_filler;
 mod recall;
