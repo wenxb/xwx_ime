@@ -57,16 +57,24 @@ perf:
 # （实测 5 轮窗口安全），所以这一步之后让位窗口才是可靠的。
 # 按**进程名**精确匹配（pgrep -x）而不是全命令行：全命令行匹配会连
 # 「正在执行这条命令的 shell」一起匹配上，等于自杀（调试时踩过两次）。
+# 输出纪律：命令文本不回显（@ 前缀），只留 ==> 步骤行与引擎自己的日志。
 dev:
-    cargo build -p xwx_ime
-    if ! pgrep -x ibus-daemon >/dev/null; then ibus-daemon -rdx; sleep 2; fi
-    -for pid in $(pgrep -x xwx_ime); do kill "$pid"; done
-    sleep 0.5
+    @echo "==> [1/3] 编译 debug 引擎"
+    @cargo build -p xwx_ime -q
+    @if ! pgrep -x ibus-daemon >/dev/null; then \
+        echo "==> [2/3] ibus-daemon 未运行，先拉起"; \
+        ibus-daemon -rdx; sleep 2; \
+    else \
+        echo "==> [2/3] ibus-daemon 已在运行"; \
+    fi
+    @echo "==> [3/3] 让位旧的调试引擎并接管总线名"
+    @for pid in $(pgrep -x xwx_ime); do kill "$pid" 2>/dev/null || true; done
+    @sleep 0.5
     # 调试引擎用「可接管」的方式占名（见 src/main.rs），所以即使 daemon
     # 抢先按 component XML 拉起了 release 引擎，这里也会把它顶掉——
     # 这正是「just dev 跑的不是新二进制」那个坑的解法。
-    @echo "调试引擎  {{target_dir}}/debug/xwx_ime"
-    exec {{target_dir}}/debug/xwx_ime --ibus
+    @echo "==> 调试引擎  {{target_dir}}/debug/xwx_ime（Ctrl-C 退出；日志照常打在终端）"
+    @exec {{target_dir}}/debug/xwx_ime --ibus
 
 # 输出 component XML 到 stdout（打 deb 时用 --exec 指 /usr/bin/xwx_ime）
 xml *args:
@@ -74,15 +82,20 @@ xml *args:
     @{{target_dir}}/debug/xwx_ime --xml {{args}}
 
 # 安装：二进制、XML（sudo 到系统目录）、词库，并刷新 ibus-daemon
-# 每行都以 `@` 开头：不回显命令文本，只留警告与结尾的四行摘要。
+# 每行都以 `@` 开头：不回显命令文本；进度用 ==> [n/6] 步骤行打印，
+# 警告与结尾摘要照旧。sudo 步骤单独提示，密码框出现时有上下文。
 install:
+    @echo "==> [1/6] 编译 release"
     @cargo build --release --quiet -p xwx_ime
+    @echo "==> [2/6] 安装二进制 → {{bin_dir}}/xwx_ime"
     @mkdir -p {{bin_dir}} {{xwx_data}}
     @install -m 755 {{target_dir}}/release/xwx_ime {{bin_dir}}/xwx_ime
+    @echo "==> [3/6] 安装组件 XML → {{sys_comp_dir}}（sudo，可能要求密码）"
     @sed 's#__XWX_EXEC__#{{bin_dir}}/xwx_ime#g' data/xwx.xml > /tmp/xwx-component.xml
     @sudo install -d {{sys_comp_dir}}
     @sudo install -m 644 /tmp/xwx-component.xml {{sys_comp_dir}}/xwx.xml
     @rm -f /tmp/xwx-component.xml
+    @echo "==> [4/6] 词库 / 副索引 / 语言模型检查"
     # 词库与副索引：缺任何一个只是功能降级，提醒但不算失败。
     @if test -f data/dict.bin; then install -m 644 data/dict.bin {{xwx_data}}/dict.bin; \
     else echo "警告：data/dict.bin 不存在，引擎只剩极小的内置词库。"; fi
@@ -92,8 +105,10 @@ install:
     @if ! ls {{xwx_data}}/*.gram >/dev/null 2>&1 && ! test -f {{xwx_data}}/bigram.txt; then \
         echo "提示：未检测到语言模型，候选排序退化为纯词频（把万象 .gram 放进 {{xwx_data}}/ 即可）。"; \
     fi
+    @echo "==> [5/6] 刷新 ibus-daemon（重扫 component 目录）"
     # 刷新 daemon：重启会话里的 ibus-daemon，让它重扫 component 目录。
     @if command -v ibus >/dev/null 2>&1; then ibus restart >/dev/null 2>&1 || true; else for pid in $(pgrep -x ibus-daemon); do kill "$pid" 2>/dev/null || true; done; fi
+    @echo "==> [6/6] 完成"
     @echo "已安装  {{bin_dir}}/xwx_ime  $(stat -c%s {{bin_dir}}/xwx_ime) 字节  sha256 $(sha256sum {{bin_dir}}/xwx_ime | cut -c1-12)"
     @echo "组件    {{sys_comp_dir}}/xwx.xml  engine xwx / zh_CN"
     @echo "词库    {{xwx_data}}/dict.bin + abbrev.bin"
