@@ -298,13 +298,6 @@ impl ImeEngine {
         // 即使简拼格本身只用主索引。
         let pure_abbrev =
             !reachable && super::rank::pure_abbrev_input(pinyin, self.dict.has_abbrev());
-        // 「已有整串读法」这条要**忽略原样回显**：纯缩写输入的解不了整串时，
-        // 兜底先给的就是回显候选（`covered = 整串`、`echo = true`），
-        // 它不算「已经有读法」，否则门槛永远挡住简拼格（实测 wsm/zgr/xxn/dbq/mgx
-        // 五条因此一条简拼候选都拿不到）。
-        let covered_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
-        // （曾经这里有一个"忽略简拼层候选"的 `covered_whole_real` 快照，⑤⑦⑦ 之后
-        // 这两类输入改用「只看精确路」的判据，该快照不再需要。）
         // **开头即缩写**：首窗口是单字母、且它本身不是完整音节（`z`/`w`/`b`…）。
         // 这类输入的读法必然是「单字母缩写 + 字面尾链」（`ztai` = z + `tai`、
         // `ztailan`、`jttqzenmy`…）——旧判据（`pure_abbrev` 要求**每个**字母都能
@@ -331,30 +324,29 @@ impl ImeEngine {
                 || (tail_class_head_is_syllable
                     && (!tolerant_explains || self.ends_one_letter_short(pinyin))
                     && pinyin.len() >= MIN_ABBREV_TAIL_CLASS_LEN))
-            && if pure_abbrev || leading_abbrev {
-                // **只看精确路**是否已经解释整串。不能把容错层(Fuzzy)的整串读法
-                // 也算进来：`ztai` 的「摘」(Fuzzy, covered=4) 会因此让
-                // `needs_abbrev=false`、把简拼格分支整个挡掉（⑤⑦⑥ 实测：
-                // 开关打开时 `ztai`/`nhma` 的 needs_abbrev 由 true 变 false）。
-                !exact_covers_whole
-            } else {
-                !covered_whole
-            };
+            // **三类统一「只看精确路」**（⑤⑦⑥ 对前两类的裁决推广到第三类）：
+            // 容错/兜底层的整串读法（含回声）都没有否决权——`yiwanc` 的容错
+            // 猜读（c→g 替换出「以往」，covered=整串）曾把第三类的 `!covered_whole`
+            // 顶死，简拼格不建，`yi wan cheng` 混拼读法无供给。判据看容错合并前
+            // 的精确路，不看合并后的池子。
+            && !exact_covers_whole;
         super::trace::note(|| {
             format!(
-                "门槛: reachable={reachable} tolerant_explains={tolerant_explains} len={} pure_abbrev={pure_abbrev} covered_whole={covered_whole} exact_covers_whole={exact_covers_whole} needs_abbrev={needs_abbrev}",
+                "门槛: reachable={reachable} tolerant_explains={tolerant_explains} len={} pure_abbrev={pure_abbrev} exact_covers_whole={exact_covers_whole} needs_abbrev={needs_abbrev}",
                 pinyin.len()
             )
         });
         if needs_abbrev {
-            // **按输入类别收窄的层序破例标志**（⑤⑧②）：只有这两类输入让
-            // "整串命中词条的简拼读法"按精确档参与层序比较。
-            let entry_tier_exception = pure_abbrev || leading_abbrev;
+            // **层序破例**（⑤⑧②）：「整串命中词条的简拼读法」按精确档参与
+            // 层序比较。原只对纯缩写/开头缩写两类开；`yiwanc` 表明第三类有同一场
+            // 对局——容错猜读（c→g 出「以往」，Fuzzy 整串）按层序压住简拼整串
+            // 词条「已完成」，首屏看不到。三类统一放行；收编的防洪堤不变：
+            // 只收编**带真实词条证据**的整串读法（`entry_has_evidence`，
+            // freq=0 的拼装链候选不收编，`xaing` 的教训）。
             // **第三类（残缺尾/容错类）的格化（⑤⑩⑬ W1c）**：needs_abbrev 里
             // 既非纯缩写也非开头缩写的剩余类（首音节合法 + 尾部残缺，如
             // meiy/beijin/nihaoq）也建条目边并按词条口径重算——旧通道删除
-            // （第 8 步）前的最后一块迁入。层序收编标志不扩：这一类的整串
-            // 读法本来多为精确补全（北京/你好），天然就在精确档。
+            // （第 8 步）前的最后一块迁入。
             let third_abbrev = !pure_abbrev && !leading_abbrev;
             let grid_scope = demote_scope || third_abbrev;
             let abbrev_lattice = super::trace::timed("建简拼格", || {
@@ -423,7 +415,7 @@ impl ImeEngine {
             )?;
             {
                 {
-                    sort_candidates(pinyin, &mut ranked, entry_tier_exception);
+                    sort_candidates(pinyin, &mut ranked, true);
                     ranked.truncate(MAX_CANDIDATES);
                     // **整串候选置顶**(上游同构,不是调参):libime 的 n-best
                     // 整句候选占候选表 index 0..n-1,librime 的整句候选在它
@@ -800,14 +792,25 @@ impl ImeEngine {
     /// beam 给的是覆盖整串的 n-best 路径；这里只做三件薄事：把词序拼成整串、
     /// 补上整串才有的逐词先验、标成简拼层（这条分支本来只在精确格解不出整串
     /// 时才走，走通的路径必然用过至少一条简拼弧）。
-    /// 「末尾只差一个字母」：去掉最后一个字母后仍能**完整切成音节**。
+    /// 「末尾只差一个声母」：去掉末尾字母后仍能**完整切成音节**。
     ///
-    /// 用 `Segmenter::segment`（既有 DP，返回空即切不开）把末尾补全的放行面限制在
-    /// 最小形状上：`daishix` → 去尾 `daishi` ✓ 放行；`shanghaai` → 去尾 `shanghaa`
-    /// ✗、`jintqbj` → 去尾 `jintqb` ✗ 都不放行，行为不变。
+    /// 两种放行形状：
+    /// - 去掉最后 1 个字母：`daishix` → 去尾 `daishi` ✓；
+    /// - 去掉最后 2 个字母且它们是双字母声母 `zh`/`ch`/`sh`：`yiwanch` →
+    ///   去尾 `yiwan` ✓。格子与混合 DFS 都把双字母声母当一个声母
+    ///   （`collect_chain_edges` 的 `len==2 && zh|ch|sh` 弧），门槛必须同构,
+    ///   否则「全拼+ch 尾」打字中状态没有供给。
+    ///
+    /// 不放行的形状不变：`shanghaai` → 去尾 `shanghaa` ✗、`jintqbj` →
+    /// 去尾 `jintqb` ✗（后者尾巴不构成声母）。
     fn ends_one_letter_short(&self, pinyin: &str) -> bool {
         let n = pinyin.len();
-        n >= 2 && !self.segmenter.segment(&pinyin[..n - 1]).is_empty()
+        if n >= 2 && !self.segmenter.segment(&pinyin[..n - 1]).is_empty() {
+            return true;
+        }
+        n >= 3
+            && matches!(&pinyin[n - 2..], "zh" | "ch" | "sh")
+            && !self.segmenter.segment(&pinyin[..n - 2]).is_empty()
     }
 
     pub(super) fn best_chain_candidates(

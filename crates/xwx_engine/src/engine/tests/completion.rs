@@ -319,3 +319,57 @@ fn real_dict_initial_only_prefix_first_page() {
         zhon.iter().take(10).map(|c| (&c.word, &c.pinyin)).collect::<Vec<_>>()
     );
 }
+
+/// 全拼前缀 + 尾部声母（打字中状态）的混拼供给：
+/// - `yiwanc`（yi+wan+c，c 是 cheng 的声母）首位必须是「已完成」——
+///   容错层的替换猜读（c→g 出「以往」，Fuzzy 整串）不得按层序压住
+///   简拼整串词条（⑤⑧② 破例推广到第三类）；
+/// - `yiwanch`（尾 ch 双字母声母）首位同样是「已完成」——
+///   `ends_one_letter_short` 必须认识 zh/ch/sh 尾；
+/// - 「以往」仍须在列（容错备选不消失，用户真打错 g→c 时有得选）。
+#[test]
+fn mixed_initial_tail_prefers_entry_reading() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let dict_path = root.join("dict.bin");
+    let abbrev_path = root.join("abbrev.bin");
+    let gram = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+        })
+        .map(|b| b.join("xwx/wanxiang-lts-zh-hans.gram"));
+    let (Some(gram_path), true, true) = (gram, dict_path.is_file(), abbrev_path.is_file())
+    else {
+        return;
+    };
+    if !gram_path.is_file() {
+        return;
+    }
+    let mut engine =
+        ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
+    engine.dict = engine.dict.with_abbrev(&abbrev_path);
+
+    for (input, want_top1) in [("yiwanc", "已完成"), ("yiwanch", "已完成")] {
+        let cands = engine
+            .lookup_candidates(input, &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            !cands.is_empty(),
+            "{input} 无候选"
+        );
+        assert_eq!(
+            cands[0].word, want_top1,
+            "{input} 首位应为「{want_top1}」: {:?}",
+            cands.iter().take(5).map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
+        );
+    }
+    let cands = engine
+        .lookup_candidates("yiwanc", &LmContext::empty())
+        .expect("查询失败");
+    assert!(
+        cands.iter().any(|c| c.word == "以往"),
+        "yiwanc 的容错备选「以往」不得消失: {:?}",
+        cands.iter().take(20).map(|c| &c.word).collect::<Vec<_>>()
+    );
+}
