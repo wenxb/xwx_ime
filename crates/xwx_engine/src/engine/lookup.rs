@@ -417,18 +417,24 @@ impl ImeEngine {
                 {
                     sort_candidates(pinyin, &mut ranked, true);
                     ranked.truncate(MAX_CANDIDATES);
-                    // **整串候选置顶**(上游同构,不是调参):libime 的 n-best
+                    // **整串块置顶**(上游同构,不是调参):libime 的 n-best
                     // 整句候选占候选表 index 0..n-1,librime 的整句候选在它
-                    // 自己的 Translation 流内排首位。这里也必须按结构置顶,
-                    // 不能靠分数:整句分是多个词的 log 概率之和,与单词分
-                    // 不同量纲,比分数必然输给只覆盖前缀的词(实测「我们今天」
+                    // 自己的 Translation 流内排首位。这里按结构把**整个整串
+                    // 块**提到最前,不能靠分数:整句/词条串分与只覆盖前缀的
+                    // 词不同量纲,比分数必然输给只覆盖前缀的词(实测「我们今天」
                     // 压过「我们今天去北京」)。
                     //
-                    // **不用阈值**:上游（librime 的 `seg.end == input.length()`、
-                    // 微软的「能否构成覆盖整串的完整解析」、libpinyin 无条件
-                    // 前插 n-best 句子）判的都是「覆盖」这个布尔事实,分数只
+                    // **不用阈值**:上游判的都是「覆盖」这个布尔事实(librime
+                    // 的 `seg.end == input.length()`、微软的「能否构成覆盖整串
+                    // 的完整解析」、libpinyin 无条件前插 n-best 句子),分数只
                     // 决定谁排第几。这条分支本来就只在「精确格解不出整串」时
                     // 才走到,不存在「本来有更好答案却被整句顶掉」的情况。
+                    //
+                    // 块置顶而不是只提第一个:`mqweizhi` 的「勉强为之」(#1)与
+                    // 「目前为止」(#76)同为整串简拼词条,中间隔着尾音节单字墙
+                    // (为/位/微…,容错空词弧读法),只提第一个会让第二个整串
+                    // 读法首屏看不到。稳定分区保持既有分数序;整串块本已连续
+                    // 的输入(zhongg/meiy/yiwanc 等冻结集全体)此操作是 no-op。
                     super::trace::note(|| {
                         let t: Vec<String> = ranked
                             .iter()
@@ -437,12 +443,11 @@ impl ImeEngine {
                             .collect();
                         format!("简拼段前五: {}", t.join("  "))
                     });
-                    if let Some(idx) = ranked.iter().position(|c| c.covered >= pinyin.len()) {
-                        if idx != 0 {
-                            let c = ranked.remove(idx);
-                            ranked.insert(0, c);
-                        }
-                    }
+                    // 稳定分区:整串候选(covered=整串)整体前移,块内次序由上面的排序决定。
+                    let (whole, rest): (Vec<Candidate>, Vec<Candidate>) =
+                        ranked.drain(..).partition(|c| c.covered >= pinyin.len());
+                    ranked = whole;
+                    ranked.extend(rest);
                 }
             }
         }

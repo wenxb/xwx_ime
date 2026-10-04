@@ -326,12 +326,15 @@ fn real_dict_initial_only_prefix_first_page() {
 ///   简拼整串词条（⑤⑧② 破例推广到第三类）；
 /// - `yiwanch`（尾 ch 双字母声母）首位同样是「已完成」——
 ///   `ends_one_letter_short` 必须认识 zh/ch/sh 尾；
-/// - 「以往」仍须在列（容错备选不消失，用户真打错 g→c 时有得选）。
+/// - 「以往」仍须在列（容错备选不消失，用户真打错 g→c 时有得选）；
+/// - `mqweizhi`（mq+wei+zhi，开头即缩写）的「目前为止」须在前 3——
+///   整串块置顶：只提第一个整串候选时它被尾音节单字墙压在 #76。
 #[test]
 fn mixed_initial_tail_prefers_entry_reading() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
     let dict_path = root.join("dict.bin");
     let abbrev_path = root.join("abbrev.bin");
+    let graph_path = abbrev_path.with_file_name("syllable_graph.bin");
     let gram = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
@@ -349,6 +352,9 @@ fn mixed_initial_tail_prefers_entry_reading() {
     let mut engine =
         ImeEngine::new_with_lm(Some(&dict_path), Some(&gram_path)).expect("引擎创建失败");
     engine.dict = engine.dict.with_abbrev(&abbrev_path);
+    if graph_path.is_file() {
+        engine.dict = engine.dict.with_syllable_graph(&graph_path);
+    }
 
     for (input, want_top1) in [("yiwanc", "已完成"), ("yiwanch", "已完成")] {
         let cands = engine
@@ -371,5 +377,19 @@ fn mixed_initial_tail_prefers_entry_reading() {
         cands.iter().any(|c| c.word == "以往"),
         "yiwanc 的容错备选「以往」不得消失: {:?}",
         cands.iter().take(20).map(|c| &c.word).collect::<Vec<_>>()
+    );
+    let cands = engine
+        .lookup_candidates("mqweizhi", &LmContext::empty())
+        .expect("查询失败");
+    let pos = cands
+        .iter()
+        .position(|c| c.word == "目前为止")
+        .unwrap_or_else(|| panic!("mqweizhi 应含「目前为止」: {:?}",
+            cands.iter().take(10).map(|c| &c.word).collect::<Vec<_>>()));
+    assert!(
+        pos < 3,
+        "mqweizhi 的「目前为止」应在前 3(整串块置顶),实际第 {} 名: {:?}",
+        pos + 1,
+        cands.iter().take(6).map(|c| (&c.word, c.spelling)).collect::<Vec<_>>()
     );
 }
