@@ -8,8 +8,8 @@ use memmap2::Mmap;
 
 use crate::candidate::Candidate;
 
-use super::{read_u16, read_u32, read_u64, DictError, MmapRecord, ABBREV_HEADER_LEN, ABBREV_MAGIC,
-            ABBREV_VERSION, MAX_LOOKUP_RESULTS, MMAP_RECORD_LEN};
+use super::{read_u16, read_u32, read_u64, DictError, MmapDict, MmapRecord, ABBREV_HEADER_LEN,
+            ABBREV_MAGIC, ABBREV_VERSION, MAX_LOOKUP_RESULTS, MMAP_RECORD_LEN};
 
 /// 基于只读 mmap 二进制的词库（运行时主力实现）。
 ///
@@ -258,5 +258,123 @@ impl AbbrevIndex {
             }
         }
         Ok(out)
+    }
+}
+
+/// 折叠读法的音节校验：第 `idx` 个音节必须真的以「声母 + h」开头。
+/// 音节数不足同样算不匹配（该读法需要的音节根本不存在）。
+/// 折叠点升序，单趟扫描；注意 `split().nth()` 是**相对**前进，不能连用
+/// （实测 `zhzhzhzh` 的 4 个折叠点因此全部错位、整池误杀）。
+/// 从 `dict/lookup.rs` 移入：它的唯一消费者是「副索引词条 × 折叠变体」，
+/// 与简拼纠错的证据探针（本文件）共用。
+pub(super) fn syllables_carry_digraphs(pinyin: &str, digraphs: &[(usize, u8)]) -> bool {
+    let mut seen = 0usize; // 已扫过的音节数
+    for (i, s) in pinyin.split(' ').enumerate() {
+        seen = i + 1;
+        if let Some(&(_, initial)) = digraphs.iter().find(|&&(idx, _)| idx == i) {
+            let b = s.as_bytes();
+            if b.first() != Some(&initial) || b.get(1) != Some(&b'h') {
+                return false;
+            }
+        }
+    }
+    digraphs.last().is_none_or(|&(last, _)| seen > last)
+}
+
+impl AbbrevIndex {
+    /// 精确等于 `key` 的首字母索引记录里，**通过折叠校验**的词条最高词频。
+    ///
+    /// [`Self::lookup_prefix`] 是前缀匹配且 500 条早停，回答不了「这个
+    /// 精确 key 下有没有真实词条」——简拼纠错的一级披露（`O(log n)` 证据
+    /// 探针）需要的是后一个问题。精确命中 ⇒ `key.len()` == 音节数，天然
+    /// 满足「一字一字母」判据，无需再筛。
+    fn exact_key_best_freq(
+        &self,
+        key: &str,
+        digraphs: &[(usize, u8)],
+    ) -> Result<Option<u64>, DictError> {
+        let pb = key.as_bytes();
+        let i = self.lower_bound(pb)?;
+        if i >= self.key_count {
+            return Ok(None);
+        }
+        let rec = self.record(i)?;
+        let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+        if s != pb {
+            return Ok(None);
+        }
+        let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
+        let mut best: Option<u64> = None;
+        let mut pos = 0usize;
+        while pos < block.len() {
+            let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
+            block
+                .get(pos + 1..pos + 1 + wl)
+                .ok_or(DictError::Corrupt("词块越界"))?;
+            let pl = *block
+                .get(pos + 1 + wl)
+                .ok_or(DictError::Corrupt("词块越界"))? as usize;
+            let py_bytes = block
+                .get(pos + 2 + wl..pos + 2 + wl + pl)
+                .ok_or(DictError::Corrupt("词块越界"))?;
+            let freq = read_u32(block, pos + 2 + wl + pl)? as u64;
+            let pinyin = std::str::from_utf8(py_bytes)
+                .map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?;
+            if digraphs.is_empty() || syllables_carry_digraphs(pinyin, digraphs) {
+                best = Some(best.unwrap_or(0).max(freq));
+            }
+            pos += 2 + wl + pl + 4;
+        }
+        Ok(best)
+    }
+}
+
+impl MmapDict {
+    /// 简拼纠错的一级证据（**词条级**）：`variant` 本身（含平翘舌折叠写法）
+    /// 精确命中副索引 key 时，返回通过折叠校验的词条最高词频；无命中
+    /// ⇒ `None`。调用方（`engine/abbrev_correct.rs`）用 `FILLER_FREQ_TIER`
+    /// 过滤填充档——词库层只如实报告，不替引擎做证据裁决。
+    pub(crate) fn abbrev_entry_evidence(&self, variant: &str) -> Result<Option<u64>, DictError> {
+        let Some(idx) = &self.abbrev else {
+            return Ok(None);
+        };
+        let mut best: Option<u64> = None;
+        for read in abbrev_variant_reads(variant) {
+            if let Some(f) = idx.exact_key_best_freq(&read.query, &read.digraphs)? {
+                best = Some(best.unwrap_or(0).max(f));
+            }
+        }
+        Ok(best)
+    }
+
+    /// 简拼纠错的一级证据（**链级**）：存在真实词条（最高词频 ≥ `min_freq`）
+    /// 的首字母串是 `variant` 的**真前缀**（长度 ≥ `min_prefix`）⇒ 整串链读法
+    /// 的首词有据可查（`wmjtqbj` 型读法不在副索引里，但它的首词「我们今天」
+    /// = `wmjt` 在）。取**最深**命中前缀，返回 `(前缀长, 词频)`——深度供调用方
+    /// 算覆盖率（前缀长/变体长）：同一原串的各 1-编辑变体共享同一条首词
+    /// 证据时，删字母型变体（变体更短）覆盖率更高，是平局集里唯一有信息量
+    /// 的次级信号。
+    ///
+    /// 折叠写法不参与（局限，见下）：前缀 key 里 `zh/ch/sh` 的折叠形态
+    /// 是「每音节一字母」与「双字母声母」两套写法的位置语义，`exact_key_
+    /// best_freq` 的单串探针管不过来，先按字面串查——链证据是「有据可查」
+    /// 的宽松信号，漏报可接受，误报由二级解码 + 分数闸兜底。
+    pub(crate) fn abbrev_chain_evidence(
+        &self,
+        variant: &str,
+        min_prefix: usize,
+        min_freq: u64,
+    ) -> Result<Option<(usize, u64)>, DictError> {
+        let Some(idx) = &self.abbrev else {
+            return Ok(None);
+        };
+        for i in (min_prefix..variant.len()).rev() {
+            if let Some(f) = idx.exact_key_best_freq(&variant[..i], &[])? {
+                if f >= min_freq {
+                    return Ok(Some((i, f)));
+                }
+            }
+        }
+        Ok(None)
     }
 }

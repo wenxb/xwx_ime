@@ -5,11 +5,13 @@ use super::rank::merge_layer;
 use super::*;
 
 /// 词条口径重算的共享证据（见 [`ImeEngine::entry_evidence`]）。
-struct EntryEvidence {
+/// `pub(in crate::engine)`：简拼纠错（`abbrev_correct.rs`）的词条级纠正
+/// 候选要用同一份证据重算分数——一次查询一代，两处必须同源。
+pub(in crate::engine) struct EntryEvidence {
     /// 词库总词频；0 = 不可用，跳过重算。
-    total: u64,
+    pub(in crate::engine) total: u64,
     /// 上文 LM 状态（首词的前文就是已上屏文本，无近似）。
-    state: LmState,
+    pub(in crate::engine) state: LmState,
 }
 
 impl ImeEngine {
@@ -407,6 +409,18 @@ impl ImeEngine {
                 self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
                 Self::push_rescored(&mut ranked, c, rescored);
             }
+            // —— 阶段 B：简拼纠错（证据闸 + 渐进披露，见 `abbrev_correct.rs`）——
+            // 触发闸/分数闸/合并整体在 `try_abbrev_correction`（`inline(never)`
+            // 冷路径，见其文档：纠错代码体留在热函数里即便一次都不执行也会
+            // 改变 hot 布局，实测 zgr/zhongg 端到端慢 ~10%）。
+            self.try_abbrev_correction(
+                pinyin,
+                ctx,
+                &mut ranked,
+                pure_abbrev,
+                ev.as_ref(),
+                user_snapshot.as_ref(),
+            )?;
             {
                 {
                     sort_candidates(pinyin, &mut ranked, entry_tier_exception);
@@ -609,7 +623,7 @@ impl ImeEngine {
     ///
     /// `ev` 为 `None` 时只做 **freq 回填**（命中词条 ⇒ `freq` 补 0）——这一半
     /// **与开关无关**，默认态也照跑；重算分数才挂开关与降级范围。
-    fn fill_entry_evidence(
+    pub(in crate::engine) fn fill_entry_evidence(
         &self,
         pinyin: &str,
         c: &mut Candidate,
@@ -662,7 +676,7 @@ impl ImeEngine {
     ///
     /// 按查询算一次而不是按候选算：整串条目边一批可达数百条，每条各构造一次
     /// LM 状态是纯浪费（实测把 `full:weishenme` 的 p95 抬高约 0.9ms）。
-    fn entry_evidence(&self, ctx: &LmContext) -> Result<EntryEvidence, EngineError> {
+    pub(in crate::engine) fn entry_evidence(&self, ctx: &LmContext) -> Result<EntryEvidence, EngineError> {
         Ok(EntryEvidence {
             total: self.dict.total_freq()?,
             state: self.lm.state_from_context(ctx),

@@ -247,7 +247,8 @@ const TYPO_P_ADJACENT: f64 = 0.05;
 const QWERTY_ROWS: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 
 /// `a`、`b` 是否是键盘同一行的相邻键(如 `i`↔`o`、`m`↔`n`)。
-fn is_qwerty_neighbor(a: char, b: char) -> bool {
+/// `pub(crate)`:简拼纠错(`engine/abbrev_correct.rs`)的变体代价用同一张键盘模型。
+pub(crate) fn is_qwerty_neighbor(a: char, b: char) -> bool {
     for row in QWERTY_ROWS {
         if let (Some(i), Some(j)) = (row.find(a), row.find(b)) {
             return i.abs_diff(j) == 1;
@@ -256,9 +257,40 @@ fn is_qwerty_neighbor(a: char, b: char) -> bool {
     false
 }
 
+/// `c` 在键盘上的同行左右邻键(`(左, 右)`,行端为 `None`)。
+/// 简拼纠错的变体生成按它枚举替换变体——与 [`is_qwerty_neighbor`]
+/// 同一张 [`QWERTY_ROWS`],只枚举、不判定。
+pub(crate) fn qwerty_row_neighbors(c: char) -> (Option<char>, Option<char>) {
+    for row in QWERTY_ROWS {
+        if let Some(i) = row.find(c) {
+            let left = i.checked_sub(1).and_then(|j| row.chars().nth(j));
+            let right = row.chars().nth(i + 1);
+            return (left, right);
+        }
+    }
+    (None, None)
+}
+
 /// 把概率换算成对数域的**加性惩罚**(越小越像用户本意)。
-fn penalty(p: f64) -> f32 {
+/// `pub(crate)`:简拼纠错的同列邻键档(`TYPO_P_ADJACENT_COL`)只有概率、
+/// 没有现成换算,复用这份换算而不是再抄一份 log10。
+pub(crate) fn penalty(p: f64) -> f32 {
     -((p.log10()) as f32)
+}
+
+/// `a`/`b` 是否命中混淆对;命中则返回其代价。证据表只有这一份
+/// ([`crate::corrector::COMMON_CONFUSION_PAIRS]),容错解码与简拼纠错的
+/// 变体代价都从这里取——两处各抄一份迟早漂移。
+pub(crate) fn confusion_pair_penalty(a: char, b: char) -> Option<f32> {
+    for pair in crate::corrector::COMMON_CONFUSION_PAIRS {
+        let (mut x, mut y) = (pair.a.chars(), pair.b.chars());
+        if let (Some(x), Some(y), None, None) = (x.next(), y.next(), x.next(), y.next()) {
+            if (x, y) == (a, b) || (x, y) == (b, a) {
+                return Some(penalty(pair.weight.max(0.001) as f64).max(0.1));
+            }
+        }
+    }
+    None
 }
 
 /// 单字母替换的代价,证据从强到弱:
@@ -269,13 +301,8 @@ fn penalty(p: f64) -> f32 {
 /// 独占「最便宜读法」的位置,「你好」才进得了候选——邻键模型没有时它与
 /// `na`/`ne`/`nu` 同价 2.0,谁上全看 `HashMap` 迭代顺序。
 fn substitution_penalty(a: char, b: char) -> f32 {
-    for pair in crate::corrector::COMMON_CONFUSION_PAIRS {
-        let (mut x, mut y) = (pair.a.chars(), pair.b.chars());
-        if let (Some(x), Some(y), None, None) = (x.next(), y.next(), x.next(), y.next()) {
-            if (x, y) == (a, b) || (x, y) == (b, a) {
-                return penalty(pair.weight.max(0.001) as f64).max(0.1);
-            }
-        }
+    if let Some(p) = confusion_pair_penalty(a, b) {
+        return p;
     }
     if is_qwerty_neighbor(a, b) {
         return penalty(TYPO_P_ADJACENT);
@@ -302,13 +329,27 @@ pub(crate) fn gap_cost(len: usize) -> f32 {
 }
 
 /// 删除一个字母的代价:与插入同源(`zh`→`z`、`ang`→`an` 都是方言型)。
-fn deletion_penalty(deleted: char, prev: Option<char>) -> f32 {
+/// `pub(crate)`:简拼纠错的「删一个字母」变体用同一口径(含方言型判定)。
+pub(crate) fn deletion_penalty(deleted: char, prev: Option<char>) -> f32 {
     let dialect = matches!((prev, deleted), (Some('z' | 'c' | 's'), 'h') | (Some('n'), 'g'));
     if dialect {
         penalty(TYPO_P_DIALECT)
     } else {
         penalty(TYPO_P_DELETE_DEFAULT)
     }
+}
+
+/// 简拼纠错(`engine/abbrev_correct.rs`)变体代价的**共用出口**:概率表只有
+/// 这一份,变体生成侧按「混淆对 > 同行邻键 > 同列邻键 > 无关替换」取值,
+/// 换位/删除分别用 `TYPO_P_TRANSPOSE` 与上面的 `deletion_penalty`。
+pub(crate) fn typo_penalty_adjacent() -> f32 {
+    penalty(TYPO_P_ADJACENT)
+}
+pub(crate) fn typo_penalty_transpose() -> f32 {
+    penalty(TYPO_P_TRANSPOSE)
+}
+pub(crate) fn typo_penalty_default_sub() -> f32 {
+    penalty(TYPO_P_SUBST_DEFAULT)
 }
 
 /// 启动期预热:把懒构建的纠错变体表**先建好**。

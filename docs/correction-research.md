@@ -553,3 +553,74 @@ cebc2fb 里残留过一个 `typo_dump_tmp` 模块，本批起移除，真实测�
 `engine/tests/typo_window.rs` 5 条钉住上面这张实测表）；clippy `-D warnings` 干净。
 注意：`cargo test --release` 会因 `mixed_rejects_nested_mixed` 依赖 `debug_assert`
 而假红，测试要按默认（debug）跑。
+
+### 7.4 阶段 B：简拼纠错（2026-10-04，本节是唯一权威实施记录）
+
+**落点**：新文件 `engine/abbrev_correct.rs`（变体生成/两级披露/呈现，298 行）；
+`engine/mod.rs` 新常量组；`dict/abbrev.rs` 两个证据探针
+（`MmapDict::abbrev_entry_evidence` 词条级、`MmapDict::abbrev_chain_evidence` 链级，
+共用新的 `AbbrevIndex::exact_key_best_freq` 精确 key 二分；折叠校验
+`syllables_carry_digraphs` 从 `dict/lookup.rs` 移入）；`segmenter.rs` 开放噪声信道
+代价口径（`confusion_pair_penalty`/`qwerty_row_neighbors`/`typo_penalty_*`，概率表
+仍只有一份）；`engine/lookup.rs` needs_abbrev 尾部一行冷调用
+`try_abbrev_correction`。
+
+**机制（与 §6.4 设计的对应与偏差）**：
+- 触发闸①纯缩写复用 `pure_abbrev_input`、②`MIN_ABBREV_CORRECTION_INPUT_LEN=3`、
+  ③原串弱＝整串候选 freq>FILLER 一个都没有（拼装 freq=0/填充档/回声都不算）；
+- 变体 1 编辑 = 换位(1.523) → 删字母(2.398,方言型 1.301) → 同行替换(1.301) →
+  **同列替换(1.70,新档,常量 `TYPO_P_ADJACENT_COL=0.02`)**，生成序即代价序，
+  去重排除原串，上限 `MAX_ABBREV_CORRECTION_VARIANTS=20`（7 字母串的 `n→m`
+  排第 17，恰好保住）；
+- 一级披露：逐变体副索引精确二分。词条级＝变体本身是真实词条的首字母串
+  （freq>FILLER 才算证据）；链级＝真实词条的首字母串是变体的 ≥4 真前缀
+  （`ABBREV_CORRECTION_CHAIN_PREFIX=4`：≤3 字母串在 186 万词条下处处命中，
+  无判别力），取**最深**命中，覆盖率＝前缀长/变体长；
+- 二级披露：词条级升级 ≤2（零建格成本，直接 `lookup_abbrev` 取条目）；
+  链级升级 **≤1**（每条一次简拼格构建，只解证据最强的；实测第二条链级变体
+  建格 4.5ms 而其读法在配额竞争中全部落选）——与 §6.4 写的「≤2」不同，
+  是实测收敛；
+- 呈现：纠正候选 covered:=原串长（删除型变体短 1 字母，多打的字母由编辑代价
+  吸收）、只取整串读法、编辑代价扣在词条口径重算之后的分数上（同域相加）、
+  层序照走 Abbrev（真实词条经 effective_layer 收编竞争）、配额
+  `ABBREV_CORRECTION_QUOTA=2`（用户裁决③）、分数闸
+  `ABBREV_CORRECTION_MARGIN=1.0`（纠正最佳领先原串最佳一个数量级；
+  原串弱是闸③已判事实，余量拦「垃圾纠正险胜垃圾原串」）。
+
+**验收实测（真实词库+万象 gram）**：
+- 正例：`wnjtqbj`（m↔n 同行邻键）→我们今天去北京 **#1**（原：五年级提前布局）；
+  `zgrr`（多打 r）→中国人 **#1**（词条级 45 万词频）；
+- 负例（原串强读法，闸③挡住，首位逐条不变）：`wsm`→为什么、`zgr`→中国人、
+  `nh`→女孩、`wrsm`→我认识吗(freq=205,刚过填充档线)、`zgrm`→中国人民、
+  `gshj`→工商局(126360,sh 双字母声母字面读法)、`dhj`→电话机、`zrg`→责任感；
+- **验收正例的勘误**：§6.4 曾把 `gshj`→公司简介、`dhj`→打印机、`zrg`→中国人、
+  `zgrm`→中国人 列为正例——probe 实测这四条的原串本身就有强字面读法
+  （工商局/打火机/责任感/中国人民），保守裁决下**本来就不该纠**，这也是大厂
+  同款行为（不跟强字面读法抢）。它们转为负例钉进测试；正例换成实测可触发的
+  `wnjtqbj`（链级替换）与 `zgrr`（词条级多打）。
+
+**回归**：44 块冻结对拍 vs 阶段 A 末态**零漂移**；20 条纯缩写清单首位 vs HEAD
+**逐条一致**；四语料 MRR 与 HEAD 逐字节同值（1.000/0.860/0.877/0.841——
+0.860/0.841 是 HEAD 现值，旧的 0.929/0.728 参考线已过时）；335 tests 全绿
+（新增 `engine/tests/abbrev_correct.rs` 5 条）；clippy -D warnings 干净。
+
+**性能**：触发闸挡住时纠错路径零执行；触发时的成本 = 证据探针（20 次
+O(log n) 二分，微秒级）+ ≤1 次纠正格构建（实测 1.45~1.69ms）+ 链解码。
+`wnjtqbj` 端到端 ≈5.2ms。**一个已查明的布局税**：纠错代码进入二进制后，
+纯缩写输入（闸③挡住、纠错一次都不执行）端到端仍 +0.2~0.3ms（zgr 2.8→3.0，
+zhongg 4.0→4.4）——bisect 铁证：探针函数体换成空 stub 依旧慢、执行路径逐字节
+相同（对拍零漂移），是调用图变化引发 LLVM 布局/内联决策改变的确定性代码生成
+效应，不是算法开销；`inline(never)`+`#[cold]` 都挡不住，12ms 线内余量巨大，
+接受并记录（后续若要消除：profile-guided 或 codegen-units 调参，另立卡）。
+
+**已知局限**（漏纠不是误纠）：删除型链纠正的平局集——原串多打一个字母、目标
+读法是多词链（`wmjtqbjj`→`wmjtqbj`=我们今天去北京）时，各删除变体共享同一条
+首词证据（词频与覆盖率全同），先验上无法判别谁对；实测即便把正确变体升级进
+解码，跨变体比较时「词数更少的垃圾链」（逐词罚分更轻）仍可能压过真读法。
+后果是呈现次优读法（我们今天不仅仅 #1），不产生错误纠正（分数闸守门）。
+若将来要补：平局集预算减半筛查解码、按分选优后再全量解码——需给
+`build_abbrev_lattice` 加预算参数，另立一步。
+
+**附带发现（不在本阶段修）**：长弱缩写串（8 字母 `wmjtqbjj`、4 字母 `sgjj` 类）
+在 HEAD 的建简拼格就要 11~13ms（mixed DFS 步数预算耗尽 + 全预算链枚举），
+本来就贴/超 12ms 线——与本阶段无关的既有病理，建议另立性能卡。

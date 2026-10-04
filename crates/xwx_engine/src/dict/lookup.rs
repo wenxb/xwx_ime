@@ -4,6 +4,7 @@
 use super::mixed::{is_full_pinyin, partial_tail_readings, segment_input, MixedDfs, EMPTY_FIRST,
                    MAX_MIXED_COLLECT, MAX_MIXED_DFS_STEPS, MAX_PREFIX_READINGS,
                    MIN_PARTIAL_TAIL};
+use super::abbrev::syllables_carry_digraphs;
 use super::{Candidate, DictError, KeyPrefix, MmapDict, MAX_LOOKUP_RESULTS};
 
 /// 每条「停在残缺音节上」的前缀读法最多留几个候选。
@@ -20,24 +21,6 @@ const PREFIX_READING_QUOTA: usize = 8;
 /// 预算,前者是「覆盖不了时补前缀候选」的预算。它是**共享**的(不是每条
 /// 读法各一份),否则 96 条读法 × 20000 步会把兜底分支拖垮。
 const MAX_PREFIX_COLLECT_STEPS: usize = 8_000;
-
-/// 折叠读法的音节校验：第 `idx` 个音节必须真的以「声母 + h」开头。
-/// 音节数不足同样算不匹配（该读法需要的音节根本不存在）。
-/// 折叠点升序，单趟扫描；注意 `split().nth()` 是**相对**前进，不能连用
-/// （实测 `zhzhzhzh` 的 4 个折叠点因此全部错位、整池误杀）。
-fn syllables_carry_digraphs(pinyin: &str, digraphs: &[(usize, u8)]) -> bool {
-    let mut seen = 0usize; // 已扫过的音节数
-    for (i, s) in pinyin.split(' ').enumerate() {
-        seen = i + 1;
-        if let Some(&(_, initial)) = digraphs.iter().find(|&&(idx, _)| idx == i) {
-            let b = s.as_bytes();
-            if b.first() != Some(&initial) || b.get(1) != Some(&b'h') {
-                return false;
-            }
-        }
-    }
-    digraphs.last().is_none_or(|&(last, _)| seen > last)
-}
 
 impl MmapDict {
     /// 主索引里以 `prefix` 为前缀的 key 存在性（见 [`Dictionary::key_prefix_state`]）。

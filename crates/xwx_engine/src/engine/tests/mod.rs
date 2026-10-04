@@ -55,6 +55,7 @@ mod beam_lm;
 mod fuzzy;
 mod abbrev;
 mod abbrev_quota;
+mod abbrev_correct;
 mod personalization;
 mod completion;
 mod prewarm;
