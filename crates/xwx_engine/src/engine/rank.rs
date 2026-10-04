@@ -140,9 +140,9 @@ pub(super) const COVERAGE_PENALTY: f32 = 0.2;
 /// **同一个 `u_min` 桶内的层序语义**（排序第二键的唯一出处）。
 ///
 /// 桶内合法次序是 `Exact` → `Fuzzy` → `Abbrev`（枚举声明序）。`Exact` 档还
-/// **收编**一类简拼候选：`Abbrev` 且 `freq > 0` 且覆盖整串，且输入属
-/// 「纯缩写 / 开头即缩写」两类（`entry_tier_exception`，判据见
-/// [`pure_abbrev_input`] / [`leading_abbrev_input`]）——这类读法的证据是
+/// **收编**一类简拼候选：`Abbrev` 且带**真实证据**（见 [`entry_has_evidence`]）
+/// 且覆盖整串，且输入属「纯缩写 / 开头即缩写」两类（`entry_tier_exception`，
+/// 判据见 [`pure_abbrev_input`] / [`leading_abbrev_input`]）——这类读法的证据是
 /// **词条级**的（整串命中词库条目），与「上千条前缀简拼候选」的洪泛不是
 /// 一类，故与真精确候选同档按分数竞争；防洪泛仍靠 `ABBREV_QUOTA`（配额，
 /// 不是排序）。
@@ -160,13 +160,30 @@ pub(super) fn effective_layer(
 ) -> SpellingKind {
     if entry_tier_exception
         && spelling == SpellingKind::Abbrev
-        && freq > 0
+        && entry_has_evidence(freq)
         && covered >= inp_len
     {
         SpellingKind::Exact
     } else {
         spelling
     }
+}
+
+/// 词条是否带**真实证据**：在词库里是**真实条目**，而不是填充档、也不是
+/// 分数驱动的拼装候选。
+///
+/// - `freq == 0` 是「分数驱动」的标记（多词拼装候选与用户造词）——它们不是
+///   词条级证据，收编进 `Exact` 会立刻压住 `Fuzzy` 层的纠错读法。实测
+///   `xaing`：拼装候选「喜爱那个」`freq=0`/分 -31.4 一旦被收编就抢在
+///   「想」(`Fuzzy`，分 -16.2)之前，首位从「想」掉到第 5；
+/// - `1..=FILLER_FREQ_TIER` 是词库里没有真实依据的填充条目（约 70% 的词条），
+///   与 `lookup.rs` 的填充档判据**同一式**。
+///
+/// 这里原先只判 `freq > 0`，于是 `freq = 100` 的填充档词条也享受「词条级
+/// 证据」的待遇：实测 `xain` 的前三名是「喜爱你/心爱你/想爱你」（全是填充档），
+/// 「先」排第 4。
+fn entry_has_evidence(freq: u64) -> bool {
+    freq > FILLER_FREQ_TIER
 }
 
 /// **输入类别判据**「纯缩写」：每个字母都能起一个音节
