@@ -3,7 +3,8 @@
 
 use super::*;
 use crate::engine::rank::{
-    effective_layer, leading_abbrev_input, pure_abbrev_input, unreachable_tail,
+    effective_layer, leading_abbrev_input, pure_abbrev_input, tail_only, unexplained_letters,
+    unreachable_tail,
 };
 
 /// 测试内的排序首键(与 [`sort_key`] 的 bucket 字段同式):
@@ -18,6 +19,10 @@ fn sort_bucket(inp: &str, c: &Candidate) -> usize {
     let cp_len = c.pinyin.chars().filter(|ch| *ch != ' ').count();
     if cp_len > inp.len() {
         0 // 补全词必以输入开头,u=0,桶恒 0
+    } else if tail_only(inp, c) && inp.len() - cp_len >= MAX_TYPO_GAP {
+        // 「吃掉了整段前缀」的读法(`zmgai` → 该):桶 = 被跳过的字母数。
+        // 判据与生产**共用** `tail_only` 与 `MAX_TYPO_GAP`,不另写一份。
+        unexplained_letters(inp, c)
     } else {
         unreachable_tail(inp, None)[cp_len]
     }
@@ -55,6 +60,7 @@ mod beam_lm;
 mod fuzzy;
 mod abbrev;
 mod abbrev_quota;
+mod indexed_mixed;
 mod abbrev_correct;
 mod personalization;
 mod completion;

@@ -110,6 +110,10 @@ impl ImeEngine {
         // 走到串尾的边链」)——容错那条路早在第 ③ 期就用后向 DP 这么做了,
         // 这次把同一套理由用在精确路径的是非题上。
         let reachable = Self::lattice_reachable(&lattice, pinyin.len());
+        // **逐字节解释**是另一个问题（见 `lattice_exactly_reachable`）：末尾半音节
+        // 补全让 `defe`/`nibe`/`tin` 这类「全拼没打完」的输入也算可达，于是
+        // 索引驱动的混合读法被整类跳过——而它们逐字节的完整读法正是混合缩写。
+        let exactly_reachable = Self::lattice_exactly_reachable(&lattice, pinyin.len());
         // **容错解码的门槛(结构性)**:精确路径解不出整串,或整串根本
         // 切不开。打对的输入两条都不成立 ⇒ 一次都不进容错分支,零开销、
         // 零新边——这是「精确路径逐字节不退化」的结构性保证,不靠测量。
@@ -154,6 +158,12 @@ impl ImeEngine {
         // 后面的简拼格就永远不建（实测 wsm/zgr/xxn/dbq/mgx 五条正因此拿不到
         // 词级候选；关掉旧通道时它们只剩输入回声，也是同一个原因）。
         let exact_covers_whole = ranked.iter().any(|c| c.covered >= pinyin.len());
+        // 更严的一档：候选是否**把整串逐字母拼出来**了（`de fen` 覆盖 4 个字母的
+        // `defe` 不算）。上面那条是「消费了整串」，这条是「逐字节解释了整串」。
+        let spells_whole = ranked.iter().any(|c| {
+            c.covered >= pinyin.len()
+                && c.pinyin.chars().filter(|ch| *ch != ' ').count() == c.covered
+        });
         // **降级范围**（`DEMOTE_OLD_ABBREV_CHANNEL` 的唯一作用域判据，只依赖
         // `reachable`/`segmenter`/`has_abbrev`，**不碰 `ranked`**）：纯缩写 ∪
         // 开头即缩写。曾经排除 `zh`/`ch`/`sh` 开头（⑤⑩③：格子对 `shh`/`zhh`
@@ -171,6 +181,35 @@ impl ImeEngine {
             && !reachable
             && (super::rank::pure_abbrev_input(pinyin, true)
                 || super::rank::leading_abbrev_input(&self.segmenter, pinyin, true));
+        // **第四类门槛：索引证据**（见 `indexed_mixed`）。前三类都要求「每个
+        // 字母都能起一个音节」，全拼部分含 `i`/`u`/`v` 的混合形态
+        // （`meixdao`/`julbu`/`yougbmen`）整类不在其中——不问「像不像简拼」，
+        // 直接问索引：整串按「完整音节 / 缩写」切分后命中真实词条就是证据。
+        // 在 `exact_covers_whole` 快照**之后**并入，所以它不改变「简拼格
+        // 建不建」的判据（那是给词链解码用的另一件事）。
+        //
+        // **门槛比 `!reachable` 宽一档**：末尾半音节补全让
+        // `defe`(→得分儿)/`nibe`(→尼泊尔)/`tin`(→体内) 这类「全拼没打完」的
+        // 输入也算「可达」，于是它们的混合读法被整类跳过——而它们逐字节的
+        // 完整读法正是混合缩写。改用「逐字节解释不了」（`!exactly_reachable`
+        // 且没有整串逐字母候选）之后这些形态恢复（`defe` 的「得分儿」#4、
+        // `zaitin` 的「在体内」#2）。
+        //
+        // 代价是**每次非逐字节解释的击键都要走一遍索引遍历**。受控 A/B
+        // （同一台机、交错跑窄门/宽门各两轮、69 个键位 worst-of-15）实测：
+        // 逐键总和 1383/1389ms（窄） vs 1458/1414ms（宽）⇒ **平均 +0.03~0.07ms
+        // 每次查询**，最差键（`zh`，11.7ms）不受影响。注意别拿两次**分开跑**的
+        // 全量单线程评测比这一档：那支仪器的 p95 在 load 8~15 下有 ±1.5ms 的
+        // 漂移，足以淹没这个量级（本轮踩过一次，见修复记录四·补一）。
+        // 简拼格那条路会供给**同一批**整串读法（`build_abbrev_lattice` 的
+        // 整串条目边走的是同一份索引遍历），纯缩写 / 开头即缩写两类不在这里
+        // 再算一遍：预算敏感的正是简拼场景。
+        let lattice_supplies_mixed = !reachable
+            && (super::rank::pure_abbrev_input(pinyin, true)
+                || super::rank::leading_abbrev_input(&self.segmenter, pinyin, true));
+        if !exactly_reachable && !spells_whole && !lattice_supplies_mixed {
+            super::indexed_mixed::merge_indexed_mixed(self, pinyin, ctx, &mut ranked)?;
+        }
         // **旧通道已删（第 8 步，⑤⑩⑯）**：这里曾是「简拼层合并 + 配额 +
         // 终排截断」。合并没了，但可达输入的终排/截断原来由 merge_layer
         // 顺带承担，必须就地补回（needs_abbrev 输入的终排仍在下面
@@ -188,9 +227,17 @@ impl ImeEngine {
         // 两者结构上无法区分,用**分数**区分:容错读法要能打得过现有答案才
         // 值得出现(`shenem`:什么 -13.7 打得过神而明之 -15.3 → 放进来;
         // `nih`:容错垃圾普遍带编辑惩罚、打不过「你好」→ 整批丢弃)。
+        // **「覆盖整串」的证据门槛**：只有带真实词频依据的整串读法才算数。
+        // 填充档（freq ≤ `FILLER_FREQ_TIER`）的索引读法可以进候选表，但**不能
+        // 否决容错层**——实测 `zhuagn` 的填充档混合读法（转化功能，freq=100）
+        // 一旦计入这里，容错层的「装」被整批挡掉（换位错拼只能由容错层给出）。
+        // 理由与落点见 `indexed_mixed.rs` 的同一条注释。
         let covering_best = ranked
             .iter()
-            .filter(|c| c.covered >= pinyin.len())
+            .filter(|c| {
+                c.covered >= pinyin.len()
+                    && !(c.spelling == SpellingKind::Abbrev && c.freq <= FILLER_FREQ_TIER)
+            })
             .map(|c| c.score)
             .fold(f32::NEG_INFINITY, f32::max);
         // 容错弧的定位:精确格上「走不动」的位置(见 `first_stalls`)。

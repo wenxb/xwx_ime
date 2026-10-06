@@ -22,6 +22,7 @@
 mod abbrev;
 mod lookup;
 mod mixed;
+mod mixed_walk;
 mod mmap;
 mod sqlite;
 mod syllable_graph;

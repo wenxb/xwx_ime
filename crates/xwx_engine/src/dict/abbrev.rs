@@ -326,6 +326,94 @@ impl AbbrevIndex {
         }
         Ok(best)
     }
+
+    /// 键总数（索引遍历的初始区间上界）。
+    pub(super) fn key_count(&self) -> usize {
+        self.key_count
+    }
+
+    /// `[lo, hi)` 内第一条键 ≥ `prefix` 的记录下标（区间不越界）。
+    pub(super) fn lower_bound_in(
+        &self,
+        prefix: &[u8],
+        lo: usize,
+        hi: usize,
+    ) -> Result<usize, DictError> {
+        let (mut lo, mut hi) = (lo.min(self.key_count), hi.min(self.key_count));
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let rec = self.record(mid)?;
+            let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            if s < prefix {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(lo)
+    }
+
+    /// 第 `i` 条记录的键是否以 `prefix` 开头（区间收窄后的存活性判据）。
+    pub(super) fn key_starts_with(&self, i: usize, prefix: &[u8]) -> Result<bool, DictError> {
+        if i >= self.key_count {
+            return Ok(false);
+        }
+        let rec = self.record(i)?;
+        Ok(self
+            .slice(self.strings_off + rec.str_off, rec.str_len)?
+            .starts_with(prefix))
+    }
+
+    /// 收集**恰好等于**长度为 `key_len` 的那条键（`[lo, hi)` 内）的全部词条，
+    /// 最多 `limit` 条。
+    ///
+    /// 键按字节序排：同一个前缀下「等于前缀」的那条键必然排在更长的键之前，
+    /// 故遇到更长的键即可收工——这条也是「一字一字母」（每个音节都打了字母）
+    /// 判据的落点：键长度 == 音节数 == 片段数。
+    pub(super) fn exact_entries(
+        &self,
+        lo: usize,
+        hi: usize,
+        key_len: usize,
+        limit: usize,
+    ) -> Result<Vec<(String, String, u64)>, DictError> {
+        let mut out = Vec::new();
+        for i in lo..hi.min(self.key_count) {
+            if out.len() >= limit {
+                break;
+            }
+            let rec = self.record(i)?;
+            let key = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            if key.len() > key_len {
+                break;
+            }
+            if key.len() < key_len {
+                continue;
+            }
+            let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
+            let mut pos = 0usize;
+            while pos < block.len() && out.len() < limit {
+                let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
+                let word_bytes = block
+                    .get(pos + 1..pos + 1 + wl)
+                    .ok_or(DictError::Corrupt("词块越界"))?;
+                let pl = *block
+                    .get(pos + 1 + wl)
+                    .ok_or(DictError::Corrupt("词块越界"))? as usize;
+                let py_bytes = block
+                    .get(pos + 2 + wl..pos + 2 + wl + pl)
+                    .ok_or(DictError::Corrupt("词块越界"))?;
+                let freq = read_u32(block, pos + 2 + wl + pl)? as u64;
+                let word = std::str::from_utf8(word_bytes)
+                    .map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
+                let pinyin = std::str::from_utf8(py_bytes)
+                    .map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?;
+                out.push((word.to_owned(), pinyin.to_owned(), freq));
+                pos += 2 + wl + pl + 4;
+            }
+        }
+        Ok(out)
+    }
 }
 
 impl MmapDict {

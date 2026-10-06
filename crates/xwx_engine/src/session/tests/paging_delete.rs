@@ -464,3 +464,67 @@ fn cursor_move_shares_the_candidate_table_instead_of_cloning_it() {
         "候选表变了就不能继续共享旧的 Arc"
     );
 }
+
+/// **深翻页**：窗口 100 → 512 之后，二字简拼这类池子大的输入有几十页，
+/// 翻到深处必须仍然「表 = 第 page 页的切片、页内 cursor 从 0 起」，且翻过
+/// 末页要停住（不越界、不空表）。
+///
+/// 失败见证（每条都指向一种真实写法）：
+/// - 翻页只发「前一页之后的 9 条」而不按 `page * page_size` 取切片 →
+///   深页的切片与全局下标错位 → 第一处断言红；
+/// - 末页判断漏判 → 越界空表 → 末页断言红；
+/// - 页内下标忘了重置 → 页内 cursor 非 0 → 页内 cursor 断言红。
+#[test]
+fn deep_paging_stays_in_step_with_the_table() {
+    use std::path::Path;
+    let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
+    let abbrev_path = dict_path.with_file_name("abbrev.bin");
+    if !dict_path.is_file() || !abbrev_path.is_file() {
+        return; // 环境缺文件:跳过(与其它 real_dict_* 同款)
+    }
+    let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
+    engine.dict = engine.dict.with_abbrev(&abbrev_path);
+    let mut s = InputSession::new(Arc::new(engine));
+    for c in "zh".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    let all: Vec<String> = s.candidates.iter().map(|c| c.word.clone()).collect();
+    let page_size = s.page_size;
+    assert!(
+        all.len() > 5 * page_size,
+        "zh 应有多页候选(实际 {} 条 / 每页 {page_size})",
+        all.len()
+    );
+    let last_page = (all.len() - 1) / page_size;
+
+    // 逐页翻到第 20 页（不足则到末页），每一页都断「切片 + 页内 cursor」
+    let target = last_page.min(20);
+    for page in 1..=target {
+        let SessionOutput::Updated(u) = s.handle(InputEvent::PageDown).expect("不应失败") else {
+            panic!("PageDown 应返回 Updated");
+        };
+        assert_eq!(u.page, page, "第 {page} 次翻页");
+        assert_eq!(u.cursor, u.page_start(), "翻页后高亮应落在本页第一条");
+        assert_eq!(
+            u.page_candidates().iter().map(|c| c.word.clone()).collect::<Vec<_>>(),
+            all[page * page_size..((page + 1) * page_size).min(all.len())].to_vec(),
+            "第 {page} 页必须是全局切片 [{}, {})",
+            page * page_size,
+            (page + 1) * page_size
+        );
+    }
+
+    // 一路翻到末页，再翻一次:停在末页，不越界、不空表
+    for _ in target..last_page {
+        s.handle(InputEvent::PageDown).expect("不应失败");
+    }
+    let SessionOutput::Updated(u) = s.handle(InputEvent::PageDown).expect("不应失败") else {
+        panic!("PageDown 应返回 Updated");
+    };
+    assert_eq!(u.page, last_page, "末页再翻页应停住");
+    assert_eq!(
+        u.page_candidates().iter().map(|c| c.word.clone()).collect::<Vec<_>>(),
+        all[last_page * page_size..].to_vec(),
+        "末页切片"
+    );
+}

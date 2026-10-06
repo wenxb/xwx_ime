@@ -101,25 +101,14 @@ fn abbrev_layer_survives_full_exact_layer() {
         );
     }
 
-    // 装满组:候选总数达到 MAX_CANDIDATES。简拼层条数 = max(ABBREV_QUOTA,
-    // 100 − 非简拼层条数)——配额是保底不是封顶。只断结构:
-    // 简拼层 ≥ ABBREV_QUOTA 且 (u_min 桶, 层序) 排序键整体非降
-    // (三段式:原断言「(未解释字母数, 层序) 整体非降」——裸 u 当
-    // 首键时的排序正确性;改为「(u_min 桶, 层序) 整体非降」——首键
-    // 换成 u_min 桶:0 桶的简拼目标词仍排在段内精确字(u_min>0 桶)
-    // 之前,但「拼音凑巧等长」的生僻组合词不再凭裸 u=0 浮上第一页;
-    // 同桶内的层序保证由二元组字典序断言原样钉住,不是放松)。
-    //
-    // **用例从 `zhongguor`/`nih`/`renm` 换成 `xian`/`ky`**
-    // (2026-10-02 二):「每个字都得有字母」收严后,那三个输入召不满
-    // 100 条了(实测 `zhongguor` 24、`nih` 43),而它们当时能装满,
-    // 靠的正是被规则排除掉的长词(中国人民/你好吗/人民医院…)。
-    // 配额语义没动,换两个仍然装满的输入来钉:「`xian`」精确层占满
-    // 100 条、简拼层仍保底 5 条;「`ky`」精确层为空、简拼层填满 100 条
-    // (配额是保底不是封顶的另一面)。
+    // **装满组（2026-10-05 换输入）**：窗口 100 → 512 后，`xian`（实测 186 条）
+    // 与 `ky`（226 条）不再装满——「装满时简拼层仍保底」这一面改用池子远大于
+    // 窗口的 `zh`/`sh` 见证（实测各 512 条，其中简拼层 294/336 条）。
+    // 只断结构：简拼层 ≥ ABBREV_QUOTA 且 (u_min 桶, 层序) 排序键整体非降
+    // （原断言口径不变，见下面 `assert_bucket_layer_order`）。
     let has_abbrev = engine.dict.has_abbrev();
     let seg = Segmenter::new();
-    for input in ["xian", "ky"] {
+    for input in ["zh", "sh"] {
         let cands = engine
             .lookup_candidates(input, &LmContext::empty())
             .expect("查询失败");
@@ -128,25 +117,28 @@ fn abbrev_layer_survives_full_exact_layer() {
             .iter()
             .filter(|c| c.spelling == SpellingKind::Abbrev)
             .count();
-        if input == "xian" {
-            // **⑤⑩⑯ 裁决(2026-10-03,第 8 步删通道)**:可达输入的跨界读法
-            // (xian→xia+nian 下年度、e+nuo 婀娜多姿 一族)随旧通道删除——
-            // 可达输入走精确格,结构上没有简拼层;钉住 0 防止配额机制
-            // 以任何形式回潮。
-            assert_eq!(
-                n_abbrev, 0,
-                "可达输入 xian 不该再有简拼层(跨界读法已按 ⑤⑩⑯ 删除)"
-            );
-        } else {
-            // ky:精确层为空、简拼层(格子链)填满 100——「保底不是封顶」
-            // 在格子世界的对应面。
-            assert!(
-                n_abbrev >= ABBREV_QUOTA,
-                "{input} 简拼层应至少保底 {ABBREV_QUOTA} 条(实际 {n_abbrev})"
-            );
-        }
+        assert!(
+            n_abbrev >= ABBREV_QUOTA,
+            "{input} 简拼层应至少保底 {ABBREV_QUOTA} 条(实际 {n_abbrev})"
+        );
         assert_bucket_layer_order(input, &cands, &seg, has_abbrev);
     }
+    // **⑤⑩⑯ 裁决(2026-10-03,第 8 步删通道)**:可达输入的跨界读法
+    // (xian→xia+nian 下年度、e+nuo 婀娜多姿 一族)随旧通道删除——
+    // 可达输入走精确格,结构上没有简拼层;窗口变大、索引驱动的混合读法
+    // 并入之后这一条照样钉住 0,不许以任何形式回潮。
+    let xian = engine
+        .lookup_candidates("xian", &LmContext::empty())
+        .expect("查询失败");
+    assert_eq!(
+        xian
+            .iter()
+            .filter(|c| c.spelling == SpellingKind::Abbrev)
+            .count(),
+        0,
+        "可达输入 xian 不该出现简拼层(跨界读法已按 ⑤⑩⑯ 删除)"
+    );
+    assert_bucket_layer_order("xian", &xian, &seg, has_abbrev);
 }
 
 /// 残余字母联想交给简拼层后的可见性(真实词库 + 万象 gram):

@@ -32,6 +32,10 @@ PY_RE = re.compile(r"^[a-zv ]+$")
 UML = str.maketrans({"ü": "v", "ǖ": "v", "ǘ": "v", "ǚ": "v", "ǜ": "v"})
 
 
+#: 与引擎侧 `FILLER_FREQ_TIER` 同值：这一档的词条被当作「没有真实词频依据」。
+FILLER_FREQ_TIER = 100
+
+
 def parse_dict_lines(path: str):
     """逐行解析 .dict.yaml：跳过 YAML 头（---/...）、# 注释、无 tab 的行。
 
@@ -143,6 +147,15 @@ def main():
     auto_filled = 0
     omitted = 0
     rows = []
+    # **每个来源的词频分布**（2026-10-05 加）：词表来源里有「只给词、不给权重」
+    # 的一类（rime-ice 的 tencent 表就是：98 万条**权重全 ≤100**，且不是按词频
+    # 排序——用 jieba 的独立词频对拍，Spearman 只有 0.149，它排在最前面的词在
+    # 外部词频里是生僻词）。这类条目进了词库就是**同频堆**：排序时无区分度，
+    # 只能靠上文 LM 与用户模型拉开，二字简拼这类池子大的输入上就表现为
+    # 「目标词沉底」（实测未召回率 11.58% vs 有真实词频的 1.15%，见
+    # docs/typing_eval_fixes.md 四·补四）。
+    # 构建期把这件事打出来，别等评测才发现。
+    src_stats: dict[str, list[int]] = {}
     # 单字 → 读音表：从单字条建立。8105 字表一个字可能有多个读音行
     # （每行带权重），自动注音应取**权重最高**（最常用）的读音：
     # 如 召 shao(1)/zhao(128448) → zhao。权重相同时保留先出现者。
@@ -165,6 +178,9 @@ def main():
                 pinyin = " ".join(syllables)
                 auto_filled += 1
             rows.append((pinyin, word, freq))
+            st = src_stats.setdefault(os.path.basename(path), [0, 0])
+            st[0] += 1
+            st[1] += freq <= FILLER_FREQ_TIER
             if len(rows) >= 100_000:
                 flush(conn, rows)
                 rows = []
@@ -176,6 +192,27 @@ def main():
         f"解析 {seen} 条（自动注音 {auto_filled} 条，缺字跳过 {omitted} 条），"
         f"过滤 {seen - omitted - n} 条重复/无效，入库 {n} 条 → {out}"
     )
+
+    # **同频堆告警**：某个来源超过一半条目落在填充档（freq ≤ 100）、且它自己
+    # 就有 5 万条以上时，词频这一路对这批词是没有信息的（实测 rime-ice 里
+    # `tencent` 98 万条 100%、`ext` 33 万条 100%，合计占词库 ~70%）。
+    #
+    # **补词频这条路已量过，别重复试**：jieba 词表覆盖填充档 5.0%（补进去实测
+    # 只多召回 0.12pp）、wordfreq 2.6%、THUOCL+DomainWordsDict（181 万词并集）
+    # 7.7%——填充档主体是村级地名/小区/街道这类超本地专名，公开词频资源都不覆盖。
+    # 详见 docs/typing_eval_fixes.md 四·补四。
+    print("  各来源词频分布（填充档 = freq ≤ %d）：" % FILLER_FREQ_TIER)
+    noisy: list[str] = []
+    for name, (cnt, low) in sorted(src_stats.items(), key=lambda kv: -kv[1][0]):
+        pct = low / cnt if cnt else 0
+        print(f"    {name:28} {cnt:9} 条，填充档 {pct:6.1%}")
+        if pct >= 0.5 and cnt >= 50_000:
+            noisy.append(f"{name}（{cnt} 条，{pct:.0%} 无词频）")
+    if noisy:
+        print(
+            "  ⚠ 以下来源几乎不携带词频信息，其条目在候选排序里没有区分度，"
+            "只能靠上文 LM 与用户模型：\n      " + "、".join(noisy)
+        )
 
     # 验证
     for py, expect in (("ni hao", "你好"), ("zhongguo", None)):

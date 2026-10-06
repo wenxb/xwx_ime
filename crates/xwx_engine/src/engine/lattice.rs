@@ -250,6 +250,37 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
         reach.first().copied().unwrap_or(false)
     }
 
+    /// **逐字节解释**的可达性：与 [`Self::lattice_reachable`] 同一套后向 DP，
+    /// 但只认「拼音字母数 == 它覆盖的输入区间长度」的边。
+    ///
+    /// 与「可达」是两个问题。末尾半音节补全会让 `defe`（→得分，拼音 `de fen`
+    /// 5 个字母覆盖输入 4 个字母）、`nibe`、`tin` 这类输入在
+    /// `lattice_reachable` 意义上**可达**，于是简拼/索引通道整条被跳过——
+    /// 而它们**逐字节**的完整读法恰恰是混合缩写（`d`+`e`+`f`+`e` → 得分儿）。
+    /// 打对的全拼输入（`xian`/`zhongguo`）两条判据同为真，行为不变。
+    pub(super) fn lattice_exactly_reachable(lattice: &[Vec<LatticeEdge>], len: usize) -> bool {
+        let mut reach = vec![false; len + 1];
+        if let Some(slot) = reach.get_mut(len) {
+            *slot = true;
+        }
+        for pos in (0..len).rev() {
+            let Some(edges) = lattice.get(pos) else {
+                continue;
+            };
+            reach[pos] = edges.iter().any(|e| {
+                Self::edge_spells_span(e, pos) && reach.get(e.end).copied().unwrap_or(false)
+            });
+        }
+        reach.first().copied().unwrap_or(false)
+    }
+
+    /// 边是否**逐字节**解释了它覆盖的区间：拼音字母数 == 区间长度。
+    /// （空格是音节分隔，不计入；`de fen` = 5 个字母覆盖 4 个字母的区间 ⇒ 假。）
+    pub(super) fn edge_spells_span(e: &LatticeEdge, start: usize) -> bool {
+        let letters = e.pinyin.chars().filter(|c| *c != ' ').count();
+        letters == e.end.saturating_sub(start)
+    }
+
     /// 后向 DP(A3 + D13):`result[r][pos]` = 从 `pos` 到串尾、**最多再用
     /// `r` 次容错编辑**的最优补全分(log10 域,越大越好);不可达串尾的
     /// 位置为 `f32::NEG_INFINITY`。预算更大的一行恒 ≥ 更小的一行

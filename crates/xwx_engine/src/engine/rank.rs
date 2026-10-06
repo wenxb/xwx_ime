@@ -211,6 +211,23 @@ pub(super) fn pure_abbrev_input(inp: &str, has_abbrev: bool) -> bool {
         })
 }
 
+
+/// 输入里是否存在**不能起音节的字母**（`i`/`u`/`v`）。
+///
+/// 混合输入里这些字母只能属于某个**完整音节**（`mei`/`ju`/`you`/`wu`），
+/// 而 [`pure_abbrev_input`] 与 `leading_abbrev_input` 都要求「每个字母都能
+/// 起一个音节」——`meixdao`（mei+x+dao）、`julbu`（ju+l+bu）、
+/// `yougbmen`（you+g+b+men）因此整类被挡在简拼通道之外，是评测里
+/// 「中间缩写大量不可召回」的形状之一。
+///
+/// 它是**结构事实**（音节表答的），不是阈值：判据的用途是决定要不要
+/// 去问索引（见 `engine/indexed_mixed.rs`），不是决定候选的去留。
+pub(super) fn has_non_initial_letter(inp: &str) -> bool {
+    inp.char_indices().any(|(i, c)| {
+        c.is_ascii_alphabetic() && segmenter::abbrev_syllables(&inp[i..i + 1]).is_empty()
+    })
+}
+
 /// **层序收编的输入类别判据**「开头即缩写」：头 1、2 个字母都不是音节
 /// （`zmgai`/`wmjtqbj`）。
 ///
@@ -250,6 +267,16 @@ pub(super) fn sort_key<'a>(
     let cp_len = c.pinyin.chars().filter(|ch| *ch != ' ').count();
     let u_min = if c.spelling == SpellingKind::Abbrev || cp_len > inp.len() {
         0
+    } else if tail_only(inp, c) && inp.len() - cp_len >= MAX_TYPO_GAP {
+        // **吃掉了整段前缀**的读法(`zmgai` → 该,拼音 `gai` 跳过 `zm`):
+        // 它一个前缀字母都没解释,桶就是被跳过的字母数。不这样做,它落在
+        // `umin[cp_len]`(=0,尾巴本身可切分)——与「覆盖整串」的读法同桶,
+        // 靠层序压在简拼读法前面(实测 `zmgai` 的「怎么改」被 `该/改/盖`
+        // 一族挤到第 13)。
+        //
+        // 只跳 1 个字母的不在此列:那是最常见的「多打一个字母」纠错
+        // (`qnihao` → 你好),它按容错读法照常与同层候选比分数。
+        u
     } else {
         umin[cp_len]
     };
@@ -399,6 +426,19 @@ impl Ord for ScoreDesc {
 /// 字节序比较合法:`inp` 与 `cp` 都是 ASCII 拼音串(非 ASCII 输入在
 /// `build_lattice` / `fallback_candidates` 已被挡掉),前缀关系按字节
 /// 判定即按字母判定。
+/// 候选是否**只解释了输入的尾部**：去掉空格的拼音是输入的**真后缀**。
+///
+/// 这类读法来自容错格里「吃掉一段前缀」的弧（`zmgai` → 该，拼音 `gai`）：
+/// 它解释的字母全在输入末尾，前缀一个都没解释。与「只覆盖前缀」（`zmgai`
+/// → 「怎么」）正好相反，两者都不该被当成「覆盖整串」的读法参与同桶竞争。
+pub(super) fn tail_only(inp: &str, c: &Candidate) -> bool {
+    if c.spelling == SpellingKind::Abbrev {
+        return false; // 简拼层覆盖整串（构造保证），不存在「只解释尾部」
+    }
+    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
+    cp.len() < inp.len() && inp.ends_with(cp.as_str())
+}
+
 pub(super) fn unexplained_letters(inp: &str, c: &Candidate) -> usize {
     if c.spelling == SpellingKind::Abbrev {
         return 0; // 简拼层构造上覆盖整串
@@ -406,8 +446,11 @@ pub(super) fn unexplained_letters(inp: &str, c: &Candidate) -> usize {
     let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
     if cp.starts_with(inp) {
         0 // 补全:候选拼音比输入更长(或相等),输入还没打完
-    } else if cp.len() < inp.len() && inp.starts_with(cp.as_str()) {
-        inp.len() - cp.len() // 只覆盖前缀:漏掉 inp[cp.len()..]
+    } else if cp.len() < inp.len() && (inp.starts_with(cp.as_str()) || inp.ends_with(cp.as_str()))
+    {
+        // 只覆盖前缀:漏掉 inp[cp.len()..]；只覆盖后缀(zmgai → 该):
+        // 漏掉前缀 inp[..inp.len() - cp.len()]。两种都只是「解释了一段」。
+        inp.len() - cp.len()
     } else {
         0 // 非前缀关系:解释数取保守下界 0(见函数级注释)
     }

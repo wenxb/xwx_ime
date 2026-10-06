@@ -145,8 +145,23 @@ impl ImeEngine {
             // 20 条清单从 20/20 掉到 19/20、「什么是」直接丢召回。要用它必须先把
             // 早停放宽或改成按 ml 优先收集，那是 dict 侧的改动，不在本阶段范围。
             let n_letters = pinyin.len(); // 纯 ASCII 输入：字节数 == 字母数
-            let mut whole: Vec<Candidate> = d.lookup_abbrev(pinyin)?;
+            // **三条供给，按代价从低到高**：
+            // ① `lookup_abbrev_patterns`（索引驱动，代价 ∝ 命中词条数）——
+            //    覆盖「缩写位在开头/中间/末尾」的全部混合写法；折叠与全声母
+            //    走同一条路径（约束在拿到词条拼音后逐位验证）；
+            // ② `lookup_abbrev`（纯简拼 + 折叠变体，前缀匹配 + 500 早停）；
+            // ③ `lookup_mixed`（交错 DFS + 末尾半音节补全）——预算式探索，
+            //    只负责 ① 表达不了的形态（`zho`→中国 这类末尾半音节）。
+            let mut whole: Vec<Candidate> = d.lookup_abbrev_patterns(pinyin)?;
+            whole.extend(d.lookup_abbrev(pinyin)?);
             whole.extend(d.lookup_mixed(pinyin)?);
+            // 去重从「逐条线性扫 `lattice[0]`」改成哈希集合：索引驱动那条供给
+            // 一次可带回上千条（2 字母键的词条数 p99≈900），线性扫是 O(n²)。
+            let mut seen_whole: std::collections::HashSet<String> = lattice[0]
+                .iter()
+                .filter(|e| e.end == pinyin.len())
+                .map(|e| e.word.clone())
+                .collect();
             for c in whole {
                 // 来源分流的具体落点：只放行真正覆盖整串的候选。`covered`
                 // 在这里**不是**「恒为 0」——`lookup_mixed` 的前缀混拼读法会
@@ -155,10 +170,7 @@ impl ImeEngine {
                 if c.covered > 0 && c.covered < n_letters {
                     continue;
                 }
-                if lattice[0]
-                    .iter()
-                    .any(|e| e.word == c.word && e.end == pinyin.len())
-                {
+                if !seen_whole.insert(c.word.clone()) {
                     continue;
                 }
                 lattice[0].push(LatticeEdge {
