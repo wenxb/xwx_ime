@@ -68,4 +68,7 @@ assets = [
     # 在线重建」)。引擎的数据路径已支持系统级目录(见 src/lm_path.rs)。
     ["data/dict.bin", "usr/share/xwx/dict.bin", "644"],
     ["data/abbrev.bin", "usr/share/xwx/abbrev.bin", "644"],
+    # 音节级转移索引(缩写弧建边的加速索引):与 dict.bin 同目录才会被装配
+    # (src/main.rs 默认取 `dict.bin.with_file_name("syllable_graph.bin")`)。
+    ["data/syllable_graph.bin", "usr/share/xwx/syllable_graph.bin", "644"],
 ]

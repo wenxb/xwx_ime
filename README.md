@@ -106,7 +106,9 @@ just install
 2. 把 `xwx_ime` 装到 `~/.local/bin/`（用户级）；
 3. 把 component XML 用 sudo 装到 `/usr/share/ibus/component/xwx.xml`
    （exec 指向第 2 步的二进制）；
-4. 拷贝 `data/dict.bin` 到 `~/.local/share/xwx/`（存在才拷）；
+4. 拷贝数据文件到 `~/.local/share/xwx/`（各自**存在才拷**，缺了只降级不报错）：
+   `dict.bin`（词库）、`abbrev.bin`（简拼副索引）、`syllable_graph.bin`
+   （缩写弧建边的加速索引，缺了简拼走慢路径、功能不变）；
 5. 重启 `ibus-daemon`。
 
 之后 `gsettings set org.gnome.desktop.input-sources sources "[('xkb','us'),('ibus','xwx')]"`
@@ -186,6 +188,9 @@ gdbus call --session --dest org.freedesktop.IBus --object-path /org/freedesktop/
 `~/.local/share/xwx/`)读取。环境变量方向不同,别搞混:
 
 - `XWX_DICT_PATH`:覆盖词库 `dict.bin` 的读取路径;
+- `XWX_ABBREV_PATH`:覆盖简拼副索引 `abbrev.bin`（缺省与 `dict.bin` 同目录）;
+- `XWX_SYLLABLE_GRAPH_PATH`:覆盖音节级转移索引 `syllable_graph.bin`
+  （缺省与 `dict.bin` 同目录）;
 - `XWX_LM_PATH`:覆盖**运行时读取**的语言模型路径。未设置时按优先级自动
   探测 `$XDG_DATA_HOME/xwx/` 下的 `.gram`(首选 `wanxiang-lts-zh-hans.gram`,
   否则任意 `.gram` 按文件名字典序第一个),最后回落 `bigram.txt`;

@@ -123,6 +123,10 @@ python3 scripts/abbrev_to_bin.py in.bin out.bin   # 自定义路径
 前提)按最长公共前缀建 trie,0 号节点是根,一条 key 的音节链对应一条树
 路径;`MmapDict::with_syllable_graph` 装配。
 
+**随安装分发**:`just install` 与 deb 包会把它和 `dict.bin`/`abbrev.bin`
+一起放进数据目录(`~/.local/share/xwx/` 或 `/usr/share/xwx/`)——三者必须
+同目录:引擎默认按 `dict.bin` 的同名目录找它。
+
 **可选数据,缺了能活**:文件缺失/损坏/与当前词库**不同代**(判据:头部
 第 52 字节的 key 数 ≠ 当前 `dict.bin` 记录数)时引擎**回退旧匹配器**、
 不报错——换词库后忘了重建它只会变慢,不会错。也因此不进 git,本机重新
