@@ -477,8 +477,9 @@ impl ImeEngine {
             //   不是补全要的能力,端到端实测多花 4.5ms(与候选池同一条判据)。
             //
             // 补全读法**不加惩罚**、不算编辑:惩罚在**排序层**收
-            // (`rank.rs` 的 `sort_key` 对「Exact 层且拼音字母数 > 输入」的
-            // 候选扣 [`COMPLETION_PENALTY`])——在边上扣会经 `typo_penalty`
+            // (`rank.rs` 把「Exact 层且拼音字母数 > 输入」的候选放进补全层,
+            // 排在全部精确命中之后;除非它比同桶同层最强精确命中高出
+            // [`COMPLETION_DOMINANCE`])——在边上扣会经 `typo_penalty`
             // 把补全边错标成容错层(`beijin` 的北京被单字墙压到 #35)。
             // 历史裁决的 1.301(`ln 0.05`)也太大:`beijin` 首位退回「被禁」。
             if pos + len == n

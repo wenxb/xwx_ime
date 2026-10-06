@@ -93,3 +93,21 @@ report.py 把结果聚合为问题桶，每桶给计数、占比与可复现实�
 5. 前缀抖动（可见→消失 / 首屏内震荡）；
 6. 会话级异常（上屏文本 ≠ 期望选择、残留 preedit、标点被翻页吞掉）；
 7. 延迟超 12ms 门槛的输入样式与实例。
+
+## 全拼精确命中（`full` style，2026-10-05 补）
+
+`gen_abbrev.py` 出的四种 style 全是简拼/混拼，**「把拼音打全」这一类没有样本**——
+实测漏掉了一个真实问题：打全 `liji` 时，尾音节补全词（`li jie` 的理解）靠语言模型
+排到精确命中（`li ji` 的立即）前面（详见 `docs/typing_eval_fixes.md` 八）。
+
+`gen_full.py` 从同一批样本的 `syls` 直接拼出输入（输入 = 词条完整拼音，词频 ≥10 万、
+2~4 音节、无分隔符），写出 `data/full_samples.jsonl`，用**同一条** `typing_sim --word`
+跑，`style` 记为 `full`：
+
+```sh
+python3 tools/typing_sim/gen_full.py --out tools/typing_sim/data/full_samples.jsonl
+cargo run --release -p xwx_engine --example typing_sim -- word \
+  --in tools/typing_sim/data/full_samples.jsonl --out /tmp/full.jsonl
+```
+
+口径与其余 style 完全一致（召回 / 首选 / 首屏 / 词频加权），报告里并排显示。

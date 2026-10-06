@@ -69,9 +69,9 @@ fn splittable_complete_syllable_is_not_completed() {
     assert_eq!(first(&engine, "quxian"), "曲线");
 }
 
-/// 精确命中优先于补全:补全是「猜测用户还没打完」,在排序层付
-/// `COMPLETION_PENALTY`;没有它时常见补全词靠词频微差压住精确命中
-/// (`qingxi` 的情形 f500326 压住清晰 f403760)。
+/// 精确命中优先于补全:补全是「猜测用户还没打完」,由排序层的**补全层**兜住
+/// (排在全部精确命中之后);只有比同桶同层最强精确命中高出
+/// [`COMPLETION_DOMINANCE`] 的补全才豁免。
 #[test]
 fn exact_match_ranks_above_completion() {
     let Some(engine) = real_engine() else {
@@ -79,7 +79,39 @@ fn exact_match_ranks_above_completion() {
     };
     assert_eq!(first(&engine, "qingxi"), "清晰", "补全读法(xing/xian)不得压住精确命中");
     assert_eq!(first(&engine, "xuexi"), "学习", "补全读法(xiao)不得压住精确命中");
-    // 补全之间不互斥:北京(f1119506)对被禁(f13150)的差距 1.93 远大于
-    // 惩罚 0.25,补全读法在无精确竞争者时照常登顶。
-    assert_eq!(first(&engine, "beijin"), "北京", "小惩罚不得翻转北京-被禁");
+    // 补全的豁免口是「证据优势 ≥ COMPLETION_DOMINANCE」:北京(f1119506)对
+    // 被禁(f13150)差 1.93,远大于 1.0,照常登顶。
+    assert_eq!(first(&engine, "beijin"), "北京", "支配性补全不得被压到精确命中之后");
+}
+
+fn letters(pinyin: &str) -> String {
+    pinyin.chars().filter(|c| *c != ' ').collect()
+}
+
+/// 精确命中要**成块**排在补全之前,不只是第一位:打全了 `liji` 的用户不该在
+/// 第一页看到一堆「猜他还没打完」的 `li jie`/`li jiang`/`li jing`。
+///
+/// 这里连**带上下文**一起钉:旧的数值惩罚(0.25)只在无上文时站得住,一带
+/// 真实 LM 上下文就翻(实测上文「我」时 理解 #1、立即 #2、里脊 掉到第 11)。
+#[test]
+fn exact_matches_precede_completions_as_a_block() {
+    let Some(engine) = real_engine() else {
+        return;
+    };
+    for (tail, last_word) in [("", None), ("我", Some("我")), ("今天", Some("今天"))] {
+        let ctx = LmContext { tail, last_word };
+        let cands = engine.lookup_candidates("liji", &ctx).expect("查询失败");
+        let is_exact = |c: &Candidate| letters(&c.pinyin).len() == 4;
+        let first_completion = cands.iter().position(|c| !is_exact(c));
+        let last_exact = cands.iter().rposition(is_exact);
+        assert_eq!(cands[0].word, "立即", "上文 {tail:?}:首位应是精确命中");
+        if let (Some(fc), Some(le)) = (first_completion, last_exact) {
+            assert!(
+                le < fc,
+                "上文 {tail:?}:精确命中「{}」被补全「{}」插队",
+                cands[le].word,
+                cands[fc].word
+            );
+        }
+    }
 }

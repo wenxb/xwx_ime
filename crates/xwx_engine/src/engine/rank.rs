@@ -58,7 +58,8 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate], entry_tier_ex
     // `clone_from_slice` 写回,一次排序克隆两遍整个候选表(`Candidate` 带
     // 三个 `String`,500 条 ≈ 1500 次分配)。改成「键 + 下标」后按下标置换
     // 就地交换,零克隆——省的是分配,不是毫秒(与 `score_only` 同一结论)。
-    let keys: Vec<PlainKey> = ranked.iter().map(|c| plain_key(inp, &umin, c, entry_tier_exception)).collect();
+    let mut keys: Vec<PlainKey> = ranked.iter().map(|c| plain_key(inp, &umin, c, entry_tier_exception)).collect();
+    demote_non_dominant_completions(&mut keys, ranked, inp);
     let mut order: Vec<usize> = (0..ranked.len()).collect();
     order.sort_by(|&a, &b| {
         keys[a].cmp(&keys[b]).then_with(|| {
@@ -99,7 +100,19 @@ pub(super) struct PlainKey {
     bucket: usize,
     /// 第二键:拼写来源层序(Exact < Fuzzy < Abbrev)。
     spelling: SpellingKind,
-    /// 第三键:分数 − 覆盖罚分,降序。
+    /// 第三键:补全层序(`false` = 精确命中,`true` = 尾音节补全)。
+    ///
+    /// 分层而不是扣分:补全(`liji` 的 `li ji(e)`)是「猜用户还没打完」,与精确
+    /// 命中(`li ji`)不是同一件事的证据,不该在同一条分数轴上比大小。实测
+    /// `liji` 在上文「他的」下,「理解」靠 LM 拿 1.46 压过「立即」,而两者词频
+    /// 只差 0.00007——软惩罚挡不住,任何上下文扰动都能翻。
+    ///
+    /// 唯一的出口是**支配例外**,见 [`demote_non_dominant_completions`]。
+    completion: bool,
+    /// 第四键:分数 − 覆盖罚分,降序。
+    ///
+    /// `score` 里混着 LM 项,所以它**不是**补全越级的判据(见
+    /// [`demote_non_dominant_completions`])。
     score: ScoreDesc,
 }
 
@@ -114,7 +127,69 @@ pub(super) fn plain_key(
     PlainKey {
         bucket: k.bucket,
         spelling: k.spelling,
+        completion: k.completion,
         score: k.score,
+    }
+}
+
+/// 词条级词频证据(`freq == 0` = 拼装候选/用户造词 ⇒ 无证据)。
+fn lexical_evidence(c: &Candidate) -> f32 {
+    if c.freq == 0 {
+        f32::NEG_INFINITY
+    } else {
+        (c.freq as f32).log10()
+    }
+}
+
+/// 补全层的**支配例外**:补全自己的**打字通道证据**比「同桶同层最强精确命中」
+/// 高出 [`COMPLETION_DOMINANCE`] 时,算它把精确命中压得没话说(`beijin` → 北京
+/// 对被禁差 1.93),升回精确层照常排前面;否则一律降到所有精确命中之后。
+///
+/// **比较轴不用 `score`**:`score = log10(freq/total) + (lm − floor)·w`,LM 项
+/// 回答的是「这个词配这段上文吗」,与「用户打完了没有」不是同一个问题。混在
+/// 一根轴上正是本函数存在的理由——实测 `liji` 在上文「他的」下,「理解」靠 LM
+/// 拿到 1.46 的优势压过「立即」,而两者的词频差只有 0.00007。分开之后:词频
+/// 证据(通道)决定谁在哪个层,LM 只决定层内次序。
+///
+/// 拼装候选(`freq == 0`,如 `nihaobeijin` 的「你好北京」)没有词条词频,只能
+/// 退回 `score` 比——它们比的是「串起来成不成句」,不是单条词条的证据。
+///
+/// 对手池只收**拼音字母数与输入相等**的候选:`beijin` 的「被」(f2998064)只解释
+/// 了输入的前三个字母,不是「用户打完了」的同类;拿它的词频当门槛会把北京
+/// (6.05 对 被禁 4.12)误杀——实测踩过这个坑。
+fn demote_non_dominant_completions(keys: &mut [PlainKey], ranked: &[Candidate], inp: &str) {
+    const LAYERS: usize = 3;
+    let max_bucket = keys.iter().map(|k| k.bucket).max().unwrap_or(0);
+    let slots = ((max_bucket + 1) * LAYERS).max(1);
+    // 同桶同层的两张「最强精确命中」榜:词频证据榜(通道)与分数榜(拼装候选)。
+    let mut best_lexical = vec![f32::NEG_INFINITY; slots];
+    let mut best_score = vec![f32::NEG_INFINITY; slots];
+    let letters = |c: &Candidate| c.pinyin.chars().filter(|ch| *ch != ' ').count();
+    for (k, c) in keys.iter().zip(ranked).filter(|(k, _)| !k.completion) {
+        if letters(c) != inp.len() {
+            continue;
+        }
+        let slot = k.bucket * LAYERS + k.spelling as usize;
+        let evidence = lexical_evidence(c);
+        if evidence > best_lexical[slot] {
+            best_lexical[slot] = evidence;
+        }
+        if k.score.0 > best_score[slot] {
+            best_score[slot] = k.score.0;
+        }
+    }
+    for (k, c) in keys.iter_mut().zip(ranked).filter(|(k, _)| k.completion) {
+        let slot = k.bucket * LAYERS + k.spelling as usize;
+        let evidence = lexical_evidence(c);
+        // 同桶同层没有精确命中时两榜都是 −∞:没有对手要避让,照常放行。
+        let (mine, theirs) = if evidence.is_finite() {
+            (evidence, best_lexical[slot])
+        } else {
+            (k.score.0, best_score[slot])
+        };
+        if mine >= theirs + COMPLETION_DOMINANCE {
+            k.completion = false;
+        }
     }
 }
 
@@ -281,22 +356,24 @@ pub(super) fn sort_key<'a>(
         umin[cp_len]
     };
     let u_local = u.saturating_sub(u_min) as f32;
-    // **补全候选的不确定性代价**(仅 Exact 层):拼音字母数超过输入 ⇒ 尾音节
-    // 是按更长音节补全的读法(`qingxi` 的 `xi`→`xing`),是「猜测还没打完」,
-    // 要让位给精确命中(`qingxi`→清晰、`xuexi`→学习)。Abbrev 层豁免:简拼
-    // 读法的弧已付过 `ABBREV_PENALTY`,不确定性与补全不同源(`yiwanc` 的
-    // 「已完成」拼音同样比输入长,不是补全)。标定见 `mod.rs` 的
-    // [`COMPLETION_PENALTY`] 文档(qingxi 差 0.09 须翻转,beijin 差 1.93
-    // 不得翻转)。
-    let completion_cost = if cp_len > inp.len() && c.spelling == SpellingKind::Exact {
-        COMPLETION_PENALTY
-    } else {
-        0.0
-    };
+    // **尾音节补全标记**(仅 Exact 层):拼音字母数超过输入 ⇒ 尾音节是按更长
+    // 音节补全的读法(`liji` 的 `ji`→`jie`/`jiang`),是「猜用户还没打完」。
+    // Abbrev 层豁免:简拼读法的弧已付过 `ABBREV_PENALTY`,不确定性与补全
+    // 不同源(`yiwanc` 的「已完成」拼音同样比输入长,不是补全)。
+    //
+    // 分层判据在 [`demote_non_dominant_completions`]:补全要压过精确命中,
+    // 得先比同桶同层最强精确命中高出 [`COMPLETION_DOMINANCE`]。
+    let completion = cp_len > inp.len() && c.spelling == SpellingKind::Exact;
+    // 补全候选在**层内**照旧吃一点代价([`COMPLETION_PENALTY`]):跨层由
+    // `completion` 分层管,这 0.25 只管层内与「Abbrev 层被收编成 Exact 的
+    // 候选」之间的老次序(`sh` 的「生/事」对「时候/上海」),不动它就不引入
+    // 与本问题无关的重排。
+    let completion_cost = if completion { COMPLETION_PENALTY } else { 0.0 };
     let layer = effective_layer(c.spelling, c.freq, c.covered, inp.len(), entry_tier_exception);
     SortKey {
         bucket: u_min,
         spelling: layer,
+        completion,
         score: ScoreDesc(c.score - COVERAGE_PENALTY * u_local - completion_cost),
         freq: std::cmp::Reverse(c.freq),
         word: c.word.as_str(),
@@ -312,11 +389,13 @@ pub(super) struct SortKey<'a> {
     bucket: usize,
     /// 第二键:拼写来源层序(Exact < Fuzzy < Abbrev,枚举声明序)。
     spelling: SpellingKind,
-    /// 第三键:分数 − 覆盖罚分,降序(高分在前,见 [`ScoreDesc`])。
+    /// 第三键:补全层序(`false` = 精确命中,`true` = 尾音节补全)。
+    completion: bool,
+    /// 第四键:分数 − 覆盖罚分,降序(高分在前,见 [`ScoreDesc`])。
     score: ScoreDesc,
-    /// 第四键:同分时原始词频降序(回退基准)。
+    /// 第五键:同分时原始词频降序(回退基准)。
     freq: std::cmp::Reverse<u64>,
-    /// 第五、六键:词与拼音的字典序(确定性收尾)。
+    /// 第六、七键:词与拼音的字典序(确定性收尾)。
     word: &'a str,
     pinyin: &'a str,
 }
