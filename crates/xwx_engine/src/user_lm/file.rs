@@ -82,6 +82,10 @@ pub(super) struct UserTables {
     /// 1.5ms 拉到 3.0ms)。分隔用 U+0001:拼音是 ASCII、词是 UTF-8
     /// 文本,都不会含它。
     pub(super) blocklist: HashSet<String>,
+    /// 英文前缀派生索引:前缀 -> 最多 32 个规范英文 key。**不序列化**。
+    pub(super) english_prefix_top: HashMap<String, Vec<String>>,
+    /// 英文下一词派生索引:前词 -> 最多 32 个规范英文 key。**不序列化**。
+    pub(super) english_next_top: HashMap<String, Vec<String>>,
 }
 
 impl UserLM {
@@ -182,13 +186,19 @@ impl UserLM {
         }
         let mut bigram = BigramLM::new();
         bigram.load(bigram_text.as_bytes())?;
-        Ok(UserTables {
+        let mut tables = UserTables {
             last_blocked: None,
             unigrams: bigram.unigrams,
             bigrams: bigram.bigrams,
             entries,
             blocklist,
-        })
+            english_prefix_top: HashMap::new(),
+            english_next_top: HashMap::new(),
+        };
+        // 加载成功出口之一:**必须**在这里建好派生索引——旧文件没有索引
+        // 不是文件损坏,而是「按计数重建一次」的信号。
+        tables.rebuild_english_index();
+        Ok(tables)
     }
 
     /// 落盘:序列化全表 → 写临时文件 → 原子 rename。

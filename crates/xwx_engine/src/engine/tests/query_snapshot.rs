@@ -23,6 +23,7 @@ fn candidate(word: &str, pinyin: &str, freq: u64) -> Candidate {
         echo: false,
         covered: 0,
         matched_len: 0,
+        english: None,
     }
 }
 

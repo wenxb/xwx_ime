@@ -22,6 +22,11 @@ pub(crate) fn user_lm_file_name() -> &'static str {
     }
 }
 
+/// 当前进程的 XDG 数据根目录（`english_config` 用它解析英文资源）。
+pub(crate) fn xdg_data_home_for_config() -> PathBuf {
+    xdg_data_home(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
+}
+
 pub(crate) fn resolve_data_path(env_key: &str, file_name: &str) -> PathBuf {
     if let Ok(p) = std::env::var(env_key) {
         return PathBuf::from(p);

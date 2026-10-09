@@ -20,6 +20,7 @@ impl InputSession {
             echo: true,
             covered: pinyin.len(),
             matched_len: 0,
+            english: None,
         }
     }
 }

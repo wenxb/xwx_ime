@@ -163,6 +163,7 @@ impl ImeEngine {
                 // 「先定分段再出候选」更灵活的地方。
                 covered: edge.end,
                 matched_len: 0,
+                english: None,
             };
             let entry = best
                 .entry((cand.word.clone(), cand.pinyin.clone()))
@@ -284,6 +285,7 @@ impl ImeEngine {
                 echo: false,
                 covered: pinyin.len(),
                 matched_len: 0,
+                english: None,
             });
         }
         Ok(out)

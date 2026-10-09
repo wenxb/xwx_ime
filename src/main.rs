@@ -25,6 +25,7 @@
 //!   快速核对引擎名 / exec 路径，或直接落盘安装。
 
 mod lm_path;
+mod english_config;
 
 use lm_path::{resolve_data_path, resolve_lm_path, user_lm_file_name};
 

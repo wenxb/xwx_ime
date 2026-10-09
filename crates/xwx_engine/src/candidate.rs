@@ -95,6 +95,49 @@ impl<'de> Deserialize<'de> for SpellingKind {
     }
 }
 
+/// 英文候选的匹配方式。
+///
+/// 与中文的 [`SpellingKind`] 是**两套轴**：英文候选一律把 `spelling` 填
+/// `Exact` 占位（见数据契约），但**绝不进入中文排序器**——中文排序按
+/// `spelling` 分层，若让英文参与，它会污染那些结构判断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnglishMatchKind {
+    /// 输入串就是完整单词（`hello` → hello）。
+    Exact,
+    /// 输入串是完整单词的前缀（`pyth` → Python）。
+    Completion,
+    /// 无输入字母时的下一词建议（M2 预测面板）。
+    NextWord,
+}
+
+/// 英文候选的元数据（中文与原文回声候选为 `None`）。
+///
+/// 有了它，会话层才能**按来源分流**而不是靠 `word.is_ascii()` 猜：
+/// 提交、学习、造词、空格、屏蔽各自读这里的字段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnglishCandidateMeta {
+    /// 目标**完整单词**的小写键，不是已输入的前缀。
+    pub key: String,
+    /// 匹配方式。
+    pub match_kind: EnglishMatchKind,
+}
+
+impl EnglishCandidateMeta {
+    /// 构造（`key` 必须是合法小写英文键，由调用方保证）。
+    pub fn new(key: impl Into<String>, match_kind: EnglishMatchKind) -> Self {
+        Self {
+            key: key.into(),
+            match_kind,
+        }
+    }
+
+    /// 是否是「无输入字母时的下一词」。
+    pub fn is_next_word(&self) -> bool {
+        self.match_kind == EnglishMatchKind::NextWord
+    }
+}
+
 /// 一个候选词。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Candidate {
@@ -180,6 +223,12 @@ pub struct Candidate {
     /// 改动当输入。
     #[serde(skip)]
     pub matched_len: usize,
+    /// 英文元数据（中文候选与原文回声候选为 `None`）。
+    ///
+    /// 序列化用 `skip_serializing_if`：旧候选 JSON **不增加空字段**，
+    /// 关掉英文时整个 Vec 的序列化与旧入口逐字节相同。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub english: Option<EnglishCandidateMeta>,
 }
 
 impl<'de> Deserialize<'de> for Candidate {
@@ -204,8 +253,31 @@ impl<'de> Deserialize<'de> for Candidate {
             echo: bool,
             #[serde(default)]
             covered: usize,
+            #[serde(default)]
+            english: Option<EnglishCandidateMeta>,
         }
         let r = Repr::deserialize(deserializer)?;
+        if let Some(m) = &r.english {
+            // 冲突数据报错，**不通过「看起来像英文」去修复字段**：
+            // 回声标记、拼音、键合法性、大小写关系四者都必须自洽。
+            if r.echo {
+                return Err(serde::de::Error::custom("echo 候选不能带 english 元数据"));
+            }
+            if !r.pinyin.is_empty() {
+                return Err(serde::de::Error::custom("英文候选的 pinyin 必须为空串"));
+            }
+            if !crate::english::is_english_key(&m.key) {
+                return Err(serde::de::Error::custom("english.key 不是合法小写英文键"));
+            }
+            if !r.word.eq_ignore_ascii_case(&m.key) {
+                return Err(serde::de::Error::custom(
+                    "english.key 与候选 word 的大小写形式不一致",
+                ));
+            }
+            if m.match_kind == EnglishMatchKind::NextWord && r.covered != 0 {
+                return Err(serde::de::Error::custom("NextWord 候选的 covered 必须是 0"));
+            }
+        }
         Ok(Candidate {
             word: r.word,
             pinyin: r.pinyin,
@@ -219,6 +291,7 @@ impl<'de> Deserialize<'de> for Candidate {
             covered: r.covered,
             // 不参与序列化(见字段文档):反序列化一律回落到 `0`。
             matched_len: 0,
+            english: r.english,
         })
     }
 }
@@ -235,6 +308,56 @@ impl Candidate {
             echo: false, // 词典条目是真实候选;回声标记由引擎追加时设置
             covered: 0,  // 未知/整串:由引擎在候选来源处回填(见字段文档)
             matched_len: 0, // 副索引匹配长度:只有 AbbrevIndex::lookup_prefix 填(见字段文档)
+            english: None,  // 词典条目不是英文候选;英文通道显式构造(见 expand_english)
+        }
+    }
+
+    /// 是否是英文候选（不论匹配方式）。
+    pub fn is_english(&self) -> bool {
+        self.english.is_some()
+    }
+
+    /// 是否是 M2 的下一词预测候选（只在预测态可被选择）。
+    pub fn is_next_word(&self) -> bool {
+        self.english.as_ref().is_some_and(|m| m.is_next_word())
+    }
+
+    /// 英文候选的完整小写键。
+    pub fn english_key(&self) -> Option<&str> {
+        self.english.as_ref().map(|m| m.key.as_str())
+    }
+
+    /// 构造一条英文候选（本地契约的唯一落点，避免多处手写字段组合）。
+    ///
+    /// 契约（见 `docs/english-input/02-engine.md` 第 2.1 节）：
+    /// `echo = false`、`pinyin` 为空、`spelling = Exact` **占位**（英文
+    /// 不参与中文分层排序，这个值只为满足旧字段的语义完整性）、
+    /// `freq = 0`（不伪造中文词频）、`matched_len = 0`。
+    ///
+    /// `covered`：Exact/Completion 传**原始输入字节数**（不是补全后的单词
+    /// 长度）；NextWord 必须传 0。
+    pub fn new_english(
+        display: impl Into<String>,
+        key: impl Into<String>,
+        match_kind: EnglishMatchKind,
+        score: f32,
+        covered: usize,
+    ) -> Self {
+        let key = key.into();
+        debug_assert!(
+            !(match_kind == EnglishMatchKind::NextWord && covered != 0),
+            "NextWord 的 covered 必须是 0（它不消费任何输入字节）"
+        );
+        Self {
+            word: display.into(),
+            pinyin: String::new(),
+            score,
+            freq: 0,
+            spelling: SpellingKind::Exact,
+            echo: false,
+            covered,
+            matched_len: 0,
+            english: Some(EnglishCandidateMeta::new(key, match_kind)),
         }
     }
 }
@@ -337,5 +460,71 @@ mod tests {
         // 最前)。若有人调整声明顺序,这个测试会先红。
         assert!(SpellingKind::Exact < SpellingKind::Fuzzy);
         assert!(SpellingKind::Fuzzy < SpellingKind::Abbrev);
+    }
+
+    #[test]
+    fn serde_legacy_without_english_has_no_extra_field() {
+        // C01:旧 JSON 无 english 可读,且新中文候选**不增加空字段**——
+        // 关掉英文时整个 Vec 的序列化必须与旧入口逐字节相同。
+        let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42}"#;
+        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
+        assert!(c.english.is_none());
+        let json = serde_json::to_string(&Candidate::new("你好", "ni hao", 42)).expect("序列化");
+        assert!(!json.contains("english"), "中文候选不得写出 english 字段: {json}");
+    }
+
+    #[test]
+    fn english_metadata_roundtrips_all_match_kinds() {
+        for (kind, tag) in [
+            (EnglishMatchKind::Exact, "exact"),
+            (EnglishMatchKind::Completion, "completion"),
+            (EnglishMatchKind::NextWord, "next_word"),
+        ] {
+            let covered = if kind == EnglishMatchKind::NextWord { 0 } else { 4 };
+            let c = Candidate::new_english("Python", "python", kind, 3.8, covered);
+            let json = serde_json::to_string(&c).expect("序列化不应失败");
+            assert!(json.contains(&format!("\"match_kind\":\"{tag}\"")), "{json}");
+            let back: Candidate = serde_json::from_str(&json).expect("反序列化不应失败");
+            assert_eq!(back, c);
+            assert!(back.is_english());
+            assert_eq!(back.english_key(), Some("python"));
+            assert_eq!(back.pinyin, "", "英文候选的 pinyin 必须是空串");
+            assert!(!back.echo);
+            assert_eq!(back.freq, 0, "不伪造中文词频");
+        }
+    }
+
+    #[test]
+    fn english_next_word_has_zero_covered_and_exact_has_input_len() {
+        let nw = Candidate::new_english("you", "you", EnglishMatchKind::NextWord, 1.0, 0);
+        assert!(nw.is_next_word());
+        assert_eq!(nw.covered, 0);
+        let ex = Candidate::new_english("hello", "hello", EnglishMatchKind::Exact, 4.5, 5);
+        assert!(!ex.is_next_word());
+        assert_eq!(ex.covered, 5, "covered 是原始输入字节数,不是补全后单词长度");
+    }
+
+    #[test]
+    fn conflicting_english_data_is_rejected_not_silently_repaired() {
+        // echo + english
+        let bad = r#"{"word":"python","pinyin":"","score":1.0,"freq":0,"echo":true,
+            "english":{"key":"python","match_kind":"exact"}}"#;
+        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "echo+english 必须报错");
+        // pinyin 非空
+        let bad = r#"{"word":"python","pinyin":"py","score":1.0,"freq":0,
+            "english":{"key":"python","match_kind":"exact"}}"#;
+        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "英文候选 pinyin 必须为空");
+        // key 非小写/非法
+        let bad = r#"{"word":"Python","pinyin":"","score":1.0,"freq":0,
+            "english":{"key":"Python","match_kind":"exact"}}"#;
+        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "key 必须是小写英文键");
+        // word 与 key 大小写形式不一致
+        let bad = r#"{"word":"Py thon","pinyin":"","score":1.0,"freq":0,
+            "english":{"key":"python","match_kind":"exact"}}"#;
+        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "word 小写必须等于 key");
+        // NextWord 带 covered
+        let bad = r#"{"word":"you","pinyin":"","score":1.0,"freq":0,"covered":3,
+            "english":{"key":"you","match_kind":"next_word"}}"#;
+        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "NextWord 的 covered 必须是 0");
     }
 }

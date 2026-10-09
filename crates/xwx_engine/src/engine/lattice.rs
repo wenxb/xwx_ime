@@ -404,6 +404,7 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
             // 覆盖范围即整串长度——分段上屏时它会一次吃掉全部输入。
             covered: pinyin.len(),
             matched_len: 0,
+            english: None,
         }
     }
 

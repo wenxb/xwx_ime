@@ -147,6 +147,7 @@ impl Dictionary for SqliteDict {
                 echo: false,  // 词典条目是真实候选
                 covered: 0,   // 未知/整串:由引擎按查询来源回填(见 Candidate::covered)
                 matched_len: 0,
+                english: None,
             })
         })?;
         let mut out = Vec::new();
@@ -187,6 +188,7 @@ impl Dictionary for SqliteDict {
                     echo: false,  // 词典条目是真实候选
                     covered: 0,   // 未知/整串:由引擎按查询来源回填(见 Candidate::covered)
                     matched_len: 0,
+                    english: None,
                 })
             },
         )?;

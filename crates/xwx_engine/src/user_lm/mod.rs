@@ -31,6 +31,7 @@ use std::sync::{Arc, RwLock};
 
 use tracing::info;
 
+mod english_index;
 mod file;
 
 use file::{block_key, UserTables};
@@ -126,6 +127,52 @@ impl UserLmSnapshot {
             .get(pinyin_key)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    // TODO(S4): 双通道英文召回接上后删除这条临时豁免。
+    #[allow(dead_code)]
+    /// 英文前缀派生索引:该前缀下最多 32 个规范英文 key(计数降序、key 升序)。
+    ///
+    /// 派生自计数表、随同一代快照发布——召回与打分因此永远看到同一代数据。
+    pub(crate) fn english_prefix_top(&self, prefix: &str) -> &[String] {
+        self.tables
+            .english_prefix_top
+            .get(prefix)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    #[allow(dead_code)]
+    /// 英文下一词派生索引:该前词后最多 32 个规范英文 key。
+    pub(crate) fn english_next_top(&self, prev: &str) -> &[String] {
+        self.tables
+            .english_next_top
+            .get(prev)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    #[allow(dead_code)]
+    /// 英文一元计数(0 = 没学过)。
+    pub(crate) fn english_unigram_count(&self, key: &str) -> u32 {
+        self.tables
+            .unigrams
+            .get(key)
+            .copied()
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32
+    }
+
+    #[allow(dead_code)]
+    /// 英文二元计数 `(前词 → 词)`,0 = 没学过。
+    pub(crate) fn english_bigram_count(&self, prev: &str, word: &str) -> u32 {
+        self.tables
+            .bigrams
+            .get(prev)
+            .and_then(|m| m.get(word))
+            .copied()
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32
     }
 
     /// 该候选是否被用户屏蔽(Ctrl+Delete 删过)。
@@ -233,7 +280,11 @@ impl UserLM {
         }
         // 条数上界:超限时全表计数减半(衰减而不是按条驱逐,见模块文档)。
         if t.unigrams.len() > MAX_USER_UNIGRAMS {
+            // 衰减改变了**所有**词的计数,增量更新不再成立:由
+            // `decay_tables` 收尾处全量重建(见那里)。
             Self::decay_tables(t);
+        } else {
+            t.english_on_learn(prev, word);
         }
     }
 
@@ -300,6 +351,8 @@ impl UserLM {
                 !inner.is_empty()
             });
             t.bigrams.remove(word);
+            // 删除是「计数消失」,增量算法只处理增加:全量重建。
+            t.rebuild_english_index();
         })
     }
 
@@ -356,6 +409,8 @@ impl UserLM {
             unigrams = t.unigrams.len(),
             "用户模型条数超限,已执行全局计数衰减(÷2)"
         );
+        // 衰减后并列顺序会变:派生索引必须全量重建,不能留旧次序。
+        t.rebuild_english_index();
     }
 
     /// 造词条目超限时的淘汰:按「词的上屏次数」保高频(与 unigram
