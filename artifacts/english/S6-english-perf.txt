@@ -1,0 +1,39 @@
+   Compiling xwx_engine v0.1.0 (/home/youngwen/Desktop/xwx_ime/crates/xwx_engine)
+    Finished `release` profile [optimized] target(s) in 0.88s
+     Running `/mnt/hdd/target/xwx_ime/release/examples/english_perf --data data --english data/english.bin --repeat 20`
+== 数据 ==
+中文数据 : data
+语言模型 : /home/youngwen/.local/share/xwx/wanxiang-lts-zh-hans.gram (420253740 字节)
+英文词库 : data/english.bin (50002 词 / 116134 前缀 / 4457997 字节)
+repeat   : 20
+
+== 冷启动 ==
+引擎装配(含 mmap 与英文词库完整校验) : 31.6ms
+首次查询                              : 12.7ms
+
+== 稳态（英文关 / 英文开 / 英文开+受控用户模型）==
+英文前缀 [关]               n=140   p50=   0.838ms p95=   3.872ms max=   4.011ms
+英文前缀 [开]               n=140   p50=   0.858ms p95=   3.869ms max=   3.962ms
+英文前缀 [开+模型]            n=140   p50=   0.856ms p95=   3.871ms max=   3.934ms
+                       开-关 p95 差值 = -0.002ms；超 12ms 样本 0/280
+英文完整词 [关]              n=100   p50=   2.353ms p95=   3.440ms max=   3.785ms
+英文完整词 [开]              n=100   p50=   2.381ms p95=   3.488ms max=   3.537ms
+英文完整词 [开+模型]           n=100   p50=   2.379ms p95=   3.460ms max=   3.530ms
+                       开-关 p95 差值 = +0.048ms；超 12ms 样本 0/200
+英文连续(有上文) [关]          n=80    p50=   0.372ms p95=   3.335ms max=   3.400ms
+英文连续(有上文) [开]          n=80    p50=   0.428ms p95=   3.411ms max=   3.426ms
+英文连续(有上文) [开+模型]       n=80    p50=   0.430ms p95=   3.414ms max=   3.589ms
+                       开-关 p95 差值 = +0.076ms；超 12ms 样本 0/160
+中英同形 [关]               n=100   p50=   0.052ms p95=   0.105ms max=   0.119ms
+中英同形 [开]               n=100   p50=   0.098ms p95=   0.145ms max=   0.164ms
+中英同形 [开+模型]            n=100   p50=   0.099ms p95=   0.146ms max=   0.163ms
+                       开-关 p95 差值 = +0.040ms；超 12ms 样本 0/200
+中文拼音(回归) [关]           n=80    p50=   0.352ms p95=   1.344ms max=   1.500ms
+中文拼音(回归) [开]           n=80    p50=   0.355ms p95=   1.345ms max=   1.399ms
+中文拼音(回归) [开+模型]        n=80    p50=   0.353ms p95=   1.414ms max=   1.459ms
+                       开-关 p95 差值 = +0.000ms；超 12ms 样本 0/160
+
+== 超过 12ms 的逐键样本 ==
+(无)
+
+注：这里是**纯会话/引擎**时间；D-Bus 往返另测，不把两者混为一谈。
