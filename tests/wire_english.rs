@@ -11,6 +11,37 @@ use std::path::{Path, PathBuf};
 
 use support::{keyval, last_commit, last_preedit, last_table, Harness, M_CONTROL, M_RELEASE};
 
+/// 预测面板专用的词库与二元表（静态 `thank → you` 等）。
+fn prediction_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/english")
+        .join(name)
+}
+
+fn start_prediction_harness(label: &str) -> Harness {
+    let mut h = Harness::new(label)
+        .with_env("XWX_ENGLISH", "1")
+        .with_env(
+            "XWX_ENGLISH_DICT_PATH",
+            english_fixture().to_string_lossy().to_string(),
+        )
+        .with_env(
+            "XWX_ENGLISH_BIGRAM_PATH",
+            prediction_fixture("bigram.bin").to_string_lossy().to_string(),
+        )
+        .with_env("XWX_ENGLISH_PREDICT", "1");
+    h.start_engine(support::shared_fixture());
+    h
+}
+
+/// 打完一个词并用空格选中，返回信号。
+fn select_word(h: &mut Harness, word: &str) -> Vec<support::Signal> {
+    h.type_ascii(word);
+    h.settle_default();
+    h.key(keyval::SPACE, 0);
+    h.settle_default()
+}
+
 /// 测试用英文词库：`scripts/build_english_dict.py --entries` 的真实产物。
 fn english_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/english/words.bin")
@@ -222,5 +253,132 @@ fn idle_english_key_keeps_letters_away_from_the_engine() {
     assert!(
         !h.settle_default().is_empty(),
         "消费掉的字母至少要发一次候选信号"
+    );
+}
+
+// ---------- M2：零输入下一词面板（预测分册第 8、11 节）----------
+
+#[test]
+fn m2_selecting_thank_shows_a_prediction_panel_with_empty_preedit() {
+    let h = &mut start_prediction_harness("english-wire-predict-panel");
+    let sigs = select_word(h, "thank");
+    assert_eq!(last_commit(&sigs).as_deref(), Some("thank"));
+    // 面板：空 preedit + 下一词候选
+    assert_eq!(last_preedit(&sigs).as_deref(), Some(""), "预测态没有拼音组合");
+    let cands = cands_of(&sigs);
+    assert!(cands.contains(&"you".to_string()), "面板应显示 you: {cands:?}");
+    assert!(
+        cands.first().map(String::as_str) == Some("you"),
+        "静态 thank→you 应排第一: {cands:?}"
+    );
+}
+
+#[test]
+fn m2_tab_commits_the_highlighted_next_word_with_one_leading_space() {
+    let h = &mut start_prediction_harness("english-wire-predict-tab");
+    select_word(h, "thank");
+    let consumed = h.key(keyval::TAB, 0);
+    assert!(consumed, "Tab 接受下一词必须被消费");
+    let sigs = h.settle_default();
+    assert_eq!(
+        last_commit(&sigs).as_deref(),
+        Some(" you"),
+        "延迟空格：只加一个前导空格"
+    );
+}
+
+#[test]
+fn m2_space_on_the_panel_is_forwarded_as_exactly_one_space() {
+    let h = &mut start_prediction_harness("english-wire-predict-space");
+    select_word(h, "thank");
+    let consumed = h.key(keyval::SPACE, 0);
+    assert!(!consumed, "面板上的空格必须交给应用（返回 false）");
+    let sigs = h.settle_default();
+    assert!(
+        last_commit(&sigs).is_none(),
+        "空格不得触发任何提交（否则应用会收到两个空格），实际 {:?}",
+        last_commit(&sigs)
+    );
+}
+
+#[test]
+fn m2_shift_tab_passes_through_instead_of_accepting_the_prediction() {
+    let h = &mut start_prediction_harness("english-wire-predict-shifttab");
+    select_word(h, "thank");
+    let consumed = h.key(keyval::TAB, support::M_SHIFT);
+    assert!(!consumed, "Shift+Tab 必须原样透传给应用");
+    let sigs = h.settle_default();
+    assert!(
+        last_commit(&sigs).is_none(),
+        "Shift+Tab 不得接受预测，实际提交了 {:?}",
+        last_commit(&sigs)
+    );
+}
+
+#[test]
+fn m2_predict_switch_off_means_no_panel_at_all() {
+    let mut h = Harness::new("english-wire-predict-off")
+        .with_env("XWX_ENGLISH", "1")
+        .with_env(
+            "XWX_ENGLISH_DICT_PATH",
+            english_fixture().to_string_lossy().to_string(),
+        )
+        .with_env(
+            "XWX_ENGLISH_BIGRAM_PATH",
+            prediction_fixture("bigram.bin").to_string_lossy().to_string(),
+        )
+        .with_env("XWX_ENGLISH_PREDICT", "0");
+    h.start_engine(support::shared_fixture());
+    let sigs = select_word(&mut h, "thank");
+    assert_eq!(last_commit(&sigs).as_deref(), Some("thank"));
+    // 关掉预测面板之后，空 preedit 的候选表要么没有、要么为空
+    let cands = last_table(&sigs).map(|t| t.candidates).unwrap_or_default();
+    assert!(cands.is_empty(), "关闭预测后不得出现下一词面板: {cands:?}");
+}
+
+#[test]
+fn m2_typing_a_letter_after_the_panel_returns_to_normal_composition() {
+    let h = &mut start_prediction_harness("english-wire-predict-letter");
+    select_word(h, "thank");
+    let consumed = h.key(keyval::ascii('y'), 0);
+    assert!(consumed, "字母要被输入法接住");
+    let sigs = h.settle_default();
+    let preedit = last_preedit(&sigs).unwrap_or_default();
+    assert_eq!(preedit, "y", "字母回到普通组合查询");
+}
+
+#[test]
+fn m2_focus_out_drops_the_panel_without_committing_it() {
+    let h = &mut start_prediction_harness("english-wire-predict-focus");
+    select_word(h, "thank");
+    h.focus_out().expect("FocusOut");
+    let sigs = h.settle_default();
+    assert!(
+        last_commit(&sigs).is_none(),
+        "焦点清算不得提交当前高亮的 you，实际 {:?}",
+        last_commit(&sigs)
+    );
+}
+
+#[test]
+fn m2_broken_bigram_only_disables_the_static_source() {
+    // 坏二元文件：英文补全与用户学习照常，只是没有静态条件排序
+    let mut h = Harness::new("english-wire-predict-badbigram")
+        .with_env("XWX_ENGLISH", "1")
+        .with_env(
+            "XWX_ENGLISH_DICT_PATH",
+            english_fixture().to_string_lossy().to_string(),
+        )
+        .with_env(
+            "XWX_ENGLISH_BIGRAM_PATH",
+            prediction_fixture("words.bin").to_string_lossy().to_string(),
+        )
+        .with_env("XWX_ENGLISH_PREDICT", "1");
+    h.start_engine(support::shared_fixture());
+    let sigs = type_word(&mut h, "pyth");
+    let cands = cands_of(&sigs);
+    assert!(
+        cands.iter().any(|c| c == "Python"),
+        "坏二元文件不得影响前缀补全: {cands:?}"
     );
 }

@@ -97,6 +97,8 @@ pub mod keyval {
     pub const PAGE_UP: u32 = 0xff55;
     pub const PAGE_DOWN: u32 = 0xff56;
     pub const DELETE: u32 = 0xffff;
+    /// Tab（`0xff09`）——只在预测态接受下一词。
+    pub const TAB: u32 = 0xff09;
 
     /// ASCII keyval for a letter/digit/punctuation (`'a'` → 0x61).
     pub fn ascii(c: char) -> u32 {

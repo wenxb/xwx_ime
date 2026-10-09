@@ -115,7 +115,7 @@ pub(crate) fn build_bigram(edges: &[BigramEdgeSpec]) -> Vec<u8> {
     let mut strings: Vec<u8> = Vec::new();
     let mut ctx_buf: Vec<u8> = Vec::new();
     let mut edge_buf: Vec<u8> = Vec::new();
-    let mut intern = |s: &str, strings: &mut Vec<u8>| -> (u32, u16) {
+    let intern = |s: &str, strings: &mut Vec<u8>| -> (u32, u16) {
         let off = strings.len() as u32;
         strings.extend_from_slice(s.as_bytes());
         (off, s.len() as u16)

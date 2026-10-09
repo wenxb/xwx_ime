@@ -181,9 +181,12 @@ impl InputSession {
                     }
                 }
             }
-            // Ctrl+空格：清预测/上文，切纯英文直通（消费）
+            // Ctrl+空格：清预测/上文，切纯英文直通（**消费**该键）
             InputEvent::ToggleAscii => {
-                self.close_and_clear();
+                self.clear_prediction();
+                // 复用模式切换本身（它会清英文上文并翻转模式）；预测态下
+                // 拼音串为空，所以它一定走「翻转 + Noop」分支。
+                let _ = self.toggle_ascii();
                 PredictionStep::Handled(SessionOutput::Updated(self.update()))
             }
         }

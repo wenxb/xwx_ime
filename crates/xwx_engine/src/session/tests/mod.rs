@@ -128,6 +128,7 @@ mod punct_verbatim;
 mod coin;
 mod apostrophe;
 mod english_flow;
+mod prediction_flow;
 mod paging_delete;
 mod prefix_mixed;
 mod url_dot;
