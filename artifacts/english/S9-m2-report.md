@@ -21,7 +21,7 @@ M1 报告见 [`S6-m1-report.md`](S6-m1-report.md)。
 ## 2. 验证命令与结果
 
 ```
-cargo test --workspace --offline                                 → 560 passed / 0 failed
+cargo test --workspace --offline                                 → 561 passed / 0 failed
 cargo clippy --workspace --all-targets --offline -- -D warnings  → 0 error / 0 warning
 python3 -m unittest discover -s scripts/tests -p 'test_english*.py' → 39 tests OK
 中文排序 vs S0 基线                                                → diff 为空
@@ -55,16 +55,23 @@ hello     T=177132480    all · to · everyone · from · kitty · there
 | 精确词 Top-1 | 88/98 = 89.8% | ≥90% | ❌ 差 1 条（同 M1） |
 | 精确词 Top-3 | 97/98 = 99.0% | ≥95% | ✅ |
 | 补全 Top-3 | 48/90 = 53.3% | ≥90% | ❌（同 M1，根因见 S6 报告 5.1） |
-| **下一词 Top-1** | **9/11 = 81.8%** | — | — |
+| **下一词 Top-1** | **10/11 = 90.9%** | — | — |
 | **下一词 Top-3** | **11/11 = 100%** | — | ✅ |
 | 中文保护 Top-1 | 17/18 = 94.4% | 不退化 | ✅ 与 mode=off 逐条相同 |
 | 中文保护 Top-9 | 18/18 = 100% | 不退化 | ✅ |
 | 整体命中 | 211/217 = 97.2% | — | — |
 | OOV | 0 | — | — |
 
-下一词两行没进 Top-1 的原因都是**同一前词下有更高计数的词**（例如
-`thank` 预取到 `the`，而 `you` 计数是它的 5.4 倍但被调参集的词汇隔离占用），
-不是实现缺陷；规格点名的 `thank → you` 作为调参集样例存在。
+下一词唯一没进 Top-1 的是 `thank → the`（`you` 的计数是它的 5.4 倍，但
+`you` 被调参集的词汇隔离占用）；规格点名的 `thank → you` 作为调参集样例存在，
+调参集下一词 Top-3 = 5/5。
+
+> **实施中发现并修掉的一处规格偏差**：零输入预测最初把 `input_len` 传成 `0`，
+> 于是 `extra = 词长`，长词被凭空惩罚（`word` 行里 `for` 掉到第 6 名）。
+> 规格第 6 节要求预测时 **`extra = 0`**。现在用 `InputLen::{Chars, None}` 把
+> 「组合态的实际串长」与「零输入没有串长」彻底分开，并有回归测试
+> `zero_input_never_applies_a_length_penalty` 钉住两者恰好差 0.15。
+> 修复后：下一词 Top-1 从 81.8% → **90.9%**，调参集 Top-3 从 4/5 → **5/5**。
 
 ## 5. 性能（`S9-english-perf.txt`，release，repeat=24）
 
@@ -72,9 +79,9 @@ hello     T=177132480    all · to · everyone · from · kitty · there
 |---|---|
 | 引擎装配（含英文词库完整校验） | 30.8 ms |
 | 引擎装配 **+ english_bigram.bin 完整校验** | **37.2 ms**（+6.4 ms，一次性） |
-| **零输入下一词（召回 + 条件排序）** | p50 **0.066 ms** / p95 **0.069 ms** / max **0.082 ms** |
+| **零输入下一词（召回 + 条件排序）** | p50 **0.066 ms** / p95 **0.078 ms** / max **0.083 ms** |
 | 超 12 ms 样本 | **0/144** |
-| 有英文上文的补全：无静态二元 vs 带静态二元 | p95 差值 **+0.021 ms** |
+| 有英文上文的补全：无静态二元 vs 带静态二元 | p95 差值 **+0.027 ms** |
 | 英文开-关 p95 差值（M1 场景） | -0.014 ~ +0.057 ms |
 
 预测面板比一次组合查询**快两个数量级**：它只查 16,315 行的二分索引，

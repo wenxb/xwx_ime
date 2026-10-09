@@ -66,8 +66,8 @@ pub(crate) struct EnglishHit {
 /// 实现按文档要求走**整数 base**：先算 `base_centi = q - 15 × extra`，
 /// 再除以 100.0 加 U/B——无学习时的同分关系因此与离线 Top-32 缓存一致，
 /// 不受两次浮点舍入影响。
-pub(crate) fn english_score(hit: &EnglishHit, input_len: usize) -> f32 {
-    let extra = hit.key.len().saturating_sub(input_len);
+pub(crate) fn english_score(hit: &EnglishHit, input_len: InputLen) -> f32 {
+    let extra = extra(hit, input_len);
     // 没有静态二元行时走**整数** base：同分关系与离线 Top-32 缓存逐位一致，
     // 不受两次浮点舍入影响（M1 的行为不能因为 M2 而漂移）。
     let base = match hit.static_base {
@@ -130,7 +130,7 @@ impl RankedEnglish {
 /// 不用 epsilon 比较器。
 pub(crate) fn rank_english(
     hits: Vec<EnglishHit>,
-    input_len: usize,
+    input_len: InputLen,
     ctx: &EnglishContext<'_>,
 ) -> RankedEnglish {
     let _ = ctx; // M1 的上文只通过用户二元计数体现;公式本身不额外读 ctx
@@ -153,8 +153,24 @@ pub(crate) fn rank_english(
     RankedEnglish { hits, scores }
 }
 
-fn extra(h: &EnglishHit, input_len: usize) -> usize {
-    h.key.len().saturating_sub(input_len)
+/// 打分时的「输入长度」。
+///
+/// **零输入预测不是「输入长度为 0」**：把 `0` 代进 `extra = key.len() - input_len`
+/// 会得到「整个词长」，于是长词被凭空惩罚（`for` 会比 `to` 低——规格第 6 节
+/// 明确要求预测时 `extra = 0`）。两种情形必须区分开。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputLen {
+    /// 组合态：实际输入串的字节数（ASCII 字母，等于字符数）。
+    Chars(usize),
+    /// 零输入预测：没有输入串，长度惩罚项恒为 0。
+    None,
+}
+
+fn extra(h: &EnglishHit, input_len: InputLen) -> usize {
+    match input_len {
+        InputLen::Chars(n) => h.key.len().saturating_sub(n),
+        InputLen::None => 0,
+    }
 }
 
 /// 从快照读用户计数（召回阶段一次取一代）。
@@ -238,18 +254,42 @@ mod tests {
     }
 
     #[test]
+    fn zero_input_never_applies_a_length_penalty() {
+        // `for`（z=7.01、计数 124206912/T）与 `to`（z=7.43、计数 80852032/T）：
+        // 组合态里 3 字母的 for 会被 extra 惩罚，零输入预测**不能**。
+        let mut f = hit("for", 701, EnglishMatchKind::NextWord, 0, 0);
+        f.static_base = conditional_base(701, 124_206_912, 1_000_000_000);
+        let mut t = hit("to", 743, EnglishMatchKind::NextWord, 0, 0);
+        t.static_base = conditional_base(743, 80_852_032, 1_000_000_000);
+        assert!(
+            english_score(&f, InputLen::None) > english_score(&t, InputLen::None),
+            "零输入里计数更高的 for 必须排在 to 前面"
+        );
+        // 组合态（`Chars(0)` 的旧语义）下 extra = 整个词长：`for` 比 `to`
+        // 多一个字，领先幅度**正好**被削掉 0.15——这就是两种情形必须
+        // 分开的原因，也是「传 0 而不是 None」会踩的坑。
+        let margin_none = english_score(&f, InputLen::None) - english_score(&t, InputLen::None);
+        let margin_chars =
+            english_score(&f, InputLen::Chars(0)) - english_score(&t, InputLen::Chars(0));
+        assert!(
+            (margin_none - margin_chars - 0.15).abs() < 1e-5,
+            "长度惩罚必须恰好差 0.15：none={margin_none} chars={margin_chars}"
+        );
+    }
+
+    #[test]
     fn pyth_completion_matches_hand_computed_score() {
         // 手算例（数据分册/引擎分册）：Python q=410，输入 pyth
         // extra = 6 - 4 = 2，S = 4.10 - 0.15×2 = 3.80
         let h = hit("python", 410, EnglishMatchKind::Completion, 0, 0);
-        assert!((english_score(&h, 4) - 3.80).abs() < 1e-6);
+        assert!((english_score(&h, InputLen::Chars(4)) - 3.80).abs() < 1e-6);
     }
 
     #[test]
     fn hello_exact_matches_hand_computed_score() {
         // hello q=450，输入 hello，u=b=0 ⇒ S = 4.50
         let h = hit("hello", 450, EnglishMatchKind::Exact, 0, 0);
-        assert!((english_score(&h, 5) - 4.50).abs() < 1e-6);
+        assert!((english_score(&h, InputLen::Chars(5)) - 4.50).abs() < 1e-6);
     }
 
     #[test]
@@ -257,7 +297,7 @@ mod tests {
         assert_eq!(unigram_gain(0), 0.0);
         assert_eq!(bigram_gain(0), 0.0);
         let h = hit("hello", 450, EnglishMatchKind::Exact, 0, 0);
-        assert_eq!(english_score(&h, 5), 4.5);
+        assert_eq!(english_score(&h, InputLen::Chars(5)), 4.5);
     }
 
     #[test]
@@ -265,7 +305,7 @@ mod tests {
         let mut prev = 0.0f32;
         for u in 0..50u32 {
             let h = hit("hello", 450, EnglishMatchKind::Exact, u, u);
-            let s = english_score(&h, 5);
+            let s = english_score(&h, InputLen::Chars(5));
             assert!(s >= prev, "u={u}: {s} < {prev}");
             prev = s;
         }
@@ -278,7 +318,7 @@ mod tests {
             hit("helloworld", 899, EnglishMatchKind::Completion, 0, 0),
             hit("hello", 100, EnglishMatchKind::Exact, 0, 0),
         ];
-        let out = rank_english(hits, 5, &EnglishContext::empty()).candidates(5);
+        let out = rank_english(hits, InputLen::Chars(5), &EnglishContext::empty()).candidates(5);
         assert_eq!(out[0].word, "hello");
         assert_eq!(out[0].english_key(), Some("hello"));
     }
@@ -291,7 +331,7 @@ mod tests {
             hit("abc", 500, EnglishMatchKind::Completion, 0, 0),
             hit("abce", 500, EnglishMatchKind::Completion, 0, 0),
         ];
-        let out = rank_english(hits, 3, &EnglishContext::empty()).candidates(3);
+        let out = rank_english(hits, InputLen::Chars(3), &EnglishContext::empty()).candidates(3);
         let keys: Vec<&str> = out.iter().filter_map(|c| c.english_key()).collect();
         assert_eq!(keys, ["abc", "abce", "abcde"]);
     }
@@ -304,8 +344,8 @@ mod tests {
                 hit(&k, 300 + i as u16, EnglishMatchKind::Completion, 0, 0)
             })
             .collect();
-        let a = rank_english(hits.clone(), 1, &EnglishContext::empty());
-        let b = rank_english(hits, 1, &EnglishContext::empty());
+        let a = rank_english(hits.clone(), InputLen::Chars(1), &EnglishContext::empty());
+        let b = rank_english(hits, InputLen::Chars(1), &EnglishContext::empty());
         assert_eq!(a.hits.len(), ENGLISH_DISPLAY_LIMIT);
         assert_eq!(a.hits, b.hits);
     }
@@ -314,7 +354,10 @@ mod tests {
     fn scores_are_always_finite() {
         for (q, u, b, len) in [(0u16, 0u32, 0u32, 48usize), (900, 1000, 1000, 1), (900, u32::MAX, u32::MAX, 0)] {
             let h = hit("abcdefgh", q, EnglishMatchKind::Completion, u, b);
-            assert!(english_score(&h, len).is_finite(), "q={q} u={u} b={b}");
+            assert!(
+                english_score(&h, InputLen::Chars(len)).is_finite(),
+                "q={q} u={u} b={b}"
+            );
         }
     }
 }

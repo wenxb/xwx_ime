@@ -5,7 +5,7 @@
 //! 不引入线程池、异步竞态或锁等待。
 
 use crate::candidate::Candidate;
-use crate::english::{rank_english, recall_english, EnglishContext};
+use crate::english::{rank_english, recall_english, EnglishContext, InputLen};
 use crate::lm::LmContext;
 
 use super::blend::{classify_intent, stable_blend, strong_chinese};
@@ -67,7 +67,7 @@ impl ImeEngine {
             return Ok(zh); // 英文为空:原样返回，不重排
         }
         let pool = hits.len();
-        let ranked = rank_english(hits, key.len(), english_context);
+        let ranked = rank_english(hits, InputLen::Chars(key.len()), english_context);
         let e0_zipf = ranked.first().map(|h| h.zipf_centi).unwrap_or(0);
         let e0_unigram = ranked.first().map(|h| h.user_unigram).unwrap_or(0);
         let recent_en = english_context.previous_word.is_some();

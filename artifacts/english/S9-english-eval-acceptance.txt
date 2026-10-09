@@ -1,4 +1,5 @@
-    Finished `release` profile [optimized] target(s) in 0.07s
+   Compiling xwx_engine v0.1.0 (/home/youngwen/Desktop/xwx_ime/crates/xwx_engine)
+    Finished `release` profile [optimized] target(s) in 1.43s
      Running `/mnt/hdd/target/xwx_ime/release/examples/english_eval --data data --english data/english.bin --bigram data/english_bigram.bin --corpus tests/corpora/english_acceptance.jsonl --mode on`
 == 装配 ==
 中文数据目录: data
@@ -11,7 +12,7 @@
 精确词 Top-1 : 88/98 = 89.8%
 精确词 Top-3 : 97/98 = 99.0%
 补全   Top-3 : 48/90 = 53.3%
-下一词 Top-1 : 9/11 = 81.8%
+下一词 Top-1 : 10/11 = 90.9%
 下一词 Top-3 : 11/11 = 100.0%
 中文保护 Top-1: 17/18 = 94.4%
 中文保护 Top-9: 18/18 = 100.0%

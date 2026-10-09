@@ -35,7 +35,7 @@ pub use context::EnglishContext;
 pub use dict::{static_score_centi, EnglishDict, EnglishEntryRef};
 pub use format::{is_english_key, EnglishError};
 pub use rank::ENGLISH_DISPLAY_LIMIT;
-pub(crate) use rank::rank_english;
+pub(crate) use rank::{rank_english, InputLen};
 pub(crate) use recall::recall_english;
 
 /// 英文用户学习的**默认文件名**（release）。
@@ -179,8 +179,10 @@ impl EnglishEngine {
         }
         merged.retain(|key, _| !snapshot.is_blocked(recall::ENGLISH_BLOCK_NAMESPACE, key));
 
-        // extra = 0：零输入没有「补全差多少」这回事。
-        let ranked: RankedEnglish = rank::rank_english(merged.into_values().collect(), 0, ctx);
+        // `InputLen::None`：零输入没有「补全差多少」这回事，长度惩罚恒为 0。
+        // （传 `0` 会把它变成「整个词长」，凭空惩罚长词——见 `InputLen`。）
+        let ranked: RankedEnglish =
+            rank::rank_english(merged.into_values().collect(), rank::InputLen::None, ctx);
         let mut out = ranked.candidates(0);
         out.truncate(ENGLISH_NEXT_LIMIT);
         Ok(out)

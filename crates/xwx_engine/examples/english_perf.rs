@@ -327,6 +327,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    if let Some(prev) = arg("--next", false) {
+        dump_next(&engine_m2, &prev);
+    }
+
     println!("\n== 稳态（英文关 / 英文开 / 英文开+受控用户模型）==");
     // **先热身**:引擎刚装配完时页缓存是冷的(上面「英文关」那组的第一轮
     // 会带 78ms 的冷页缺页),不热身的话「开/关差值」测的是缓存而不是代码。
@@ -371,4 +375,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("\n注：这里是**纯会话/引擎**时间；D-Bus 往返另测，不把两者混为一谈。");
     Ok(())
+}
+
+/// 诊断入口：打印某个 prev 的完整下一词列表（`--next <prev>`）。
+pub fn dump_next(engine: &ImeEngine, prev: &str) {
+    let Some(en) = engine.english() else {
+        println!("(英文未装配)");
+        return;
+    };
+    let ctx = EnglishContext::with_previous(prev);
+    let list = en.next_candidates(&ctx).expect("查询失败");
+    let names: Vec<String> = list
+        .iter()
+        .map(|c| format!("{}({:.4})", c.word, c.score))
+        .collect();
+    println!("next({prev}) → {names:?}");
 }
