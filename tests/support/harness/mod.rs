@@ -214,7 +214,17 @@ impl Harness {
             .env("XDG_DATA_HOME", self.root.join("xdg"))
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
             .env("HOME", self.root.join("home"))
+            // 英文通道的**默认关闭**:只重定向 HOME/XDG 还不够,系统目录
+            // `/usr/share/xwx/english.bin` 仍可能被读到(装了 deb 的机器上
+            // 一定存在),那会让「英文相关断言」在别人机器上悄悄变红/变绿。
+            // 新英文测试用 `with_env` 显式覆盖下面这些值。
+            .env("XWX_ENGLISH", "0")
+            .env("XWX_ENGLISH_PREDICT", "0")
+            .env("XWX_ENGLISH_DICT_PATH", self.root.join("absent-english.bin"))
+            .env("XWX_ENGLISH_BIGRAM_PATH", self.root.join("absent-english-bigram.bin"))
+            .env("XWX_ENGLISH_USER_LM_PATH", self.root.join("cfg/user_english.txt"))
             .env("RUST_LOG", "info")
+            // extra_env 在最后:**测试显式给的路径必须压过上面的默认值**。
             .envs(self.extra_env.iter().map(|(k, v)| (k.clone(), v.clone())))
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))

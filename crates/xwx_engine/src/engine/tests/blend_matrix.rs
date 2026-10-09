@@ -176,6 +176,36 @@ fn c10_empty_english_recall_returns_the_chinese_vector_untouched() {
     );
 }
 
+// ---------- D09：坏英文不影响中文 ----------
+
+#[test]
+fn d09_a_corrupt_english_file_leaves_chinese_queries_untouched() {
+    // 坏文件在**装配期**就被拒（`EnglishDict::from_bytes` 返回 Err），
+    // 装配层随之只关闭英文。这里钉住「关掉之后中文查询逐字节不变」。
+    let good = build_synth_bin(WORDS);
+    let mut bad = good.clone();
+    bad[1] = b'Z'; // 坏魔数（下标 0 本来就是 'X'）
+    assert!(EnglishDict::from_bytes(bad).is_err(), "坏文件必须被拒绝");
+
+    let zh_only = ImeEngine::new(None).expect("内存引擎创建失败");
+    zh_only.dict.upsert("你好", "ni hao", 50).expect("插入");
+    let still_chinese = engine_with(WORDS);
+    still_chinese.dict.upsert("你好", "ni hao", 50).expect("插入");
+    for input in ["ni", "niha", "nihao"] {
+        let a = zh_only
+            .lookup_candidates(input, &LmContext::empty())
+            .expect("查询失败");
+        let b = still_chinese
+            .lookup_candidates(input, &LmContext::empty())
+            .expect("查询失败");
+        assert_eq!(
+            serde_json::to_string(&a).expect("序列化"),
+            serde_json::to_string(&b).expect("序列化"),
+            "{input}: 中文路径不得受英文装配影响"
+        );
+    }
+}
+
 // ---------- C12：中文满上限时不被混排挤掉 ----------
 
 #[test]

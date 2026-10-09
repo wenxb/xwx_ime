@@ -17,10 +17,12 @@ fn english_fixture() -> PathBuf {
 }
 
 fn start_english_harness(label: &str) -> Harness {
-    let mut h = Harness::new(label).with_env(
-        "XWX_ENGLISH_DICT_PATH",
-        english_fixture().to_string_lossy().to_string(),
-    );
+    let mut h = Harness::new(label)
+        .with_env("XWX_ENGLISH", "1")
+        .with_env(
+            "XWX_ENGLISH_DICT_PATH",
+            english_fixture().to_string_lossy().to_string(),
+        );
     h.start_engine(support::shared_fixture());
     h
 }
@@ -162,6 +164,53 @@ fn missing_english_dict_degrades_without_breaking_chinese() {
     assert!(
         !cands.is_empty(),
         "英文降级不得牵连中文候选，实际 {cands:?}"
+    );
+}
+
+#[test]
+fn i05_sigint_and_sigterm_both_save_the_english_tail_counts() {
+    // 英文尾部计数必须和中文一样在退出时落盘：commit 一个英文词（dirty=1，
+    // 远低于 64 的批量阈值），然后 SIGTERM，检查英文用户文件里真的有它。
+    let h = &mut start_english_harness("english-wire-flush");
+    let sigs = type_word(h, "hello");
+    assert!(cands_of(&sigs).contains(&"hello".to_string()));
+    h.key(keyval::SPACE, 0);
+    h.settle_default();
+    // 用 SIGTERM 走 `sigterm.recv()` 分支（Ctrl+C 分支由既有 hermeticity 测试覆盖）。
+    let pid = h.engine_pid_for_test().to_string();
+    let _ = std::process::Command::new("kill")
+        .args(["-TERM", &pid])
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(800));
+
+    let user_file = h.root.join("cfg/user_english.txt");
+    let text = std::fs::read_to_string(&user_file).unwrap_or_else(|e| {
+        panic!("英文用户文件应已落盘 {}: {e}", user_file.display())
+    });
+    assert!(
+        text.contains("hello"),
+        "SIGTERM 后英文用户文件里应有 hello：\n{text}"
+    );
+}
+
+#[test]
+fn i03_bad_english_data_still_lets_chinese_through() {
+    // 坏数据（这里是「存在但不是合法 english.bin」）只关闭英文通道。
+    let bad = tempfile::NamedTempFile::new().expect("临时文件");
+    std::fs::write(bad.path(), b"not an english.bin at all").expect("写坏数据");
+    let mut h = Harness::new("english-wire-bad-data").with_env(
+        "XWX_ENGLISH_DICT_PATH",
+        bad.path().to_string_lossy().to_string(),
+    );
+    h.start_engine(support::shared_fixture());
+    let sigs = type_word(&mut h, "nihao");
+    assert!(
+        !cands_of(&sigs).is_empty(),
+        "坏英文数据不得影响中文候选"
+    );
+    assert!(
+        !cands_of(&sigs).iter().any(|c| c == "hello"),
+        "坏数据下不该有英文候选"
     );
 }
 
