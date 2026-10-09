@@ -41,8 +41,8 @@ pub use candidate::{Candidate, SpellingKind};
 pub use corrector::{expand_fuzzy, expand_fuzzy_scored, ConfusionPair, COMMON_CONFUSION_PAIRS};
 pub use dict::{DictError, DictStore, Dictionary, MmapDict, SqliteDict};
 pub use english::{
-    EnglishDict, EnglishEntryRef, EnglishError, ENGLISH_USER_LM_DEV_FILE_NAME,
-    ENGLISH_USER_LM_FILE_NAME,
+    EnglishContext, EnglishDict, EnglishEngine, EnglishEntryRef, EnglishError,
+    ENGLISH_USER_LM_DEV_FILE_NAME, ENGLISH_USER_LM_FILE_NAME,
 };
 pub use lm::{BigramLM, LanguageModel, LmContext, LmError, LmState, LmStore};
 pub use lm::{MixedLM, MixedState, USER_COUNT_GAIN_R};

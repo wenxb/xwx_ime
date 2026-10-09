@@ -137,6 +137,16 @@ impl XwxEngineServer {
     }
 
     /// 复位会话并收起全部 UI（FocusOut / Reset / Disable 共用）。
+    /// 英文上下文失效（IBus 层钩子）。
+    ///
+    /// 只清英文上文与延迟空格状态——**不碰**中文组合、不隐藏候选窗、
+    /// 不发 UI 信号（会话分册第 2 节）。用于那些在进入会话之前就
+    /// `return false` 的事件。
+    async fn invalidate_english_context(&self) {
+        let mut session = self.session.lock().await;
+        session.clear_english_context();
+    }
+
     async fn reset_state(&self, ctxt: &zbus::SignalContext<'_>) {
         let (was_active, pending) = {
             let mut session = self.session.lock().await;
@@ -246,15 +256,24 @@ impl XwxEngineServer {
         }
 
         // —— 其余：释放事件与 Ctrl/Alt/Super/Hyper/Meta 组合键透传给应用 ——
-        if state
-            & (ibus_proto::IBUS_RELEASE_MASK
-                | ibus_proto::IBUS_CONTROL_MASK
+        //
+        // 两者对**英文上下文**的处理相反（会话分册第 2 节最后两行）：
+        // - 按键**释放**不清：连续打英文时每个字母都会来一次 release，
+        //   清一下就等于每个字母都毁掉上文（下一词召回与延迟空格全失效）；
+        // - 应用**快捷键**（按下）要清：它可能在进入会话之前就透传了，
+        //   而「按了应用快捷键」是明确的操作边界。
+        let is_release = state & ibus_proto::IBUS_RELEASE_MASK != 0;
+        let is_modifier_combo = state
+            & (ibus_proto::IBUS_CONTROL_MASK
                 | ibus_proto::IBUS_MOD1_MASK
                 | ibus_proto::IBUS_SUPER_MASK
                 | ibus_proto::IBUS_HYPER_MASK
                 | ibus_proto::IBUS_META_MASK)
-            != 0
-        {
+            != 0;
+        if is_release || is_modifier_combo {
+            if !is_release {
+                self.invalidate_english_context().await;
+            }
             return false;
         }
         // —— 英文模式:按键直接透传给应用 ——
@@ -265,10 +284,14 @@ impl XwxEngineServer {
         // 原始 keyval+state 原样交给应用,一个字都不动。
         let in_english = self.session.lock().await.english_mode();
         if in_english {
+            // 直通应用的原始按键同样是英文链的边界（应用自己决定它是什么）。
+            self.invalidate_english_context().await;
             return false;
         }
 
         let Some(event) = ibus_proto::translate_keyval(keyval, state) else {
+            // 翻译层不认识的按键会原样透传给应用——同样是边界。
+            self.invalidate_english_context().await;
             return false;
         };
         self.handle_key(&ctxt, event).await

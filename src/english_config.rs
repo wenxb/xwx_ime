@@ -5,10 +5,6 @@
 //! `with_english(...)`，不靠进程环境。
 //!
 //! 配置表见 `docs/english-input/01-data.md` 第 7 节。
-//!
-//! TODO(S5): 生产装配接上 `with_english` 后删除下面这条临时豁免——
-//! 阶段性接口「写了还没接线」不是给它永久开绿灯的理由。
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 

@@ -29,6 +29,16 @@ fn session_with_english() -> InputSession {
     session_with_words(words())
 }
 
+/// 中英两条用户层都在的会话（删除/撤销要两边都有载体才测得出来）。
+fn session_with_both_user_lms() -> InputSession {
+    let dict = EnglishDict::from_bytes(build_synth_bin(&words())).expect("合成英文词库应可读");
+    let engine = ImeEngine::new(None)
+        .expect("内存引擎创建失败")
+        .with_user_lm(crate::UserLM::in_memory())
+        .with_english(EnglishEngine::new(dict).with_user_lm(crate::UserLM::in_memory()));
+    InputSession::new(Arc::new(engine))
+}
+
 /// 逐键打一串小写字母。
 fn type_letters(s: &mut InputSession, text: &str) {
     for ch in text.chars() {
@@ -337,7 +347,7 @@ fn u06_python_and_capitalized_share_one_counter_but_display_keeps_case() {
 
 #[test]
 fn u07_blocking_python_hides_it_from_prefix_exact_and_later_queries() {
-    let mut s = session_with_english();
+    let mut s = session_with_both_user_lms();
     type_letters(&mut s, "pyth");
     highlight(&mut s, "Python");
     s.handle(InputEvent::DeleteCandidate).expect("删候选");
@@ -351,6 +361,75 @@ fn u07_blocking_python_hides_it_from_prefix_exact_and_later_queries() {
             "屏蔽后 {input} 不得再召回 python"
         );
     }
+}
+
+#[test]
+fn u08_undo_reverts_the_actually_most_recent_delete_not_the_current_language() {
+    // 中文 → 英文交错删除后，撤销的是**真正最近**的那一次。
+    let mut s = session_with_both_user_lms();
+    s.engine.dict.upsert("你好", "ni hao", 100).expect("插入");
+    s.engine.dict.upsert("泥好", "ni hao", 90).expect("插入");
+
+    type_letters(&mut s, "nihao");
+    highlight(&mut s, "你好");
+    s.handle(InputEvent::DeleteCandidate).expect("删中文");
+    s.handle(InputEvent::Escape).expect("清组合");
+    type_letters(&mut s, "pyth");
+    highlight(&mut s, "Python");
+    s.handle(InputEvent::DeleteCandidate).expect("删英文");
+
+    assert!(s.engine.unblock_last_candidate(), "应撤回英文那一条（最后一次）");
+    // 英文回来
+    s.handle(InputEvent::Escape).expect("清组合");
+    type_letters(&mut s, "pyth");
+    assert!(
+        s.candidates.iter().any(|c| c.english_key() == Some("python")),
+        "撤销后 Python 必须回来"
+    );
+    // 中文那条仍在屏蔽表里（撤销只撤一条，不按当前高亮猜语言）。
+    s.handle(InputEvent::Escape).expect("清组合");
+    type_letters(&mut s, "nihao");
+    assert!(
+        !s.candidates.iter().any(|c| c.word == "你好"),
+        "撤销英文不该顺带把中文那条也放了"
+    );
+}
+
+#[test]
+fn u08_undo_prefers_english_when_english_was_deleted_last() {
+    let mut s = session_with_both_user_lms();
+    s.engine.dict.upsert("你好", "ni hao", 100).expect("插入");
+    type_letters(&mut s, "pyth");
+    highlight(&mut s, "Python");
+    s.handle(InputEvent::DeleteCandidate).expect("删英文");
+    s.handle(InputEvent::Escape).expect("清组合");
+    type_letters(&mut s, "nihao");
+    highlight(&mut s, "你好");
+    s.handle(InputEvent::DeleteCandidate).expect("删中文");
+
+    assert!(s.engine.unblock_last_candidate(), "应撤回中文那一条（最后一次）");
+    s.handle(InputEvent::Escape).expect("清组合");
+    type_letters(&mut s, "nihao");
+    assert!(s.candidates.iter().any(|c| c.word == "你好"), "中文应回来");
+    s.handle(InputEvent::Escape).expect("清组合");
+    type_letters(&mut s, "pyth");
+    assert!(
+        !s.candidates.iter().any(|c| c.english_key() == Some("python")),
+        "英文那条仍应在屏蔽表里"
+    );
+}
+
+#[test]
+fn u08_repeated_delete_does_not_overwrite_the_undo_slot() {
+    // 「删除未实际发生」时不得腾空撤销槽位。
+    let mut s = session_with_both_user_lms();
+    type_letters(&mut s, "pyth");
+    highlight(&mut s, "Python");
+    s.handle(InputEvent::DeleteCandidate).expect("删英文");
+    // 再删一次同一个词：它已不在候选里，手里没有可删的候选——直接问引擎。
+    s.engine.delete_english_candidate("python");
+    assert!(s.engine.unblock_last_candidate(), "槽位不该被重复删除清空");
+    assert!(!s.engine.unblock_last_candidate(), "撤过之后没有第二条");
 }
 
 // ---------- 完整时序（会话分册第 10 节） ----------

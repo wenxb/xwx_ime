@@ -31,4 +31,33 @@ pub struct ImeEngine {
     /// 裸构造器（[`ImeEngine::new`] / `new_with_lm`）**不**装配它——生产入口
     /// 用 [`ImeEngine::with_english`] 显式接上，测试与探针同理。
     pub english: Option<EnglishEngine>,
+    /// **跨语言共享**的最近一次删除记录（Ctrl+Shift+Delete 撤销用）。
+    ///
+    /// 为什么必须共享：中英各有一个用户实例，各自的「最近一条」槽位互不
+    /// 知道对方——用户先删中文、再删英文，撤销时按当前高亮的语言猜就会
+    /// 撤错那一边（会话分册第 8 节明确禁止这种做法）。
+    ///
+    /// 锁顺序固定为 **undo → UserLM**：删除与撤销在这里串行化，查询路径
+    /// **不取这把锁**，UserLM 回调也不反向取它。
+    pub undo: std::sync::Mutex<Option<UndoRecord>>,
+}
+
+/// 删除发生在哪条通道上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteLanguage {
+    /// 中文：屏蔽键是 `(拼音 key, 词)`。
+    Chinese,
+    /// 英文：屏蔽键是 `(目标完整小写 key, "__english__")`。
+    English,
+}
+
+/// 共享撤销记录：**最近一次真正发生的删除**。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoRecord {
+    /// 删除发生在哪条通道。
+    pub language: DeleteLanguage,
+    /// 被删的词面（英文是显示形式，中文是词）。
+    pub word: String,
+    /// 屏蔽键的另一半（中文是拼音 key，英文是英文命名空间）。
+    pub key: String,
 }

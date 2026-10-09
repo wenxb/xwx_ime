@@ -547,7 +547,7 @@ pub(crate) struct DecodedPath {
 }
 
 
-pub use types::ImeEngine;
+pub use types::{DeleteLanguage, ImeEngine, UndoRecord};
 
 /// 混排用的中文候选上限（与 `lookup_candidates` 的截断共用同一个数）。
 pub(crate) fn max_candidates() -> usize {

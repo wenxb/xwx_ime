@@ -69,6 +69,7 @@ impl ImeEngine {
             // 裸构造器不装英文:查询/学习/按键透传全部保持旧行为,
             // 由生产入口或测试显式 `with_english` 接上。
             english: None,
+            undo: std::sync::Mutex::new(None),
         })
     }
 
@@ -221,7 +222,40 @@ impl ImeEngine {
         let Some(user) = self.user_lm() else {
             return;
         };
+        // 「删除未实际发生」时不能覆盖上一条有效撤销记录：重复屏蔽同一个词
+        // 不该把撤销槽位腾空。
+        let newly = !user.snapshot().is_blocked(pinyin_key, word);
         user.block_candidate(word, pinyin_key);
+        if newly {
+            self.record_undo(DeleteLanguage::Chinese, word, pinyin_key);
+        }
+    }
+
+    /// 删一条**英文**候选：屏蔽目标完整 key（不是当前前缀）。
+    ///
+    /// 命名空间固定为 `"__english__"`，因此 `pyth` 下屏蔽 `Python` 之后，
+    /// `python`/`pytho`/下一词预测都不再召回它。计数清理沿用
+    /// [`UserLM::block_candidate`] 的既有规则（一元 + 双向二元）。
+    pub(crate) fn delete_english_candidate(&self, key: &str) {
+        let Some(en) = self.english.as_ref() else {
+            return;
+        };
+        let ns = crate::english::recall::ENGLISH_BLOCK_NAMESPACE;
+        let newly = !en.user().snapshot().is_blocked(ns, key);
+        en.user().block_candidate(key, ns);
+        if newly {
+            self.record_undo(DeleteLanguage::English, key, ns);
+        }
+    }
+
+    /// 写下共享撤销记录（锁顺序：undo → UserLM，本函数不取 UserLM）。
+    fn record_undo(&self, language: DeleteLanguage, word: &str, key: &str) {
+        let mut guard = self.undo.lock().unwrap_or_else(|p| p.into_inner());
+        *guard = Some(UndoRecord {
+            language,
+            word: word.to_string(),
+            key: key.to_string(),
+        });
     }
 
     /// **撤销最近一次屏蔽**（`Ctrl+Shift+Delete` 用）。返回是否真的撤了一条。
@@ -229,7 +263,27 @@ impl ImeEngine {
     /// 与「指名道姓」的解屏蔽分工不同：被屏蔽的候选本来就不在列表里，用户手上
     /// 没有可点的东西，所以这里只认槽位里的最近一条（见 `UserLM::unblock_last`）。
     pub(crate) fn unblock_last_candidate(&self) -> bool {
-        self.user_lm().is_some_and(|u| u.unblock_last())
+        // 锁顺序 undo → UserLM:先拿记录，再进用户实例。撤成功后清空槽位
+        // （再按一次没有「第二条」可撤，与旧 `unblock_last` 的单槽语义一致）。
+        let mut guard = self.undo.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rec) = guard.clone() else {
+            // 没有共享记录时退回用户层自己的槽位（旧中文路径的行为）。
+            return self.user_lm().is_some_and(|u| u.unblock_last());
+        };
+        let ok = match rec.language {
+            // `unblock` 返回 dirty 计数：0 表示屏蔽表里本来就没有这一条。
+            DeleteLanguage::Chinese => self
+                .user_lm()
+                .is_some_and(|u| u.unblock(&rec.word, &rec.key) > 0),
+            DeleteLanguage::English => self
+                .english
+                .as_ref()
+                .is_some_and(|e| e.user().unblock(&rec.word, &rec.key) > 0),
+        };
+        if ok {
+            *guard = None;
+        }
+        ok
     }
 
     /// 当前词库词条总数（启动日志/统计用；内存空词库时为 0）。

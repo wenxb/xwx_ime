@@ -42,6 +42,8 @@ pub struct Harness {
     /// everything observed so far without re-plumbing the channel).
     backlog: VecDeque<Signal>,
     engine_log: PathBuf,
+    /// 追加给被测引擎的环境变量（英文通道等可选装配用它显式接线）。
+    extra_env: Vec<(String, String)>,
 }
 
 impl Harness {
@@ -79,6 +81,7 @@ impl Harness {
             rx: None,
             backlog: VecDeque::new(),
             engine_log,
+            extra_env: Vec::new(),
         }
     }
 
@@ -164,6 +167,15 @@ impl Harness {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// 给**下一次** `start_engine*` 追加一个环境变量。
+    ///
+    /// 英文通道是可选装配（`XWX_ENGLISH*`），默认路径在仓外，所以它必须
+    /// 由测试显式接线——同时这也证明「不设这些变量时英文整体关闭」。
+    pub fn with_env(mut self, key: &str, value: impl Into<String>) -> Self {
+        self.extra_env.push((key.to_string(), value.into()));
+        self
+    }
+
     pub fn start_engine_with(
         &mut self,
         dict: &Path,
@@ -203,6 +215,7 @@ impl Harness {
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
             .env("HOME", self.root.join("home"))
             .env("RUST_LOG", "info")
+            .envs(self.extra_env.iter().map(|(k, v)| (k.clone(), v.clone())))
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log2))

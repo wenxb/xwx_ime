@@ -225,6 +225,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user_lm_path = resolve_data_path("XWX_USER_LM_PATH", user_lm_file_name());
     let engine = engine.with_user_lm(xwx_engine::UserLM::open_or_create(&user_lm_path));
     tracing::info!(path = %user_lm_path.display(), "用户学习模型已接入");
+
+    // —— 英文通道(可选,2026-10 英文输入)——
+    // 三件事按顺序:
+    //   1. `XWX_ENGLISH=0` 时**什么都不做**:不打开词库、不打开/创建英文
+    //      用户文件(关闭功能后不得留下新的路径访问与写文件副作用);
+    //   2. 词库打开失败(缺文件/损坏)**只关闭英文**并告警,中文候选、中文
+    //      用户模型与按键行为一律不变——这是本通道唯一的降级方式;
+    //   3. 英文用户文件是**独立**文件(默认 `user_english[.dev].txt`),
+    //      绝不与中文 `user_bigram.txt` 混用:两者计数混在一起会让
+    //      「学英文」改变中文候选。
+    let english_cfg = english_config::EnglishConfig::from_env();
+    let engine = if !english_cfg.enabled {
+        tracing::info!(env = english_config::ENGLISH_ENV, "英文通道已关闭");
+        engine
+    } else {
+        match xwx_engine::EnglishDict::open(&english_cfg.dict_path) {
+            Ok(dict) => {
+                let en_user =
+                    xwx_engine::UserLM::open_or_create(&english_cfg.user_path);
+                let english = xwx_engine::EnglishEngine::new(dict)
+                    .with_user_lm(en_user)
+                    .with_predict(english_cfg.predict);
+                tracing::info!(
+                    dict = %english_cfg.dict_path.display(),
+                    user = %english_cfg.user_path.display(),
+                    words = english.dict().word_count(),
+                    prefixes = english.dict().prefix_count(),
+                    predict = english_cfg.predict,
+                    // M2 才消费这份数据;M1 只解析路径并在启动日志里报出来
+                    // （路径解析错误在启动期就能被发现,而不是等到开预测）。
+                    bigram = %english_cfg.bigram_path.display(),
+                    "英文通道已接入"
+                );
+                engine.with_english(english)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %english_cfg.dict_path.display(),
+                    "英文词库打开失败,英文通道降级为关闭(中文不受影响)"
+                );
+                engine
+            }
+        }
+    };
     let engine = Arc::new(engine);
 
     // 启动期确定性初始化:词频总量线性扫描 + 纠错变体表。
@@ -318,9 +363,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // **任意非零增量都保存**(30s 一次):[`FLUSH_LEARN_THRESHOLD`]
                 // 只是额外触发,不是「不到 64 次就不存」——旧实现那样会让不足
                 // 阈值的尾巴在退出时被 `flush` 的 `dirty == 0` 早退跳过。
-                if engine.user_lm().is_some_and(|u| u.dirty_count() > 0) {
+                let zh_dirty = engine.user_lm().is_some_and(|u| u.dirty_count() > 0);
+                let en_dirty = engine
+                    .english()
+                    .is_some_and(|e| e.user().dirty_count() > 0);
+                if zh_dirty || en_dirty {
                     flush_user_lm(&engine).await;
-                    tracing::info!("用户语言模型定时回写完成");
+                    tracing::info!(zh = zh_dirty, en = en_dirty, "用户语言模型定时回写完成");
                 }
             }
             _ = sigterm.recv() => {
@@ -343,12 +392,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 用户模型落盘放到**阻塞线程**上:序列化 + `sync_data` 是同步 IO,
 /// 直接在 tokio 运行时里跑会卡住定时器与信号处理。
+///
+/// 中英两个模型**分别** flush:一个失败不能阻止另一个(英文写不进去时
+/// 中文的增量照样要落盘,反之亦然)。
 async fn flush_user_lm(engine: &Arc<ImeEngine>) {
     let engine = Arc::clone(engine);
     let _ = tokio::task::spawn_blocking(move || {
         if let Some(user) = engine.user_lm() {
             if let Err(e) = user.flush() {
-                tracing::warn!(error = %e, "用户语言模型回写失败");
+                tracing::warn!(error = %e, "中文用户语言模型回写失败");
+            }
+        }
+        if let Some(en) = engine.english() {
+            if let Err(e) = en.user().flush() {
+                tracing::warn!(error = %e, "英文用户语言模型回写失败");
             }
         }
     })

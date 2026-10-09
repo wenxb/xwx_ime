@@ -90,6 +90,17 @@ impl InputSession {
         &self.english
     }
 
+    /// **英文上下文失效**（IBus 层的钩子入口）。
+    ///
+    /// 只清英文上文与延迟空格状态：不碰中文组合、不清 `committed_tail`、
+    /// 不动 `last_word`、不发任何 UI 信号。用在「按下了但没进会话」的
+    /// 那些事件上（应用快捷键、英文模式直通、无法翻译的按键）——它们
+    /// 在 `process_key_event` 里就 `return false` 了，会话根本看不到
+    /// （会话分册第 2 节最后两行）。
+    pub fn clear_english_context(&mut self) {
+        self.english.clear();
+    }
+
     /// 取当前界面快照。
     /// 组合还活着吗——**剩余串与已确认段任一非空**都算。
     ///

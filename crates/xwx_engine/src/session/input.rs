@@ -503,7 +503,12 @@ impl InputSession {
             // 对空候选收敛 cursor/page,update 照常返回。
             InputEvent::DeleteCandidate if !self.pinyin.is_empty() => {
                 if let Some(c) = self.candidates.get(self.cursor).cloned() {
-                    self.engine.delete_candidate(&c.word, &c.pinyin);
+                    // 按**元数据**分流：英文屏蔽的是目标完整 key，
+                    // 中文屏蔽的是 (拼音, 词)——两者的撤销槽位是同一个。
+                    match c.english_key() {
+                        Some(key) => self.engine.delete_english_candidate(key),
+                        None => self.engine.delete_candidate(&c.word, &c.pinyin),
+                    }
                     self.refresh()?;
                 }
                 Ok(SessionOutput::Updated(self.update()))
