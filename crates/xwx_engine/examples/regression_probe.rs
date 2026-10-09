@@ -386,6 +386,11 @@ fn write_session_section(
 }
 
 /// 按键脚本(运行时构造:拼音串逐字符 + 收尾动作)。
+#[path = "regression_probe/describe.rs"]
+mod describe;
+
+use describe::{describe, describe_out};
+
 fn session_scripts() -> Vec<(&'static str, Vec<InputEvent>)> {
     let letters = |s: &str| -> Vec<InputEvent> { s.chars().map(InputEvent::Char).collect() };
     let mut scripts: Vec<(&'static str, Vec<InputEvent>)> = Vec::new();
@@ -444,58 +449,6 @@ fn session_scripts() -> Vec<(&'static str, Vec<InputEvent>)> {
     );
     scripts
 }
-
-fn describe(key: &InputEvent) -> String {
-    match key {
-        InputEvent::Char(c) => format!("key Char({c})"),
-        InputEvent::Verbatim(c) => format!("key Verbatim({c})"),
-        InputEvent::Select(n) => format!("key Select({n})"),
-        InputEvent::CandidateClicked(i) => format!("key CandidateClicked({i})"),
-        InputEvent::Backspace => "key Backspace".to_owned(),
-        InputEvent::Enter => "key Enter".to_owned(),
-        InputEvent::Space => "key Space".to_owned(),
-        InputEvent::Escape => "key Escape".to_owned(),
-        InputEvent::Up => "key Up".to_owned(),
-        InputEvent::Down => "key Down".to_owned(),
-        InputEvent::Left => "key Left".to_owned(),
-        InputEvent::Right => "key Right".to_owned(),
-        InputEvent::PageUp => "key PageUp".to_owned(),
-        InputEvent::PageDown => "key PageDown".to_owned(),
-        InputEvent::DeleteCandidate => "key DeleteCandidate".to_owned(),
-        InputEvent::UnblockCandidate => "key UnblockCandidate".to_owned(),
-        InputEvent::ToggleAscii => "key ToggleAscii".to_owned(),
-        InputEvent::Tab => "key Tab".to_owned(),
-    }
-}
-
-fn describe_out(out: &SessionOutput) -> String {
-    match out {
-        SessionOutput::Commit(text) => format!("Commit({text:?})"),
-        SessionOutput::Updated(u) => {
-            let top3: Vec<&str> = u.candidates.iter().take(3).map(|c| c.word.as_str()).collect();
-            format!(
-                "Updated {{ preedit={:?} cursor={} page={}/{} n={} top3={top3:?} }}",
-                u.preedit,
-                u.cursor,
-                u.page,
-                u.page_size,
-                u.candidates.len()
-            )
-        }
-        SessionOutput::CommitAndUpdate { text, update } => format!(
-            "CommitAndUpdate({text:?}, n={})",
-            update.candidates.len()
-        ),
-        SessionOutput::RefreshAndForward(u) => format!(
-            "RefreshAndForward {{ preedit={:?} n={} }}",
-            u.preedit,
-            u.candidates.len()
-        ),
-        SessionOutput::Noop => "Noop".to_owned(),
-    }
-}
-
-// ---------------------------------------------------------------- 身份记录
 
 /// 这份输出的身份:输出本身 + 数据文件 + 代码版本。基线文件旁存一份,
 /// 换错模型/缺副索引/代码变了都能一眼对出来。
