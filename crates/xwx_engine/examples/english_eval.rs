@@ -50,6 +50,12 @@ struct Outcome {
     first_lang: &'static str,
     first_lang_ok: Option<bool>,
     actual: Vec<String>,
+    /// 目标在**英文通道内部**的名次（诊断用：区分「没召回」与「混排没给位」）。
+    en_rank: Option<usize>,
+    /// 首要英文候选（key + 静态频率），用于解释 good_en 为什么为假。
+    e0: Option<String>,
+    /// E0 的静态频率（百分之一 Zipf）——`good_en` 的另一半判据。
+    e0_zipf: Option<u16>,
     note: String,
 }
 
@@ -172,6 +178,9 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
                 first_lang: "n/a",
                 first_lang_ok: None,
                 actual: vec!["M2 未实现：独立 next_word 预测入口".into()],
+                en_rank: None,
+                e0: None,
+                e0_zipf: None,
                 note: row.note.clone(),
             });
             continue;
@@ -184,8 +193,35 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
             .lookup_composition(&row.input, &LmContext::empty(), &ctx)
             .unwrap_or_else(|e| panic!("{}: 查询失败: {e}", row.id));
 
-        let oov = en.is_some_and(|d| !d.contains(&row.target.to_ascii_lowercase()));
+        // 覆盖率只对**英文目标**有意义：中文行（保护集）的目标是汉字。
+        let oov = en.is_some_and(|d| {
+            row.intent != "chinese" && !d.contains(&row.target.to_ascii_lowercase())
+        });
         let (rank, _) = hit_rank(&cands, row);
+        // 英文通道内部的相对名次：与混排名次对比，就能分清「召回没进来」
+        // 和「进来了但混排把它排到后面」。
+        let en_only: Vec<&xwx_engine::Candidate> =
+            cands.iter().filter(|c| c.is_english()).collect();
+        let en_rank = en_only
+            .iter()
+            .position(|c| c.english_key() == Some(row.target.to_ascii_lowercase().as_str()))
+            .map(|i| i + 1);
+        let e0_zipf = en_only
+            .first()
+            .and_then(|c| c.english_key())
+            .and_then(|k| en.and_then(|d| d.exact(k).ok().flatten()))
+            .map(|e| e.zipf_centi);
+        let e0 = en_only.first().map(|c| {
+            format!(
+                "{}[{}]",
+                c.english_key().unwrap_or("?"),
+                cands
+                    .iter()
+                    .find(|x| x.english_key() == c.english_key())
+                    .map(|x| x.score)
+                    .unwrap_or(0.0)
+            )
+        });
         let first_lang = cands.first().map(language_of).unwrap_or("none");
         let first_lang_ok = row
             .expected_first_language
@@ -207,9 +243,12 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
             first_lang_ok,
             actual: cands
                 .iter()
-                .take(5)
+                .take(14)
                 .map(|c| format!("{}({})", c.word, language_of(c)))
                 .collect(),
+            en_rank,
+            e0,
+            e0_zipf,
             note: row.note.clone(),
         });
     }
@@ -340,12 +379,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("失败条数: {fails}");
 
+    // 补全 Top-3 未达标的**根因拆分**：召回没进来 vs 混排没给位。
+    let comp: Vec<(&Row, &Outcome)> = rows
+        .iter()
+        .zip(out.iter())
+        .filter(|(_, o)| o.category == Category::Completion)
+        .collect();
+    let in_en_top3 = comp.iter().filter(|(_, o)| o.en_rank.is_some_and(|r| r <= 3)).count();
+    let recalled = comp.iter().filter(|(_, o)| o.en_rank.is_some()).count();
+    println!(
+        "\n补全行根因：英文通道内部 Top-3 = {in_en_top3}/{}；进过英文召回池 = {recalled}/{}（其余被有界近似挡在池外）",
+        comp.len(),
+        comp.len()
+    );
+    let weak = comp
+        .iter()
+        .filter(|(_, o)| o.e0_zipf.is_none_or(|q| q < 300))
+        .count();
+    println!(
+        "  其中 E0 静态频率 < 300（或没有 E0）⇒ good_en 为假、落到 ChineseFirst 的行: {weak}/{}",
+        comp.len()
+    );
+    let mut e0_hist: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, o) in &comp {
+        let tag = match o.e0_zipf {
+            Some(q) if q >= 300 => "E0 q>=300",
+            Some(q) if q >= 250 => "E0 250<=q<300",
+            Some(_) => "E0 q<250",
+            None => "无 E0",
+        };
+        *e0_hist.entry(tag.to_string()).or_default() += 1;
+    }
+    for (k, v) in &e0_hist {
+        println!("    {k}: {v} 行");
+    }
+
     // 分类计数（供报告引用）。
     let mut by_intent: BTreeMap<&str, usize> = BTreeMap::new();
     for r in &rows {
         *by_intent.entry(r.intent.as_str()).or_default() += 1;
     }
     println!("\n意图分布: {by_intent:?}");
+    println!("  补全行 E0 例（key[静态分]）: {:?}", comp.iter().take(8).map(|(_, o)| o.e0.clone()).collect::<Vec<_>>());
     let _ = EnglishMatchKind::Exact; // 元数据判据在 hit_rank 里已用到
     Ok(())
 }

@@ -135,6 +135,17 @@ tuning.jsonl     召回  5/5  · MRR 1.000 · 首屏  5/5
 - 临时 staging 目录内容已用 `cargo deb --no-build` + `dpkg-deb -c` 核对
   （`S6-deb-contents.txt`），**没有运行任何会重启真实 IBus 的安装任务**。
 
+**生产装配实测**（用真实 `data/english.bin` 起 release 二进制，启动日志）：
+
+```
+INFO xwx_ime: 词库已就绪 path=.../data/dict.bin entries=1864966
+INFO xwx_ime: 用户学习模型已接入 path=/tmp/xwx-verify-user_bigram.txt
+INFO xwx_ime: 英文通道已接入 dict=.../data/english.bin user=/tmp/xwx-verify-user_english.txt
+              words=50002 prefixes=116134 predict=false bigram=.../english_bigram.bin
+```
+
+启动期不创建英文用户文件（本次没有选词），符合「没有学习就不写盘」的约定。
+
 数据哈希（`S6-hashes.txt`）：
 
 ```
