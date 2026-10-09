@@ -75,4 +75,5 @@ mod projection_filler;
 mod recall;
 mod sentence_gate;
 mod bilingual;
+mod blend_matrix;
 mod blocklist;

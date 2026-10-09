@@ -161,7 +161,7 @@ fn run(engine: &ImeEngine, sc: &Scenario, repeat: usize) -> Stats {
 
 fn build(data_dir: &Path, lm: &Path, english: Option<&Path>) -> Result<ImeEngine, Box<dyn std::error::Error>> {
     let mut engine = ImeEngine::new_with_lm(Some(&data_dir.join("dict.bin")), Some(lm))?;
-    engine.dict = engine.dict.with_abbrev(&data_dir.join("abbrev.bin"));
+    engine.dict = engine.dict.with_abbrev(data_dir.join("abbrev.bin"));
     engine.dict = engine.dict.with_syllable_graph(data_dir.join("syllable_graph.bin"));
     if let Some(p) = english {
         engine = engine.with_english(EnglishEngine::new(EnglishDict::open(p)?));
