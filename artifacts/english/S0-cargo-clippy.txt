@@ -1,0 +1,5 @@
+    Checking xwx_engine v0.1.0 (/home/youngwen/Desktop/xwx_ime/crates/xwx_engine)
+    Checking xwx_ibus v0.1.0 (/home/youngwen/Desktop/xwx_ime/crates/xwx_ibus)
+    Checking xwx_ime v0.1.0 (/home/youngwen/Desktop/xwx_ime)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.75s
+--- exit=0 ---

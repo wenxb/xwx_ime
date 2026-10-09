@@ -1,0 +1,13 @@
+   Compiling xwx_engine v0.1.0 (/home/youngwen/Desktop/xwx_ime/crates/xwx_engine)
+    Finished `release` profile [optimized] target(s) in 7.45s
+     Running `/mnt/hdd/target/xwx_ime/release/examples/eval_rank tests/corpora/daily.jsonl tests/corpora/mixed.jsonl tests/corpora/edits.jsonl tests/corpora/keystrokes.jsonl`
+
+== daily.jsonl（12 条）召回 12/12 · MRR 1.000 · 首屏 12/12 · 平均选择 1.00
+
+== mixed.jsonl（14 条）召回 13/14 · MRR 0.929 · 首屏 13/14 · 平均选择 0.93
+   未召回 jintqbj → 期望「今天请病假」/ 实际前 3 ["今天去北京", "今天起北京", "今天骑兵军"]
+
+== edits.jsonl（6 条）召回 6/6 · MRR 0.841 · 首屏 5/6 · 平均选择 1.17
+
+== keystrokes.jsonl（12 条）召回 12/12 · MRR 0.877 · 首屏 11/12 · 平均选择 1.00
+--- exit=0 ---

@@ -1,0 +1,5 @@
+?? artifacts/
+?? docs/ENGLISH_INPUT_PLAN.md
+?? docs/PROJECT_GUIDE.md
+?? docs/english-input/
+--- exit=0 ---

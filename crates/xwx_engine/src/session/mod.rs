@@ -335,6 +335,7 @@ pub struct InputSession {
 mod commit;
 mod input_recognized;
 mod input;
+mod refresh;
 mod view;
 
 #[cfg(test)]
