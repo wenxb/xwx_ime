@@ -108,6 +108,8 @@ install:
     # 英文词库（可选能力）：缺它只是没有英文前缀补全，中文完全不受影响，
     # 所以是「提示」不是「警告」。生成：python3 scripts/build_english_dict.py --wordfreq。
     @if test -f data/english.bin; then install -m 644 data/english.bin {{xwx_data}}/english.bin;     else echo "提示：data/english.bin 不存在，英文前缀补全不可用（生成：python3 scripts/build_english_dict.py --wordfreq --out data/english.bin）。"; fi
+    # M2 静态二元词频表：同样可选，缺了只关条件排序与零输入预测。
+    @if test -f data/english_bigram.bin; then install -m 644 data/english_bigram.bin {{xwx_data}}/english_bigram.bin; else echo "提示：data/english_bigram.bin 不存在，英文条件排序与零输入预测降级（生成：python3 scripts/build_english_bigram.py --input <pinned.txt> --lexicon data/english.bin --out data/english_bigram.bin）。"; fi
     @if pgrep -x fcitx5 >/dev/null; then echo "警告：fcitx5 正在运行，它会占用 IBus 总线名（需要时 fcitx5 -k）。"; fi
     @if ! ls {{xwx_data}}/*.gram >/dev/null 2>&1 && ! test -f {{xwx_data}}/bigram.txt; then \
         echo "提示：未检测到语言模型，候选排序退化为纯词频（把万象 .gram 放进 {{xwx_data}}/ 即可）。"; \
@@ -120,6 +122,7 @@ install:
     @echo "组件    {{sys_comp_dir}}/xwx.xml  engine xwx / zh_CN"
     @echo "词库    {{xwx_data}}/dict.bin + abbrev.bin + syllable_graph.bin"
     @echo "英文    {{xwx_data}}/english.bin（可选；缺省时英文通道自动关闭）"
+    @echo "英二元  {{xwx_data}}/english_bigram.bin（可选；缺省时条件排序与零输入预测降级）"
     @echo "输入源  gsettings set org.gnome.desktop.input-sources sources \"[('xkb','us'),('ibus','xwx')]\""
 
 # 打 deb 包

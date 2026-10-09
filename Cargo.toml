@@ -75,10 +75,15 @@ assets = [
     # 中文候选与按键行为完全不受影响(可选的降级面)。由
     # `python3 scripts/build_english_dict.py --wordfreq ...` 生成,不进 git。
     ["data/english.bin", "usr/share/xwx/english.bin", "644"],
+    # M2 静态二元词频表（SymSpell 243_342 编译而来，约 2.4 MB），同样可选：
+    # 缺了只降级条件排序与零输入预测，英文补全与中文都不受影响。
+    ["data/english_bigram.bin", "usr/share/xwx/english_bigram.bin", "644"],
     # 英文数据的署名与许可:wordfreq 的**数据**按 CC BY-SA 4.0 再分发
     # (软件许可是 Apache-2.0,不覆盖数据),派生数据产品必须随包带上署名。
     ["data/english/NOTICE.md", "usr/share/doc/xwx-ime/english-data-NOTICE.md", "644"],
     ["data/english/LICENSES/wordfreq-LICENSE.txt", "usr/share/doc/xwx-ime/wordfreq-LICENSE.txt", "644"],
     ["data/english/LICENSES/CC-BY-SA-4.0.txt", "usr/share/doc/xwx-ime/CC-BY-SA-4.0.txt", "644"],
     ["data/english/LICENSES/Apache-2.0.txt", "usr/share/doc/xwx-ime/Apache-2.0.txt", "644"],
+    # SymSpell 数据来源说明（仓库代码是 MIT，但数据条款要单独记录）。
+    ["data/english/LICENSES/SymSpell-NOTICE.md", "usr/share/doc/xwx-ime/english-bigram-NOTICE.md", "644"],
 ]

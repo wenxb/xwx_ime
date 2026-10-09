@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use xwx_engine::english::{EnglishContext, EnglishDict, EnglishEngine};
+use xwx_engine::english::{EnglishBigram, EnglishContext, EnglishDict, EnglishEngine};
 use xwx_engine::{ImeEngine, LmContext};
 
 /// 门槛：单次按键超过它就单独列出来（与项目既有 12ms 口径一致）。
@@ -106,6 +106,13 @@ impl Stats {
         Self { samples: Vec::new() }
     }
 
+    /// 从一批已经量好的样本构造（M2 的两组额外场景用）。
+    fn of(samples: &[f64]) -> Self {
+        Self {
+            samples: samples.to_vec(),
+        }
+    }
+
     fn push(&mut self, ms: f64) {
         self.samples.push(ms);
     }
@@ -159,14 +166,57 @@ fn run(engine: &ImeEngine, sc: &Scenario, repeat: usize) -> Stats {
     stats
 }
 
-fn build(data_dir: &Path, lm: &Path, english: Option<&Path>) -> Result<ImeEngine, Box<dyn std::error::Error>> {
+fn build(
+    data_dir: &Path,
+    lm: &Path,
+    english: Option<&Path>,
+    bigram: Option<&Path>,
+) -> Result<ImeEngine, Box<dyn std::error::Error>> {
     let mut engine = ImeEngine::new_with_lm(Some(&data_dir.join("dict.bin")), Some(lm))?;
     engine.dict = engine.dict.with_abbrev(data_dir.join("abbrev.bin"));
     engine.dict = engine.dict.with_syllable_graph(data_dir.join("syllable_graph.bin"));
     if let Some(p) = english {
-        engine = engine.with_english(EnglishEngine::new(EnglishDict::open(p)?));
+        let mut en = EnglishEngine::new(EnglishDict::open(p)?).with_predict(true);
+        if let Some(b) = bigram {
+            en = en.with_bigram(EnglishBigram::open(b)?);
+        }
+        engine = engine.with_english(en);
     }
     Ok(engine)
+}
+
+/// 零输入下一词的逐次耗时（预测面板每次刷新都会走它）。
+fn measure_prediction(engine: &ImeEngine, prevs: &[&str], repeat: usize) -> Vec<f64> {
+    let mut stats = Vec::new();
+    let Some(en) = engine.english() else {
+        return stats;
+    };
+    for _ in 0..repeat {
+        for prev in prevs {
+            let ctx = EnglishContext::with_previous(prev);
+            let t = std::time::Instant::now();
+            let list = en.next_candidates(&ctx).expect("预测查询失败");
+            stats.push(t.elapsed().as_secs_f64() * 1000.0);
+            assert!(!list.is_empty(), "{prev} 应有下一词");
+        }
+    }
+    stats
+}
+
+/// 静态条件排序对**前缀补全**的增量（同一批查询，有/无二元表）。
+fn measure_prefix(engine: &ImeEngine, inputs: &[&str], repeat: usize) -> Vec<f64> {
+    let mut stats = Vec::new();
+    for _ in 0..repeat {
+        for input in inputs {
+            let ctx = EnglishContext::with_previous("thank");
+            let t = std::time::Instant::now();
+            let _ = engine
+                .lookup_composition(input, &LmContext::empty(), &ctx)
+                .expect("查询失败");
+            stats.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    stats
 }
 
 /// 受控「较大」用户模型：学 300 个词的二元计数，用来暴露索引更新的隐藏退化。
@@ -220,18 +270,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("repeat   : {repeat}");
 
     // —— 冷启动与首次查询（英文开）——
+    let bigram_path = arg("--bigram", false).map(PathBuf::from).filter(|p| p.is_file());
     let t = Instant::now();
-    let engine_on = build(&data_dir, &lm_path, Some(&english_path))?;
+    let engine_on = build(&data_dir, &lm_path, Some(&english_path), None)?;
     let cold_ms = t.elapsed().as_secs_f64() * 1000.0;
+    // M2：二元表是**额外**的一份可选数据，单独量它的装配成本。
+    let t = Instant::now();
+    let engine_m2 = build(
+        &data_dir,
+        &lm_path,
+        Some(&english_path),
+        bigram_path.as_deref(),
+    )?;
+    let cold_m2_ms = t.elapsed().as_secs_f64() * 1000.0;
     let t = Instant::now();
     let _ = engine_on.lookup_composition("pyth", &LmContext::empty(), &EnglishContext::empty())?;
     let first_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("\n== 冷启动 ==");
     println!("引擎装配(含 mmap 与英文词库完整校验) : {cold_ms:.1}ms");
     println!("首次查询                              : {first_ms:.1}ms");
+    match bigram_path.as_ref() {
+        Some(p) => {
+            let model = engine_m2.english().and_then(|e| e.bigram());
+            println!(
+                "引擎装配(+english_bigram.bin 完整校验) : {cold_m2_ms:.1}ms  [{} context / {} edge / {} 字节]",
+                model.map_or(0, |m| m.context_count()),
+                model.map_or(0, |m| m.edge_count()),
+                std::fs::metadata(p)?.len()
+            );
+        }
+        None => println!("（未提供 --bigram：跳过 M2 条件排序与零输入预测的耗时）"),
+    }
 
     // —— 英文关 ——
-    let engine_off = build(&data_dir, &lm_path, None)?;
+    let engine_off = build(&data_dir, &lm_path, None, None)?;
+
+    // —— M2：零输入下一词 + 带静态上文的组合查询 ——
+    if let Some(model) = engine_m2.english().and_then(|e| e.bigram()) {
+        let prevs = ["thank", "looking", "hello", "machine", "neural", "school"];
+        let _ = measure_prediction(&engine_m2, &prevs, 1);
+        let pred = measure_prediction(&engine_m2, &prevs, repeat);
+        println!("\n== M2 零输入预测（{} context / {} edge）==", model.context_count(), model.edge_count());
+        println!("{}", Stats::of(&pred).line("下一词召回+条件排序"));
+        let slow = pred.iter().filter(|ms| **ms > SLOW_MS).count();
+        println!("                       超 {SLOW_MS}ms 样本 {slow}/{}", pred.len());
+        let inputs = ["th", "tha", "loo", "hel", "mac", "neu"];
+        let _ = measure_prefix(&engine_on, &inputs, 1);
+        let _ = measure_prefix(&engine_m2, &inputs, 1);
+        let plain = measure_prefix(&engine_on, &inputs, repeat);
+        let cond = measure_prefix(&engine_m2, &inputs, repeat);
+        println!("{}", Stats::of(&plain).line("有英文上文的补全 [无静态二元]"));
+        println!("{}", Stats::of(&cond).line("有英文上文的补全 [带静态二元]"));
+        println!(
+            "                       增量 p95 差值 = {:+.3}ms",
+            Stats::of(&cond).quantile(0.95) - Stats::of(&plain).quantile(0.95)
+        );
+    }
 
     println!("\n== 稳态（英文关 / 英文开 / 英文开+受控用户模型）==");
     // **先热身**:引擎刚装配完时页缓存是冷的(上面「英文关」那组的第一轮

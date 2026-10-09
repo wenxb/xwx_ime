@@ -81,7 +81,13 @@
       **真正最近**的一次删除（中英共享一个撤销槽位）。连续英文单词自动补
       前导空格（`hello` + ` world`），用户显式敲过空格时不重复补。
       词库缺失只关闭英文通道，中文完全不受影响。
-      **下一词预测（M2）未实现**，`XWX_ENGLISH_PREDICT` 目前不产生任何效果。
+- [x] **下一词预测（M2）**：提交一个英文词后进入**独立预测态**（preedit 为空的
+      候选面板），`Tab`/数字/点击接受高亮项，`Space` 只把空格交给应用、
+      `Shift+Tab` 原样透传。候选池 = 静态上一词 Top-32 ∪ 用户上一词 Top-32，
+      用平滑频率估计 `p = 0.8×c/T + 0.2×10^(z-9)` 排序，**没有来源就不展示面板**
+      （绝不用 the/and 硬填）。静态二元数据 `english_bigram.bin` 缺失或损坏时
+      只降级条件排序与预测面板，英文补全、中文输入与用户学习全部照常。
+      预测态零按键学习：**展示不学习**，只有真正接受才写用户计数。
 
 ## 依赖
 
@@ -208,8 +214,11 @@ gdbus call --session --dest org.freedesktop.IBus --object-path /org/freedesktop/
 - `XWX_ENGLISH_USER_LM_PATH`:覆盖英文用户文件(缺省
   `$XDG_DATA_HOME/xwx/user_english.txt`;debug 构建用
   `user_english.dev.txt`)。**可写路径永不回落系统目录**;
-- `XWX_ENGLISH_PREDICT`:M2 零输入下一词面板开关(默认 `0`,M1 无效果);
-- `XWX_ENGLISH_BIGRAM_PATH`:M2 静态二元数据路径(M1 只解析并记录,不读取);
+- `XWX_ENGLISH_PREDICT`:零输入下一词面板开关(默认 `0`)。关掉它**不会**关闭
+  英文上下文排序——有输入字母时的条件排序照常使用静态二元数据；
+- `XWX_ENGLISH_BIGRAM_PATH`:静态二元数据 `english_bigram.bin` 的路径(缺省
+  `$XDG_DATA_HOME/xwx/english_bigram.bin`,其次 `/usr/share/xwx/english_bigram.bin`)。
+  打不开只降级条件排序与预测面板,不影响已加载的英文词库;
 - `XWX_LM_PATH`:覆盖**运行时读取**的语言模型路径。未设置时按优先级自动
   探测 `$XDG_DATA_HOME/xwx/` 下的 `.gram`(首选 `wanxiang-lts-zh-hans.gram`,
   否则任意 `.gram` 按文件名字典序第一个),最后回落 `bigram.txt`;

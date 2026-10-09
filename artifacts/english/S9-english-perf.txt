@@ -1,0 +1,46 @@
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running `/mnt/hdd/target/xwx_ime/release/examples/english_perf --data data --english data/english.bin --bigram data/english_bigram.bin --repeat 24`
+== 数据 ==
+中文数据 : data
+语言模型 : /home/youngwen/.local/share/xwx/wanxiang-lts-zh-hans.gram (420253740 字节)
+英文词库 : data/english.bin (50002 词 / 116134 前缀 / 4457997 字节)
+repeat   : 24
+
+== 冷启动 ==
+引擎装配(含 mmap 与英文词库完整校验) : 30.8ms
+首次查询                              : 13.4ms
+引擎装配(+english_bigram.bin 完整校验) : 37.2ms  [16315 context / 114890 edge / 2355060 字节]
+
+== M2 零输入预测（16315 context / 114890 edge）==
+下一词召回+条件排序             n=144   p50=   0.066ms p95=   0.069ms max=   0.082ms
+                       超 12ms 样本 0/144
+有英文上文的补全 [无静态二元]       n=144   p50=   1.255ms p95=   2.957ms max=   3.066ms
+有英文上文的补全 [带静态二元]       n=144   p50=   1.284ms p95=   2.978ms max=   3.058ms
+                       增量 p95 差值 = +0.021ms
+
+== 稳态（英文关 / 英文开 / 英文开+受控用户模型）==
+英文前缀 [关]               n=168   p50=   1.173ms p95=   5.235ms max=   5.341ms
+英文前缀 [开]               n=168   p50=   1.188ms p95=   5.219ms max=   5.277ms
+英文前缀 [开+模型]            n=168   p50=   1.196ms p95=   5.267ms max=   5.347ms
+                       开-关 p95 差值 = -0.016ms；超 12ms 样本 0/336
+英文完整词 [关]              n=120   p50=   3.395ms p95=   4.503ms max=   4.820ms
+英文完整词 [开]              n=120   p50=   3.373ms p95=   4.415ms max=   4.960ms
+英文完整词 [开+模型]           n=120   p50=   3.371ms p95=   4.443ms max=   4.716ms
+                       开-关 p95 差值 = -0.088ms；超 12ms 样本 0/240
+英文连续(有上文) [关]          n=96    p50=   0.437ms p95=   4.192ms max=   4.299ms
+英文连续(有上文) [开]          n=96    p50=   0.493ms p95=   4.237ms max=   4.242ms
+英文连续(有上文) [开+模型]       n=96    p50=   0.494ms p95=   4.234ms max=   4.281ms
+                       开-关 p95 差值 = +0.045ms；超 12ms 样本 0/192
+中英同形 [关]               n=120   p50=   0.056ms p95=   0.100ms max=   0.126ms
+中英同形 [开]               n=120   p50=   0.102ms p95=   0.150ms max=   0.162ms
+中英同形 [开+模型]            n=120   p50=   0.102ms p95=   0.160ms max=   0.171ms
+                       开-关 p95 差值 = +0.051ms；超 12ms 样本 0/240
+中文拼音(回归) [关]           n=96    p50=   0.369ms p95=   1.451ms max=   1.613ms
+中文拼音(回归) [开]           n=96    p50=   0.372ms p95=   1.453ms max=   1.465ms
+中文拼音(回归) [开+模型]        n=96    p50=   0.373ms p95=   1.452ms max=   1.462ms
+                       开-关 p95 差值 = +0.002ms；超 12ms 样本 0/192
+
+== 超过 12ms 的逐键样本 ==
+(无)
+
+注：这里是**纯会话/引擎**时间；D-Bus 往返另测，不把两者混为一谈。

@@ -2,6 +2,14 @@
 
 上级：[数据文件说明](README.md)。
 
+本页讲英文通道的**两份**数据产品：
+
+1. `english.bin` —— 词频底座 + 人工覆盖（M1：精确查询与前缀补全）；
+2. `english_bigram.bin` —— 静态二元词频表（M2：条件排序与零输入下一词）。
+
+两份都是**可选**的：缺 `english.bin` 整个英文通道关闭；只缺
+`english_bigram.bin` 则英文补全照常，只是没有条件排序与预测面板。
+
 英文前缀补全(M1)的独立数据产品,**与中文词库完全正交**:它不参与中文切分、
 不改中文 LM、也不进 `MixedLM`。引擎只在输入是纯 ASCII 字母时另开一条通道
 (见 `docs/english-input/02-engine.md`)。
@@ -47,3 +55,20 @@ prefix 的引用列表按「静态分降序、key 升序」排好、`id_count` 1
 [english/NOTICE.md](english/NOTICE.md) 与 [english/LICENSES/](english/LICENSES/);
 deb 包会把它们装到 `/usr/share/doc/xwx-ime/`。
 
+## 二、english_bigram.bin（M2 静态二元数据）
+
+| 项 | 值 |
+|---|---|
+| 构建 | `python3 scripts/build_english_bigram.py --input <pinned.txt> --lexicon data/english.bin --out data/english_bigram.bin` |
+| 上游 | SymSpell `736034a4f0436da6a98c94f83f54ec6de2ec25c6` 的 `frequency_bigramdictionary_en_243_342.txt` |
+| 上游 SHA-256 | `fd892a160184101dd7ae807ac5a302d01fcea1c47304181a8ed7ed9c94545bcd` |
+| 规模 | 242,342 行 → 241,616 词对 → **16,315 context / 114,890 edge / 2.36 MB** |
+| 运行期文件 | `$XDG_DATA_HOME/xwx/english_bigram.bin`，其次 `/usr/share/xwx/english_bigram.bin` |
+| 缺省行为 | 只降级条件排序与零输入预测 |
+
+布局（little-endian）：64 字节头 → context(24 B/条) → edge(16 B/条) → strings。
+`meta.json` 记录构建时 `english.bin` 的 SHA-256（用来发现数据过期）；
+**运行时不用跨文件 word_id**，所以旧编号永远不会被解释成另一个词。
+
+来源与许可单独记在 [english/LICENSES/SymSpell-NOTICE.md](english/LICENSES/SymSpell-NOTICE.md)：
+**上游代码是 MIT，不代表数据条款**，所以那份说明必须随包分发。
