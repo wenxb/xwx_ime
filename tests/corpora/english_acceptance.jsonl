@@ -204,3 +204,14 @@
 {"id": "acc-p201", "kind": "query", "input": "is", "target": "is", "intent": "english", "previous_english": null, "max_rank": 3, "expected_first_language": "english", "note": "非合法中文音节，词库里没有中文候选：is → is"}
 {"id": "acc-p202", "kind": "query", "input": "it", "target": "it", "intent": "english", "previous_english": null, "max_rank": 3, "expected_first_language": "english", "note": "非合法中文音节，词库里没有中文候选：it → it"}
 {"id": "acc-p203", "kind": "query", "input": "us", "target": "us", "intent": "english", "previous_english": null, "max_rank": 3, "expected_first_language": "english", "note": "非合法中文音节，词库里没有中文候选：us → us"}
+{"id": "acc-n400", "kind": "next_word", "input": "", "target": "all", "intent": "english", "previous_english": "hello", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：hello → all"}
+{"id": "acc-n401", "kind": "next_word", "input": "", "target": "of", "intent": "english", "previous_english": "word", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：word → of"}
+{"id": "acc-n402", "kind": "next_word", "input": "", "target": "of", "intent": "english", "previous_english": "developer", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：developer → of"}
+{"id": "acc-n403", "kind": "next_word", "input": "", "target": "and", "intent": "english", "previous_english": "python", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：python → and"}
+{"id": "acc-n404", "kind": "next_word", "input": "", "target": "are", "intent": "english", "previous_english": "you", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：you → are"}
+{"id": "acc-n405", "kind": "next_word", "input": "", "target": "be", "intent": "english", "previous_english": "can", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：can → be"}
+{"id": "acc-n406", "kind": "next_word", "input": "", "target": "and", "intent": "english", "previous_english": "today", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：today → and"}
+{"id": "acc-n407", "kind": "next_word", "input": "", "target": "and", "intent": "english", "previous_english": "school", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：school → and"}
+{"id": "acc-n408", "kind": "next_word", "input": "", "target": "of", "intent": "english", "previous_english": "city", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：city → of"}
+{"id": "acc-n409", "kind": "next_word", "input": "", "target": "of", "intent": "english", "previous_english": "cloud", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：cloud → of"}
+{"id": "acc-n410", "kind": "next_word", "input": "", "target": "of", "intent": "english", "previous_english": "memory", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：memory → of"}

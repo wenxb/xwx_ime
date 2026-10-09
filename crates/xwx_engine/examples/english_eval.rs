@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use xwx_engine::candidate::EnglishMatchKind;
-use xwx_engine::english::{EnglishContext, EnglishDict, EnglishEngine};
+use xwx_engine::english::{EnglishBigram, EnglishContext, EnglishDict, EnglishEngine};
 use xwx_engine::{ImeEngine, LmContext};
 
 /// 首屏命中判定线（与一屏 `page_size` 对齐）。
@@ -61,6 +61,8 @@ struct Outcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Category {
+    /// M2 零输入下一词。
+    NextWord,
     /// 输入就是完整单词。
     Exact,
     /// 输入是完整单词的前缀。
@@ -167,9 +169,42 @@ fn hit_rank(cands: &[xwx_engine::Candidate], row: &Row) -> (Option<usize>, bool)
 fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<Outcome> {
     let mut out = Vec::new();
     for row in rows {
+        if row.kind == "next_word" {
+            // M2 的**独立预测入口**：不给空串组合查询，直接用上一词召回。
+            let ctx = match row.previous_english.as_deref() {
+                Some(prev) => EnglishContext::with_previous(prev),
+                None => EnglishContext::empty(),
+            };
+            let cands = engine
+                .english()
+                .and_then(|en| en.next_candidates(&ctx).ok())
+                .unwrap_or_default();
+            let rank = cands
+                .iter()
+                .position(|c| c.english_key() == Some(row.target.to_ascii_lowercase().as_str()))
+                .map(|i| i + 1);
+            let first_lang = cands.first().map(language_of).unwrap_or("none");
+            let first_lang_ok = row
+                .expected_first_language
+                .as_deref()
+                .map(|want| want == first_lang);
+            out.push(Outcome {
+                id: row.id.clone(),
+                category: Category::NextWord,
+                hit_rank: rank,
+                oov: false,
+                first_lang,
+                first_lang_ok,
+                actual: cands.iter().take(6).map(|c| c.word.clone()).collect(),
+                en_rank: rank,
+                e0: cands.first().map(|c| c.word.clone()),
+                e0_zipf: None,
+                note: row.note.clone(),
+            });
+            continue;
+        }
         if row.kind != "query" {
-            // M2 的独立预测入口尚未实现：如实列为未评测，而不是拿空串
-            // 组合查询冒充，也不是悄悄从分母里删掉。
+            // 未知的 kind：如实列出而不是悄悄从分母里删掉。
             out.push(Outcome {
                 id: row.id.clone(),
                 category: Category::Exact,
@@ -177,7 +212,7 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
                 oov: false,
                 first_lang: "n/a",
                 first_lang_ok: None,
-                actual: vec!["M2 未实现：独立 next_word 预测入口".into()],
+                actual: vec![format!("未知 kind={}", row.kind)],
                 en_rank: None,
                 e0: None,
                 e0_zipf: None,
@@ -306,9 +341,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let words = en_dict.word_count();
     let prefixes = en_dict.prefix_count();
     let en_bytes = en_dict.file_len();
+    let bigram_path = arg("--bigram", false).map(PathBuf::from);
     if mode == "on" {
         // 默认英文/中文用户层都是内存实例：**不读真实个人用户文件**。
-        engine = engine.with_english(EnglishEngine::new(EnglishDict::open(&english_path)?));
+        let mut en = EnglishEngine::new(EnglishDict::open(&english_path)?)
+            // 零输入下一词面板必须打开，否则 next_word 行会全部落空。
+            .with_predict(true);
+        if let Some(p) = bigram_path.as_ref().filter(|p| p.is_file()) {
+            en = en.with_bigram(EnglishBigram::open(p)?);
+        }
+        engine = engine.with_english(en);
     }
     let rows = read_corpus(&corpus);
 
@@ -333,9 +375,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (c3, tc) = rate(&out, Category::Completion, 3);
     let (g1, tg) = rate(&out, Category::ChineseGuard, 1);
     let (g9, _) = rate(&out, Category::ChineseGuard, FIRST_SCREEN);
+    let (n1, tn) = rate(&out, Category::NextWord, 1);
+    let (n3, _) = rate(&out, Category::NextWord, 3);
     println!("精确词 Top-1 : {h1}/{t1} = {}", pct(h1, t1));
     println!("精确词 Top-3 : {h3}/{t1} = {}", pct(h3, t1));
     println!("补全   Top-3 : {c3}/{tc} = {}", pct(c3, tc));
+    println!("下一词 Top-1 : {n1}/{tn} = {}", pct(n1, tn));
+    println!("下一词 Top-3 : {n3}/{tn} = {}", pct(n3, tn));
     println!("中文保护 Top-1: {g1}/{tg} = {}", pct(g1, tg));
     println!("中文保护 Top-9: {g9}/{tg} = {}", pct(g9, tg));
     let (hit_all, total_all) = (out.iter().filter(|o| o.hit_rank.is_some()).count(), out.len());

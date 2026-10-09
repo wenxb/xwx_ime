@@ -123,3 +123,8 @@
 {"id": "tune-c002", "kind": "query", "input": "print", "target": "printer", "intent": "english", "previous_english": "help", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 help：print 应补全成 printer"}
 {"id": "tune-c003", "kind": "query", "input": "deve", "target": "development", "intent": "english", "previous_english": "developer", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 developer：deve 应补全成 development"}
 {"id": "tune-c004", "kind": "query", "input": "java", "target": "javascript", "intent": "english", "previous_english": "javascript", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 javascript：java 应补全成 javascript"}
+{"id": "tune-n300", "kind": "next_word", "input": "", "target": "you", "intent": "english", "previous_english": "thank", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：thank → you"}
+{"id": "tune-n301", "kind": "next_word", "input": "", "target": "to", "intent": "english", "previous_english": "hello", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：hello → to"}
+{"id": "tune-n302", "kind": "next_word", "input": "", "target": "for", "intent": "english", "previous_english": "looking", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：looking → for"}
+{"id": "tune-n303", "kind": "next_word", "input": "", "target": "you", "intent": "english", "previous_english": "help", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：help → you"}
+{"id": "tune-n304", "kind": "next_word", "input": "", "target": "for", "intent": "english", "previous_english": "word", "max_rank": 3, "expected_first_language": "english", "note": "零输入下一词：word → for"}

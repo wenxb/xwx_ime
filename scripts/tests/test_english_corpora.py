@@ -91,8 +91,22 @@ class CorpusSchemaTest(unittest.TestCase):
                 where = f"{path.name}:{row.get('id')}"
                 self.assertEqual(set(row), FIELDS, f"{where} 字段集不对")
                 self.assertIsInstance(row["id"], str)
-                self.assertIn(row["kind"], {"query"}, f"{where} M1 只支持 query 行")
-                self.assertRegex(row["input"], KEY_RE, f"{where} input 必须是小写字母")
+                self.assertIn(row["kind"], {"query", "next_word"}, where)
+                if row["kind"] == "next_word":
+                    # 零输入预测：没有输入串，但**必须**有可信英文上文。
+                    self.assertEqual(row["input"], "", f"{where} next_word 行没有输入串")
+                    self.assertIsNotNone(
+                        row["previous_english"], f"{where} next_word 行必须有上一词"
+                    )
+                    # 规格样例里 next_word 行的 expected_first_language 是
+                    # `english`（面板只可能出英文）；也允许 null 表示不约束。
+                    self.assertIn(
+                        row["expected_first_language"],
+                        {None, "english"},
+                        f"{where} 零输入面板只可能有英文候选",
+                    )
+                else:
+                    self.assertRegex(row["input"], KEY_RE, f"{where} input 必须是小写字母")
                 self.assertIn(row["intent"], INTENTS, where)
                 self.assertIn(row["expected_first_language"], FIRST_LANGS, where)
                 self.assertIsInstance(row["max_rank"], int)
@@ -100,7 +114,8 @@ class CorpusSchemaTest(unittest.TestCase):
                 self.assertIsInstance(row["note"], str)
                 self.assertTrue(row["note"], where)
                 prev = row["previous_english"]
-                self.assertTrue(prev is None or KEY_RE.match(prev), f"{where} previous_english")
+                if row["kind"] == "query":
+                    self.assertTrue(prev is None or KEY_RE.match(prev), f"{where} previous_english")
 
     def test_ids_are_globally_unique(self) -> None:
         ids = [r["id"] for r in load(TUNING) + load(ACCEPTANCE)]
@@ -120,6 +135,8 @@ class CorpusSchemaTest(unittest.TestCase):
     def test_coverage_shape(self) -> None:
         tuning, acceptance = load(TUNING), load(ACCEPTANCE)
         for name, rows in (("tuning", tuning), ("acceptance", acceptance)):
+            nxt = sum(1 for r in rows if r["kind"] == "next_word")
+            self.assertGreaterEqual(nxt, 5, f"{name} 的零输入下一词行太少（M2 需要真实覆盖）")
             guard = sum(1 for r in rows if r["intent"] in {"chinese", "ambiguous"})
             self.assertGreaterEqual(guard, 8, f"{name} 的中文保护/同形行太少")
             ctx = sum(1 for r in rows if r["previous_english"])
