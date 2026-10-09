@@ -1,0 +1,50 @@
+{
+  "counts": {
+    "base_words_selected": 23,
+    "candidates_scanned": 23,
+    "merged_duplicate_keys": 0,
+    "unique_keys_after_cleaning": 23
+  },
+  "file_len": 2447,
+  "format": {
+    "endian": "little",
+    "header_len": 64,
+    "magic": "XWXENG1",
+    "name": "english.bin",
+    "prefix_record_len": 16,
+    "version": 1,
+    "word_record_len": 16
+  },
+  "id_count": 111,
+  "overrides": {
+    "added_words": 0,
+    "entries": 0,
+    "path": null,
+    "sha256": null
+  },
+  "parameters": {
+    "limit": null,
+    "max_word_len": 48,
+    "prefix_penalty_centi": 15,
+    "prefix_top_k": 32,
+    "single_letter_allowlist": [
+      "a",
+      "i"
+    ],
+    "zipf_centi_range": [
+      0,
+      900
+    ]
+  },
+  "prefix_count": 78,
+  "sha256": "adadc7b99bfec523ae6e0387397ebf1b28455c2e8730c867fd7da8a729342156",
+  "skipped_tokens": {},
+  "source": {
+    "entries": 23,
+    "kind": "entries",
+    "path": "tests/fixtures/english/words.tsv",
+    "sha256": "9adc3888f72919482f01db48b791d917dc976adb36c7091f80dd00a96cb3c9cf"
+  },
+  "strings_bytes": 323,
+  "word_count": 23
+}

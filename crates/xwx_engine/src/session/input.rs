@@ -13,7 +13,36 @@ impl InputSession {
         if !matches!(event, InputEvent::Char(_) | InputEvent::Verbatim(_)) {
             self.english_run = false;
         }
-        self.handle_composition(event)
+        // 英文上文失效判定必须看**事件种类 + 输出**：Noop 才是「这个键
+        // 交给应用了」。组合内的编辑（退格/方向键/翻页）返回 Updated，
+        // 不算边界——否则打英文单词时按一次左键就把上文抹了。
+        let was_composing = self.composing();
+        let is_space = matches!(event, InputEvent::Space);
+        let passthrough = matches!(
+            event,
+            InputEvent::Char(_)
+                | InputEvent::Enter
+                | InputEvent::Escape
+                | InputEvent::Backspace
+                | InputEvent::Up
+                | InputEvent::Down
+                | InputEvent::Left
+                | InputEvent::Right
+                | InputEvent::PageUp
+                | InputEvent::PageDown
+                | InputEvent::DeleteCandidate
+        ) || (matches!(event, InputEvent::Select(_)) && !was_composing);
+        let out = self.handle_composition(event)?;
+        if matches!(out, SessionOutput::Noop) {
+            if is_space {
+                // 空闲时透传的 ASCII 空格：保留上一词，但要记住「已经隔开」，
+                // 下一个英文候选不再补空格（会话分册第 5 节）。
+                self.english.on_passthrough_space();
+            } else if passthrough {
+                self.english.clear();
+            }
+        }
+        Ok(out)
     }
 
     /// 原有按键分发（本包装只负责英文边界与后续英文上下文的处理）。
@@ -378,6 +407,8 @@ impl InputSession {
             InputEvent::Escape if self.composing() => {
                 // 取消当前输入:打断造词缓冲(结算已累积的段),
                 // 保证缓冲不跨「用户明确取消」的边界泄漏。
+                // Escape 也是**显式结束本次英文上下文**(会话分册第 2 节)。
+                self.english.clear();
                 self.break_coin_run();
                 self.reset();
                 Ok(SessionOutput::Updated(self.update()))

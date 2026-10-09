@@ -95,6 +95,11 @@ impl InputSession {
                 }
             }
         }
+        // 识别态(邮箱/网址)是**原文世界**:地址不是英文上下文,不能拿
+        // 它当上一词去召回/打分（会话分册第 2 节）。
+        if self.recognized.is_some() {
+            self.english.clear();
+        }
         if self.pinyin.is_empty() {
             std::sync::Arc::make_mut(&mut self.candidates).clear();
         } else if self.recognized.is_some() {
@@ -102,9 +107,10 @@ impl InputSession {
                 &self.pinyin,
             )]);
         } else {
+            let ctx = self.lm_context();
+            let en_ctx = self.english_context();
             self.candidates = std::sync::Arc::new(
-                self.engine
-                    .lookup_candidates(&self.pinyin, &self.lm_context())?,
+                self.engine.lookup_composition(&self.pinyin, &ctx, &en_ctx)?,
             );
         }
         // 只收敛**那一个**权威下标:页码是它的函数,不再有第二份状态

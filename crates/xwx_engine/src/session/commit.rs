@@ -25,6 +25,9 @@ impl InputSession {
     /// 组合以「原样拼音」结束(回车 / 切英文 / 标点 / 无候选时的空格):
     /// 已确认段照样上屏,尾部原始字母跟着一起。
     pub(super) fn finish_with_raw(&mut self, raw: String) -> String {
+        // 原文逃逸(回车 / 无候选空格 / 切英文):英文上文失效,
+        // 且**不**修正、**不**补空格——Enter 必须可预测。
+        self.english.clear();
         let mut text = self.confirmed_text();
         self.replay_confirmed();
         self.break_coin_run();
@@ -52,7 +55,15 @@ impl InputSession {
     /// 与「消耗输入串」拆开是因为分段上屏要先搬走前缀、再刷新剩余串的
     /// 候选,刷新失败必须能原样回滚——那时**不能**留下任何上屏副作用。
     pub(super) fn record_commit(&mut self, c: &Candidate) -> String {
+        // **来源分流点**（会话分册第 4 节）：所有判断读元数据，不靠
+        // `word.is_ascii()` 猜——`Python` 与「ABC」都能是 ASCII。
+        if c.is_english() {
+            return self.record_english_commit(c);
+        }
         let word = c.word.clone();
+        // 原文与中文候选都是**语言边界**：之后的英文不再与提交前的英文
+        // 词构成词对（中文重放同样走这里，天然清掉英文链）。
+        self.english.clear();
         if c.echo {
             self.break_coin_run();
         } else {
@@ -61,6 +72,42 @@ impl InputSession {
         let as_word = if c.echo { None } else { Some(word.as_str()) };
         self.record_committed(&word, as_word);
         word
+    }
+
+    /// 提交一条英文候选（Exact/Completion）：返回**实际**上屏文本。
+    ///
+    /// 顺序严格按会话分册第 4 节：保存 prev → 算文本（可能带一个前导
+    /// 空格）→ 打断中文造词段 → 只学一次英文 UserLM → 进上屏尾部并断
+    /// 中文 `last_word` → 更新英文上文 → 调用方按原有流程复位。
+    ///
+    /// 与中文路径的三处关键差别：
+    /// 1. **不 `push_coin`**：英文词不是中文造词段的材料，落进去会造出
+    ///    「拼音 key 为空」的垃圾词条；
+    /// 2. **不调 `record_committed`**：那会把英文词当中文词学进中文
+    ///    UserLM（`learn_committed(prev_zh, Some("Python"))`）；
+    /// 3. 中文 `last_word` 置 `None`：语言边界，中文字符级窗口仍靠
+    ///    `push_tail` 维护。
+    fn record_english_commit(&mut self, c: &Candidate) -> String {
+        let Some(key) = c.english_key().map(str::to_string) else {
+            return c.word.clone(); // 不可达:调用方已判 is_english
+        };
+        let prev = self.english.previous_word().map(str::to_string);
+        // 候选自身的 `word` 不含前导空格；空格只在这里、只加一次。
+        let mut text = String::new();
+        if self.english.needs_space() {
+            text.push(' ');
+        }
+        text.push_str(&c.word);
+        // 4. 结束前面的中文造词段（不是把中文已确认段丢掉）。
+        self.break_coin_run();
+        // 5. 英文只学一次，学在**独立**的英文用户实例上。
+        self.engine.learn_english(prev.as_deref(), &key);
+        // 6. 上屏尾部（字符级窗口）要看得见这个词；中文词级上文断开。
+        self.push_tail(&text);
+        self.last_word = None;
+        // 7. 英文上文换成目标 key。
+        self.english.on_word_committed(&key);
+        text
     }
 
     /// 候选要消耗的输入字节数(`covered == 0` = 未知/整串)。
@@ -141,6 +188,8 @@ impl InputSession {
     pub(super) fn commit_raw(&mut self, text: String) -> String {
         // 原始上屏打断造词缓冲(标点/回车/Verbatim 大写都经此路径,
         // 即「不跨标点造词」「不跨模式切换造词」的落点)。
+        // 原文是**语言边界**:英文上文在这里失效,且不从原文提取英文学习。
+        self.english.clear();
         self.break_coin_run();
         self.record_committed(&text, None);
         self.reset();
@@ -328,6 +377,9 @@ impl InputSession {
         // 输入里的分段上屏要靠它),所以边界必须在这里显式划。
         self.committed_tail.clear();
         self.last_word = None;
+        // 英文上文同样跨焦点失效:已提交统计不撤销,但下一会话不学
+        // 跨焦点词对。
+        self.english.clear();
         self.reset();
         // 「英文跟随」是一次连续按键序列，换焦点就结束（它不是模式）。
         self.english_run = false;
@@ -348,6 +400,8 @@ impl InputSession {
     /// 焦点切换只结束「英文跟随」，不改模式（原因见
     /// [`Self::reset_for_focus_change`] 的注释）。
     pub(super) fn toggle_ascii(&mut self) -> SessionOutput {
+        // 模式切换是语言边界:换到英文或换回中文都不再延续上一段英文链。
+        self.english.clear();
         if !self.pinyin.is_empty() && !self.english_mode {
             // 切英文时已确认段一起上屏(`finish_with_raw` 拼上并记账)。
             let text = self.finish_with_raw(self.pinyin.clone());

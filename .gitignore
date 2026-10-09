@@ -13,6 +13,11 @@ data/abbrev.bin
 # 所以同样不进 git,由发布物 / 本机重新生成。
 data/syllable_graph.bin
 data/*.sqlite3
+# 英文词库二进制:scripts/build_english_dict.py 从 wordfreq/条目表构建(约 4 MB),
+# 与 dict.bin 同等对待,通过发布物分发,不进 git。
+data/english.bin
+# M2 静态二元数据,同样不进 git。
+data/english_bigram.bin
 
 # 语言模型（文本或未来的 mmap 二进制格式），由语料训练生成
 data/bigram.txt

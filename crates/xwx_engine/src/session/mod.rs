@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use crate::punctuator::fullwidth_punct;
 use crate::{Candidate, EngineError, ImeEngine, LmContext};
+use english::EnglishRunContext;
 
 /// 候选窗口每页显示的候选数（搜狗等主流输入法默认 9 个）。
 pub const DEFAULT_PAGE_SIZE: usize = 9;
@@ -319,6 +320,11 @@ pub struct InputSession {
     /// 组合期间预编辑区显示 = 这些段的文本 + 剩余拼音串;整串选完 / 回车 /
     /// 标点 / 切英文 / 焦点切换时才一次性上屏。
     confirmed: Vec<ConfirmedSegment>,
+    /// 英文上文(已提交、仍可信的上一个英文词)+ 延迟空格状态。
+    ///
+    /// 与 `english_mode`/`english_run` **刻意分开**（见
+    /// [`english::EnglishRunContext`] 的模块文档）。`reset()` 不清它。
+    english: EnglishRunContext,
     /// recognizer 识别态(gear 审计最后一项:邮箱/网址识别)。
     ///
     /// `Some(_)` 表示当前拼音串整体被 [`crate::recognize`] 判定为
@@ -333,6 +339,7 @@ pub struct InputSession {
 }
 
 mod commit;
+pub mod english;
 mod input_recognized;
 mod input;
 mod refresh;

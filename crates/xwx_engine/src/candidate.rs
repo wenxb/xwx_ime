@@ -327,6 +327,11 @@ impl Candidate {
         self.english.as_ref().map(|m| m.key.as_str())
     }
 
+    /// 英文候选的匹配方式（非英文候选为 `None`）。
+    pub fn english_match_kind(&self) -> Option<EnglishMatchKind> {
+        self.english.as_ref().map(|m| m.match_kind)
+    }
+
     /// 构造一条英文候选（本地契约的唯一落点，避免多处手写字段组合）。
     ///
     /// 契约（见 `docs/english-input/02-engine.md` 第 2.1 节）：

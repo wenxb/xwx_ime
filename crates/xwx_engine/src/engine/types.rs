@@ -5,6 +5,8 @@
 
 use super::*;
 
+use crate::english::EnglishEngine;
+
 /// 引擎聚合体：切分器 + 词库 + 语言模型 + 模糊拼音配置。
 ///
 /// 结构上刻意用具体类型（而非 `Arc<dyn Dictionary>`）：
@@ -24,4 +26,9 @@ pub struct ImeEngine {
     pub fuzzy_pairs: Vec<ConfusionPair>,
     /// 是否启用模糊拼音。
     pub fuzzy_enabled: bool,
+    /// 可选英文组件（`None` = 英文关闭：查询、学习、按键透传全部保持旧行为）。
+    ///
+    /// 裸构造器（[`ImeEngine::new`] / `new_with_lm`）**不**装配它——生产入口
+    /// 用 [`ImeEngine::with_english`] 显式接上，测试与探针同理。
+    pub english: Option<EnglishEngine>,
 }

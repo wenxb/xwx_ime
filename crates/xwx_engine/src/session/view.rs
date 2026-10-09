@@ -17,6 +17,7 @@ impl InputSession {
             last_word: None,
             english_mode: false,
             english_run: false,
+            english: EnglishRunContext::new(),
             coin_buffer: Vec::new(),
             confirmed: Vec::new(),
             recognized: None,
@@ -70,6 +71,23 @@ impl InputSession {
             tail: &self.committed_tail,
             last_word: self.last_word.as_deref(),
         }
+    }
+
+    /// 查询时**有效**的英文上文。
+    ///
+    /// 有中文已确认段时恒为空——前面的中文是语言边界，拿它当英文上文
+    /// 会让「选『开发』再打 pyt」按中文词去召回英文（会话分册第 3 节）。
+    pub fn english_context(&self) -> crate::english::EnglishContext<'_> {
+        if self.confirmed.is_empty() {
+            self.english.context()
+        } else {
+            crate::english::EnglishContext::empty()
+        }
+    }
+
+    /// 英文会话上文的只读视图（含延迟空格状态，测试/断言用）。
+    pub fn english_run_context(&self) -> &EnglishRunContext {
+        &self.english
     }
 
     /// 取当前界面快照。

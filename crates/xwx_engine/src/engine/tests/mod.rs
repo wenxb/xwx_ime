@@ -74,4 +74,5 @@ mod tail_completion;
 mod projection_filler;
 mod recall;
 mod sentence_gate;
+mod bilingual;
 mod blocklist;

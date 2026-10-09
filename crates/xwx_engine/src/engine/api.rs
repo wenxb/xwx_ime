@@ -66,7 +66,35 @@ impl ImeEngine {
             lm_weight: DEFAULT_LM_WEIGHT,
             fuzzy_pairs: COMMON_CONFUSION_PAIRS.to_vec(),
             fuzzy_enabled: DEFAULT_FUZZY_ENABLED,
+            // 裸构造器不装英文:查询/学习/按键透传全部保持旧行为,
+            // 由生产入口或测试显式 `with_english` 接上。
+            english: None,
         })
+    }
+
+    /// 接上英文组件（只读词库 + 独立英文用户实例）。
+    ///
+    /// 不装 = 英文整体关闭：`lookup_composition` 与 `lookup_candidates`
+    /// 逐字节同结果，会话层也不产生任何英文候选。
+    pub fn with_english(mut self, english: crate::english::EnglishEngine) -> Self {
+        self.english = Some(english);
+        self
+    }
+
+    /// 英文组件句柄（未装配时为 `None`）。
+    pub fn english(&self) -> Option<&crate::english::EnglishEngine> {
+        self.english.as_ref()
+    }
+
+    /// 英文上屏的学习钩子：只写**独立**英文用户实例。
+    ///
+    /// 与 [`Self::learn_committed`] 的关系是「两套计数、各学各的」：
+    /// 英文词进英文表，中文词进中文表，互不改变对方的候选。未装配
+    /// 英文时是纯 no-op（不产生任何状态变化与文件副作用）。
+    pub fn learn_english(&self, prev: Option<&str>, word: &str) {
+        if let Some(en) = self.english.as_ref() {
+            en.user().learn(prev, word);
+        }
     }
 
     /// 创建一个输入会话（共享引擎数据）。

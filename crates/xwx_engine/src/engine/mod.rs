@@ -16,6 +16,13 @@ pub enum EngineError {
     /// 语言模型层错误。
     #[error("语言模型错误: {0}")]
     Lm(#[from] LmError),
+    /// 英文通道错误（词库 I/O 或文件损坏）。
+    ///
+    /// 它在**查询期**才会浮现（装配期已经校验过一次），向上传播而不是
+    /// 吞掉：会话层要能看到它并把英文降级为「本次无英文候选」，中文候选
+    /// 与按键行为一律不受影响。
+    #[error("英文通道错误: {0}")]
+    English(#[from] crate::english::EnglishError),
 }
 
 /// 单次查询最多返回的候选数。
@@ -542,10 +549,22 @@ pub(crate) struct DecodedPath {
 
 pub use types::ImeEngine;
 
+/// 混排用的中文候选上限（与 `lookup_candidates` 的截断共用同一个数）。
+pub(crate) fn max_candidates() -> usize {
+    MAX_CANDIDATES
+}
+
+/// 词库「最低档词频」的对上层访问（混排判据用它，不复制字面量 100）。
+pub(crate) fn filler_freq_tier() -> u64 {
+    FILLER_FREQ_TIER
+}
+
 use rank::{ordered_candidates, prune_beam, sort_candidates};
 
 mod api;
 mod abbrev_correct;
+mod bilingual;
+mod blend;
 mod decode;
 mod indexed_mixed;
 mod input;
