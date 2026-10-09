@@ -35,7 +35,7 @@ pub(crate) fn conditional_base(zipf_centi: u16, count: u64, observed_total: u64)
     let z = zipf_centi as f64 / 100.0;
     let p0 = 10f64.powf(z - 9.0);
     let p = 0.8 * (count as f64 / observed_total as f64) + 0.2 * p0;
-    if !(p > 0.0) || !p.is_finite() {
+    if !p.is_finite() || p <= 0.0 {
         return None; // 防御：任何非正/非有限值都退回 M1 的 z
     }
     let lexical = 9.0 + p.log10();
@@ -189,12 +189,15 @@ mod tests {
 
     #[test]
     fn conditional_base_matches_the_hand_computed_formula() {
-        // 手算例：z=4.72（hello 的 q=472）、c=7_852_480、T=2_718_215_040
-        // p0 = 10^(4.72-9) = 1.9055e-5
-        // p  = 0.8×0.002889 + 0.2×1.9055e-5 = 0.0023151
-        // lexical = 9 + log10(0.0023151) = 6.36449
+        // 手算例：z=4.72、c=7_852_480、T=2_718_215_040（真实 `hello looking` 量级）
+        //   p0 = 10^(4.72-9) = 5.2481e-5
+        //   p  = 0.8×0.00288772 + 0.2×5.2481e-5 = 0.00232067
+        //   lexical = 9 + log10(0.00232067) = 6.36578
         let got = conditional_base(472, 7_852_480, 2_718_215_040).expect("有行");
-        assert!((got - 6.36449).abs() < 1e-4, "lexical={got}");
+        assert!((got - 6.36578).abs() < 1e-3, "lexical={got}");
+        // 同一对词把 T 放大十倍：lexical 必须**下降**（证据被稀释）
+        let thinner = conditional_base(472, 7_852_480, 27_182_150_400).expect("有行");
+        assert!(thinner < got, "T 变大必须让条件分下降: {thinner} vs {got}");
     }
 
     #[test]
@@ -209,10 +212,17 @@ mod tests {
 
     #[test]
     fn conditional_base_never_exceeds_the_observed_distribution() {
-        // c = T（该 prev 只连这一个词）：p = 0.8 + 0.2p0，lexical ≈ 9 + log10(0.8)
-        let got = conditional_base(900, 1_000_000, 1_000_000).expect("有行");
-        assert!(got < 9.0, "lexical 不得超过 9（log10(p≤1)）: {got}");
-        assert!((got - (9.0 + 0.8f64.log10()) as f32).abs() < 1e-3, "{got}");
+        // p ≤ 0.8 + 0.2×10^(z-9) ≤ 1（z ≤ 9 由格式保证），所以 lexical ≤ 9。
+        for (q, c, t) in [(900u16, 1_000_000u64, 1_000_000u64), (900, 1, 1_000_000), (500, 999, 1_000)] {
+            let got = conditional_base(q, c, t).expect("有行");
+            assert!(got <= 9.0 + 1e-4, "lexical 不得超过 9: q={q} c={c} T={t} → {got}");
+        }
+        // c = T 且 z = 9（p0 = 1）时正好顶到 9
+        let top = conditional_base(900, 1_000_000, 1_000_000).expect("有行");
+        assert!((top - 9.0).abs() < 1e-4, "{top}");
+        // c = T 但 z 较低：p = 0.8 + 0.2×10^-4，lexical ≈ 9 + log10(0.80002)
+        let mid = conditional_base(500, 1_000_000, 1_000_000).expect("有行");
+        assert!((mid - (9.0 + 0.80002f64.log10()) as f32).abs() < 1e-3, "{mid}");
     }
 
     #[test]

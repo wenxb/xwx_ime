@@ -76,10 +76,21 @@ fn commit_text(s: &mut InputSession, event: InputEvent) -> String {
     }
 }
 
+/// 上屏文本，**允许** M2 的 `CommitAndUpdate`（面板刷新）。
+#[expect(dead_code)]
+fn commit_text_any(s: &mut InputSession, event: InputEvent) -> String {
+    match s.handle(event).expect("按键不应失败") {
+        SessionOutput::Commit(t) | SessionOutput::CommitAndUpdate { text: t, .. } => t,
+        other => panic!("期望上屏，实际 {}", other_name(&other)),
+    }
+}
+
 fn other_name(o: &SessionOutput) -> &'static str {
     match o {
         SessionOutput::Commit(_) => "Commit",
         SessionOutput::Updated(_) => "Updated",
+        SessionOutput::CommitAndUpdate { .. } => "CommitAndUpdate",
+        SessionOutput::RefreshAndForward(_) => "RefreshAndForward",
         SessionOutput::Noop => "Noop",
     }
 }

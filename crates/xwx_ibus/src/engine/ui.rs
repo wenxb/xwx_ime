@@ -55,7 +55,13 @@ use crate::{ibus_proto, XwxEngineServer};
                 Ok(value) => {
                     // preedit 光标跟随会话的编辑光标(caret),不再是串尾:
                     // 用户左移光标在中间插字母时,文本光标要停在插入点。
-                    if let Err(e) = server.update_preedit_text(ctxt, value, caret, true, 0).await {
+                    // `visible` 必须取「preedit 非空」：预测面板的 preedit
+                    // 恒为空，不能给它显示一个空的活动组合。
+                    let visible = !u.preedit.is_empty();
+                    if let Err(e) = server
+                        .update_preedit_text(ctxt, value, caret, visible, 0)
+                        .await
+                    {
                         tracing::warn!(error = %e, "UpdatePreeditText 信号发送失败");
                     }
                 }

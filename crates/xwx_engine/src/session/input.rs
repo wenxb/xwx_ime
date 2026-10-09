@@ -7,6 +7,25 @@ impl InputSession {
     ///
     /// 出错时返回 `Err`（词典/模型查询失败等），会话状态不变。
     pub fn handle(&mut self, event: InputEvent) -> Result<SessionOutput, EngineError> {
+        // —— M2 预测态优先（预测分册第 9 节）——
+        // 预测处理若给出完整输出就直接返回；否则（Closed）说明面板已关，
+        // 同一个事件继续走**一次**普通处理——绝不递归重放事件。
+        let mut closed_prediction = false;
+        if self.predicting() {
+            match self.handle_prediction(&event) {
+                super::prediction::PredictionStep::Handled(out) => return Ok(out),
+                super::prediction::PredictionStep::Closed => {
+                    closed_prediction = true;
+                    // ToggleAscii 是例外：它本身是输入法命令，预测关闭后
+                    // 要返回**空视图 Updated**（继续消费该键），不能把
+                    // 「切模式」误解释成把 Ctrl+空格透传给应用。
+                    if matches!(event, InputEvent::ToggleAscii) {
+                        self.toggle_ascii();
+                        return Ok(SessionOutput::Updated(self.update()));
+                    }
+                }
+            }
+        }
         // 「英文跟随」只在连续字母里活着：任何别的按键都结束它（空格、标点、
         // 回车、退格、Esc、模式切换……）。字母本身由下面 Verbatim 分支与
         // `Char` 分支接住。
@@ -42,6 +61,11 @@ impl InputSession {
                 self.english.clear();
             }
         }
+        // 预测面板刚关掉、而普通处理把按键交给了应用：必须把「需要隐藏 UI」
+        // 这个事实报出去（否则面板会僵在屏幕上），但不能提交任何字符。
+        if closed_prediction && matches!(out, SessionOutput::Noop) {
+            return Ok(SessionOutput::RefreshAndForward(self.update()));
+        }
         Ok(out)
     }
 
@@ -64,6 +88,10 @@ impl InputSession {
             InputEvent::Char(c) if self.english_run && c.is_ascii_alphabetic() => {
                 Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
             }
+
+            // —— Tab：只在预测态有意义（上面已经拦掉） ——
+            // 组合态/空闲态保持 Noop，不抢应用的焦点切换（预测分册第 8 节）。
+            InputEvent::Tab => Ok(SessionOutput::Noop),
 
             // —— Ctrl+空格：切换中英文模式（引擎自己的逻辑） ——
             InputEvent::ToggleAscii => Ok(self.toggle_ascii()),

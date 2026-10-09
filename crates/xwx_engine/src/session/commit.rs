@@ -87,7 +87,7 @@ impl InputSession {
     ///    UserLM（`learn_committed(prev_zh, Some("Python"))`）；
     /// 3. 中文 `last_word` 置 `None`：语言边界，中文字符级窗口仍靠
     ///    `push_tail` 维护。
-    fn record_english_commit(&mut self, c: &Candidate) -> String {
+    pub(super) fn record_english_commit(&mut self, c: &Candidate) -> String {
         let Some(key) = c.english_key().map(str::to_string) else {
             return c.word.clone(); // 不可达:调用方已判 is_english
         };
@@ -158,7 +158,8 @@ impl InputSession {
         let covered = self.covered_len(c);
         if covered >= self.pinyin.len() {
             // 整串选完 = 整个组合结束:已确认段与这一条**一次**上屏。
-            return Ok(SessionOutput::Commit(self.commit_selection(c)));
+            let text = self.commit_selection(c);
+            return Ok(self.after_selection(SessionOutput::Commit(text)));
         }
         let prefix: String = self.pinyin[..covered].to_owned();
         self.consume_covered(c);
@@ -181,6 +182,27 @@ impl InputSession {
         // 走 `push_tail` 而不是直接 push：那里有长度窗口（COMMITTED_TAIL_LIMIT）。
         self.push_tail(&c.word);
         Ok(SessionOutput::Updated(self.update()))
+    }
+
+    /// 一次**明确选词**之后的收尾（M2 预测分册第 6 节）。
+    ///
+    /// 只有走这里的入口才会在提交成功后尝试开预测面板：标点、Enter 原文、
+    /// Verbatim 大写、模式切换、焦点清算都**不经过**它，因此不会误弹面板。
+    /// 分段上屏（`Updated` 分支）不是词尾，**不**预测。
+    pub(super) fn after_selection(&mut self, out: SessionOutput) -> SessionOutput {
+        if !matches!(out, SessionOutput::Commit(_)) {
+            return out;
+        }
+        if !self.maybe_start_prediction() {
+            return out;
+        }
+        match out {
+            SessionOutput::Commit(text) => SessionOutput::CommitAndUpdate {
+                text,
+                update: self.update(),
+            },
+            other => other,
+        }
     }
 
     /// 上屏任意文本并复位会话。原文计入上屏尾部；
@@ -354,6 +376,9 @@ impl InputSession {
         // 「被翻页吃掉的那个点」是**当前串**的属性,串都没了就作废
         // 。
         self.pending_url_dot = None;
+        // M2：组合结束就回到普通空闲态。**不**在这里开预测——
+        // 标点、回车、原文逃逸都经过本方法，它们都不是「明确选词入口」。
+        self.clear_prediction();
     }
 
     /// 焦点切换（IBus `FocusOut` / `Reset` / `Disable`）的复位。
@@ -380,6 +405,8 @@ impl InputSession {
         // 英文上文同样跨焦点失效:已提交统计不撤销,但下一会话不学
         // 跨焦点词对。
         self.english.clear();
+        // M2：焦点清算**不提交**当前高亮的预测，只把它收掉。
+        self.clear_prediction();
         self.reset();
         // 「英文跟随」是一次连续按键序列，换焦点就结束（它不是模式）。
         self.english_run = false;

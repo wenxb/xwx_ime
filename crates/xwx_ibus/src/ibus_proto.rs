@@ -94,6 +94,8 @@ pub mod keyval {
     pub const PAGE_DOWN: u32 = 0xff56;
     /// Delete(0xffff;Ctrl+Delete 删候选用,见 engine.rs 的拦截)。
     pub const DELETE: u32 = 0xffff;
+    /// Tab(0xff09;只在预测态接受下一词,见预测分册第 8 节)。
+    pub const TAB: u32 = 0xff09;
 }
 
 /// 协议层错误。
@@ -143,6 +145,10 @@ pub fn translate_keyval(keyval: u32, state: u32) -> Option<InputEvent> {
         keyval::RIGHT => Some(InputEvent::Right),
         keyval::PAGE_UP => Some(InputEvent::PageUp),
         keyval::PAGE_DOWN => Some(InputEvent::PageDown),
+        // Tab：**只在预测态**被会话接受（组合态/空闲态返回 Noop，
+        // 不抢应用的焦点切换）。Shift+Tab 在这里就返回 `None`——
+        // 它必须原样透传给应用，绝不能折成「接受预测」。
+        keyval::TAB if state & IBUS_SHIFT_MASK == 0 => Some(InputEvent::Tab),
         keyval::ZERO..=0x39 => Some(InputEvent::Select((keyval - keyval::ZERO) as u8)),
         keyval::UPPER_A..=0x5a | keyval::LOWER_A..=0x7a => {
             let shift = state & IBUS_SHIFT_MASK != 0;

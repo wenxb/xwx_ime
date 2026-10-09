@@ -20,6 +20,8 @@ impl InputSession {
             english: EnglishRunContext::new(),
             coin_buffer: Vec::new(),
             confirmed: Vec::new(),
+            prediction: std::sync::Arc::new(Vec::new()),
+            prediction_cursor: 0,
             recognized: None,
             pending_url_dot: None,
         }
@@ -58,6 +60,15 @@ impl InputSession {
     /// 是否处于输入状态（拼音串非空）。
     pub fn is_active(&self) -> bool {
         !self.pinyin.is_empty()
+    }
+
+    /// 界面上**是否还有可见内容**（组合、确认段、候选窗或预测面板）。
+    ///
+    /// 焦点清算必须看这个而不是 [`Self::is_active`]：预测态的拼音串为空、
+    /// 确认段也空，只看 `pinyin` 会误判成「什么都没显示」，于是刚弹出的
+    /// 下一词面板在切焦点后僵在屏幕上（预测分册第 10.2 节）。
+    pub fn has_visible_ui(&self) -> bool {
+        self.composing() || !self.candidates.is_empty() || self.predicting()
     }
 
     /// 是否处于英文模式（中英切换）。
@@ -99,6 +110,8 @@ impl InputSession {
     /// （会话分册第 2 节最后两行）。
     pub fn clear_english_context(&mut self) {
         self.english.clear();
+        // 透传路径要把预测面板一起收掉，否则它会僵在屏幕上。
+        self.clear_prediction();
     }
 
     /// 取当前界面快照。
@@ -112,6 +125,18 @@ impl InputSession {
     }
 
     pub(super) fn update(&self) -> SessionUpdate {
+        // 预测态：preedit 恒为空（没有拼音组合），候选表换成下一词面板。
+        // IBus 侧必须据此允许「空 preedit + 有候选」，否则面板永远不显示。
+        if self.predicting() {
+            return SessionUpdate {
+                preedit: String::new(),
+                candidates: std::sync::Arc::clone(&self.prediction),
+                cursor: self.prediction_cursor,
+                caret: 0,
+                page: self.prediction_page(),
+                page_size: self.page_size,
+            };
+        }
         // 预编辑区 = **已确认的段 + 剩余拼音串**(方案 b:确认段留在组合里,
         // 不交给应用)。光标要在剩余串里的插入点上,所以偏移已确认段的
         // **字符数**(IBus 的 preedit cursor 是字符下标;已确认段是中文,
@@ -127,6 +152,12 @@ impl InputSession {
             page: self.page(),
             page_size: self.page_size,
         }
+    }
+
+    /// 预测面板的页码（由高亮下标与页大小推导）。
+    pub(super) fn prediction_page(&self) -> usize {
+        // `page_size` 只由 `set_page_size` 改，常量默认 9、生产路径不会给 0。
+        self.prediction_cursor.checked_div(self.page_size).unwrap_or(0)
     }
 
     /// 已确认段拼成的文本(预编辑区显示 + 最终上屏都要用)。

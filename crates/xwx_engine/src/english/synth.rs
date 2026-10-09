@@ -5,6 +5,7 @@
 
 use super::format::{HEADER_LEN, MAGIC, VERSION};
 
+
 /// 合成词条。`q` 是百分之一 Zipf。
 #[derive(Clone, Debug)]
 pub(crate) struct W {
@@ -88,6 +89,75 @@ pub(crate) fn build(words: &[W]) -> Vec<u8> {
     out.extend_from_slice(&words_buf);
     out.extend_from_slice(&pfx_buf);
     out.extend_from_slice(&ids_buf);
+    out.extend_from_slice(&strings);
+    out
+}
+
+/// 合成一条二元边：`(prev, next, count)`。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BigramEdgeSpec {
+    pub(crate) prev: &'static str,
+    pub(crate) next: &'static str,
+    pub(crate) count: u64,
+}
+
+/// 测试用的最小 `english_bigram.bin` 构建器（与 Python 端同一份格式规范）。
+///
+/// 行内按 (count 降序, next 升序) 排；`observed_total` 取该 prev 下**全部**
+/// 边的和（测试夹具不超过 32 条边，不会触发截断）。
+pub(crate) fn build_bigram(edges: &[BigramEdgeSpec]) -> Vec<u8> {
+    use super::bigram::{BIGRAM_HEADER_LEN, BIGRAM_MAGIC, BIGRAM_VERSION};
+    let mut by_prev: std::collections::BTreeMap<&str, Vec<(&str, u64)>> =
+        std::collections::BTreeMap::new();
+    for e in edges {
+        by_prev.entry(e.prev).or_default().push((e.next, e.count));
+    }
+    let mut strings: Vec<u8> = Vec::new();
+    let mut ctx_buf: Vec<u8> = Vec::new();
+    let mut edge_buf: Vec<u8> = Vec::new();
+    let mut intern = |s: &str, strings: &mut Vec<u8>| -> (u32, u16) {
+        let off = strings.len() as u32;
+        strings.extend_from_slice(s.as_bytes());
+        (off, s.len() as u16)
+    };
+    let mut n_edge = 0usize;
+    for (prev, list) in &by_prev {
+        let mut rows = list.clone();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let total: u64 = rows.iter().map(|(_, c)| *c).sum();
+        let (p_off, p_len) = intern(prev, &mut strings);
+        ctx_buf.extend_from_slice(&p_off.to_le_bytes());
+        ctx_buf.extend_from_slice(&p_len.to_le_bytes());
+        ctx_buf.extend_from_slice(&(rows.len() as u16).to_le_bytes());
+        ctx_buf.extend_from_slice(&(n_edge as u32).to_le_bytes());
+        ctx_buf.extend_from_slice(&0u32.to_le_bytes());
+        ctx_buf.extend_from_slice(&total.to_le_bytes());
+        for (next, count) in rows {
+            let (n_off, n_len) = intern(next, &mut strings);
+            edge_buf.extend_from_slice(&n_off.to_le_bytes());
+            edge_buf.extend_from_slice(&n_len.to_le_bytes());
+            edge_buf.extend_from_slice(&0u16.to_le_bytes());
+            edge_buf.extend_from_slice(&count.to_le_bytes());
+            n_edge += 1;
+        }
+    }
+    let ctx_off = BIGRAM_HEADER_LEN;
+    let edge_off = ctx_off + ctx_buf.len();
+    let strings_off = edge_off + edge_buf.len();
+    let file_len = strings_off + strings.len();
+    let mut out = Vec::with_capacity(file_len);
+    out.extend_from_slice(&BIGRAM_MAGIC);
+    out.extend_from_slice(&BIGRAM_VERSION.to_le_bytes());
+    out.extend_from_slice(&(BIGRAM_HEADER_LEN as u32).to_le_bytes());
+    out.extend_from_slice(&(by_prev.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(n_edge as u32).to_le_bytes());
+    out.extend_from_slice(&(ctx_off as u64).to_le_bytes());
+    out.extend_from_slice(&(edge_off as u64).to_le_bytes());
+    out.extend_from_slice(&(strings_off as u64).to_le_bytes());
+    out.extend_from_slice(&(file_len as u64).to_le_bytes());
+    out.extend_from_slice(&0u64.to_le_bytes());
+    out.extend_from_slice(&ctx_buf);
+    out.extend_from_slice(&edge_buf);
     out.extend_from_slice(&strings);
     out
 }

@@ -74,6 +74,20 @@ impl XwxEngineServer {
                 ui::refresh_ui(self, ctxt, &u).await;
                 true
             }
+            // 上屏**然后**刷新预测面板：必须用 `commit_text_only`，
+            // 不能调会 hide_ui 的 `commit`——否则刚算好的下一词面板
+            // 会被自己藏掉（预测分册第 9 节）。
+            SessionOutput::CommitAndUpdate { text, update } => {
+                ui::commit_text_only(self, ctxt, &text).await;
+                ui::refresh_ui(self, ctxt, &update).await;
+                true
+            }
+            // 只刷新/隐藏界面，**不提交任何字符**：返回 false，按键照常
+            // 交给应用（绝不能 CommitText 一个空格再返回 false）。
+            SessionOutput::RefreshAndForward(u) => {
+                ui::refresh_ui(self, ctxt, &u).await;
+                false
+            }
         }
     }
 
@@ -136,21 +150,26 @@ impl XwxEngineServer {
         }
     }
 
-    /// 复位会话并收起全部 UI（FocusOut / Reset / Disable 共用）。
-    /// 英文上下文失效（IBus 层钩子）。
-    ///
-    /// 只清英文上文与延迟空格状态——**不碰**中文组合、不隐藏候选窗、
-    /// 不发 UI 信号（会话分册第 2 节）。用于那些在进入会话之前就
+    /// 英文上下文失效（IBus 层钩子）：只清英文上文与延迟空格状态——
+    /// **不碰**中文组合（会话分册第 2 节）。用于那些在进入会话之前就
     /// `return false` 的事件。
-    async fn invalidate_english_context(&self) {
+    ///
+    /// M2 起同时收掉预测面板，并**返回**「刚才是否有面板」：有就让调用方
+    /// 发一次隐藏信号，没有就是纯 no-op（预测分册第 10.3 节）。释放事件
+    /// 由调用方先区分开，不会走到这里。
+    async fn invalidate_english_context(&self) -> bool {
         let mut session = self.session.lock().await;
+        let had_prediction = session.predicting();
         session.clear_english_context();
+        had_prediction
     }
 
     async fn reset_state(&self, ctxt: &zbus::SignalContext<'_>) {
         let (was_active, pending) = {
             let mut session = self.session.lock().await;
-            let active = session.is_active();
+            // 预测态 pinyin 为空，旧的 `is_active()` 会返回 false——
+            // 那会让刚弹出的预测面板在焦点切换后僵在屏幕上。
+            let active = session.has_visible_ui();
             // 焦点切换是造词的真边界：跨应用的上屏片段不该粘成一个词。
             // 返回值是「已确认但还没交给应用」的段(方案 b)——用户明确选过
             // 的内容不能因为切窗口就丢掉,这里补一次 CommitText。
@@ -271,8 +290,8 @@ impl XwxEngineServer {
                 | ibus_proto::IBUS_META_MASK)
             != 0;
         if is_release || is_modifier_combo {
-            if !is_release {
-                self.invalidate_english_context().await;
+            if !is_release && self.invalidate_english_context().await {
+                ui::hide_ui(self, &ctxt).await;
             }
             return false;
         }
@@ -285,13 +304,19 @@ impl XwxEngineServer {
         let in_english = self.session.lock().await.english_mode();
         if in_english {
             // 直通应用的原始按键同样是英文链的边界（应用自己决定它是什么）。
-            self.invalidate_english_context().await;
+            if self.invalidate_english_context().await {
+                ui::hide_ui(self, &ctxt).await;
+            }
             return false;
         }
 
         let Some(event) = ibus_proto::translate_keyval(keyval, state) else {
-            // 翻译层不认识的按键会原样透传给应用——同样是边界。
-            self.invalidate_english_context().await;
+            // 翻译层不认识的按键会原样透传给应用——同样是边界
+            // （Shift+Tab 走的就是这条路：它必须原样交给应用，
+            // 绝不能折成「接受预测」）。
+            if self.invalidate_english_context().await {
+                ui::hide_ui(self, &ctxt).await;
+            }
             return false;
         };
         self.handle_key(&ctxt, event).await

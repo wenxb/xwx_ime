@@ -464,6 +464,7 @@ fn describe(key: &InputEvent) -> String {
         InputEvent::DeleteCandidate => "key DeleteCandidate".to_owned(),
         InputEvent::UnblockCandidate => "key UnblockCandidate".to_owned(),
         InputEvent::ToggleAscii => "key ToggleAscii".to_owned(),
+        InputEvent::Tab => "key Tab".to_owned(),
     }
 }
 
@@ -481,6 +482,15 @@ fn describe_out(out: &SessionOutput) -> String {
                 u.candidates.len()
             )
         }
+        SessionOutput::CommitAndUpdate { text, update } => format!(
+            "CommitAndUpdate({text:?}, n={})",
+            update.candidates.len()
+        ),
+        SessionOutput::RefreshAndForward(u) => format!(
+            "RefreshAndForward {{ preedit={:?} n={} }}",
+            u.preedit,
+            u.candidates.len()
+        ),
         SessionOutput::Noop => "Noop".to_owned(),
     }
 }

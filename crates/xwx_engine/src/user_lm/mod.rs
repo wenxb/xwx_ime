@@ -129,8 +129,6 @@ impl UserLmSnapshot {
             .unwrap_or(&[])
     }
 
-    // TODO(S4): 双通道英文召回接上后删除这条临时豁免。
-    #[allow(dead_code)]
     /// 英文前缀派生索引:该前缀下最多 32 个规范英文 key(计数降序、key 升序)。
     ///
     /// 派生自计数表、随同一代快照发布——召回与打分因此永远看到同一代数据。
@@ -142,7 +140,6 @@ impl UserLmSnapshot {
             .unwrap_or(&[])
     }
 
-    #[allow(dead_code)]
     /// 英文下一词派生索引:该前词后最多 32 个规范英文 key。
     pub(crate) fn english_next_top(&self, prev: &str) -> &[String] {
         self.tables
@@ -152,7 +149,6 @@ impl UserLmSnapshot {
             .unwrap_or(&[])
     }
 
-    #[allow(dead_code)]
     /// 英文一元计数(0 = 没学过)。
     pub(crate) fn english_unigram_count(&self, key: &str) -> u32 {
         self.tables

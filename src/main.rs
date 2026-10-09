@@ -244,18 +244,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(dict) => {
                 let en_user =
                     xwx_engine::UserLM::open_or_create(&english_cfg.user_path);
-                let english = xwx_engine::EnglishEngine::new(dict)
+                let mut english = xwx_engine::EnglishEngine::new(dict)
                     .with_user_lm(en_user)
                     .with_predict(english_cfg.predict);
+                // M2 静态二元数据是**可选增强**：打不开只关掉条件排序与
+                // 零输入预测的静态来源，已加载的英文词库、前缀补全与用户
+                // 学习一律照常（预测分册第 4 节末两行）。
+                let bigram_note = match xwx_engine::EnglishBigram::open(&english_cfg.bigram_path)
+                {
+                    Ok(model) => {
+                        let note = format!(
+                            "{} context / {} edge",
+                            model.context_count(),
+                            model.edge_count()
+                        );
+                        english = english.with_bigram(model);
+                        note
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %english_cfg.bigram_path.display(),
+                            "英文二元数据不可用,条件排序与零输入预测降级(英文补全与中文不受影响)"
+                        );
+                        "不可用".to_owned()
+                    }
+                };
                 tracing::info!(
                     dict = %english_cfg.dict_path.display(),
                     user = %english_cfg.user_path.display(),
                     words = english.dict().word_count(),
                     prefixes = english.dict().prefix_count(),
                     predict = english_cfg.predict,
-                    // M2 才消费这份数据;M1 只解析路径并在启动日志里报出来
-                    // （路径解析错误在启动期就能被发现,而不是等到开预测）。
                     bigram = %english_cfg.bigram_path.display(),
+                    bigram_data = %bigram_note,
                     "英文通道已接入"
                 );
                 engine.with_english(english)

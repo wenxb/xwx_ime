@@ -17,7 +17,10 @@ mod synth;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use synth::{alpha_key, build as build_synth_bin, W as SynthWord};
+pub(crate) use synth::{
+    alpha_key, build as build_synth_bin, build_bigram as build_synth_bigram, BigramEdgeSpec,
+    W as SynthWord,
+};
 
 use crate::candidate::{Candidate, EnglishMatchKind};
 use crate::user_lm::UserLM;
@@ -130,7 +133,7 @@ impl EnglishEngine {
         };
         let mut merged: std::collections::BTreeMap<String, EnglishHit> =
             std::collections::BTreeMap::new();
-        let mut push = |key: &str,
+        let push = |key: &str,
                         merged: &mut std::collections::BTreeMap<String, EnglishHit>|
          -> Result<(), EnglishError> {
             if merged.contains_key(key) {

@@ -1,5 +1,4 @@
-   Compiling xwx_engine v0.1.0 (/home/youngwen/Desktop/xwx_ime/crates/xwx_engine)
-    Finished `release` profile [optimized] target(s) in 0.80s
+    Finished `release` profile [optimized] target(s) in 0.12s
      Running `/mnt/hdd/target/xwx_ime/release/examples/eval_rank tests/corpora/daily.jsonl tests/corpora/mixed.jsonl tests/corpora/edits.jsonl tests/corpora/keystrokes.jsonl tests/corpora/tuning.jsonl`
 
 == daily.jsonl（12 条）召回 12/12 · MRR 1.000 · 首屏 12/12 · 平均选择 1.00

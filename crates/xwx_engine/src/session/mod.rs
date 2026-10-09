@@ -172,6 +172,12 @@ pub enum InputEvent {
     UnblockCandidate,
     /// Ctrl+空格：切换中英文模式。
     ToggleAscii,
+    /// Tab：**只在预测态**接受当前高亮的下一词。
+    ///
+    /// 组合态与空闲态下 Tab 仍然是 `Noop`（不抢应用的焦点切换）；
+    /// Shift+Tab 由 IBus 层直接按「关闭预测 + 使上文失效」处理，
+    /// **不折成**这个事件。
+    Tab,
 }
 
 /// 已确认、但**尚未交给应用**的一段(方案 b:确认段留在组合里)。
@@ -238,6 +244,21 @@ pub enum SessionOutput {
     Updated(SessionUpdate),
     /// 本输入法不处理该按键。
     Noop,
+    /// 上屏文本，**并且**刷新界面（M2 预测面板）。
+    ///
+    /// IBus 必须走「先 `CommitText`、再 `refresh_ui`」，**不能**调会
+    /// `hide_ui` 的 `commit`——否则刚算好的下一词面板会被自己藏掉。
+    CommitAndUpdate {
+        /// 需要提交给应用的文本。
+        text: String,
+        /// 提交后要展示的界面数据。
+        update: SessionUpdate,
+    },
+    /// 只刷新/隐藏界面，**不提交任何字符**（`ProcessKeyEvent` 返回 false）。
+    ///
+    /// 用于「预测面板需要消失、但按键本身要交给应用」的情形。绝不能
+    /// 为了这个去 `CommitText(" ")` 再返回 false——应用会收到两个空格。
+    RefreshAndForward(SessionUpdate),
 }
 
 /// 把后缀字符(标点 / Verbatim 字母)拼到一次上屏的文本末尾。
@@ -248,8 +269,8 @@ pub enum SessionOutput {
 fn append_to_commit(out: SessionOutput, suffix: &str) -> SessionOutput {
     match out {
         SessionOutput::Commit(text) => SessionOutput::Commit(format!("{text}{suffix}")),
-        // 本函数只被上屏分支调用,`Updated`/`Noop` 不可达;原样返回,
-        // 不制造新的语义。
+        // 本函数只被上屏分支调用,`Updated`/`Noop` 与两个 M2 变体都不可达
+        // (标点会先关掉预测态);原样返回,不制造新的语义。
         other => other,
     }
 }
@@ -325,6 +346,14 @@ pub struct InputSession {
     /// 与 `english_mode`/`english_run` **刻意分开**（见
     /// [`english::EnglishRunContext`] 的模块文档）。`reset()` 不清它。
     english: EnglishRunContext,
+    /// M2 **下一词预测面板**的候选（最多 [`crate::english::ENGLISH_NEXT_LIMIT`] 条）。
+    ///
+    /// 与 `candidates` 刻意分开：预测项全是 `NextWord`、`covered` 恒 0，
+    /// 既不参与 `composing()`，也不走 `commit_candidate` 的消费语义。
+    /// 空 = 普通空闲态（不维持一个空的 Prediction 状态）。
+    prediction: std::sync::Arc<Vec<Candidate>>,
+    /// 预测面板的高亮下标（相对 `prediction`）。
+    prediction_cursor: usize,
     /// recognizer 识别态(gear 审计最后一项:邮箱/网址识别)。
     ///
     /// `Some(_)` 表示当前拼音串整体被 [`crate::recognize`] 判定为
@@ -342,6 +371,7 @@ mod commit;
 pub mod english;
 mod input_recognized;
 mod input;
+mod prediction;
 mod refresh;
 mod view;
 
