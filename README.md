@@ -74,6 +74,14 @@
 - [x] **Ctrl+Delete 删候选**（词库词只屏蔽，用户造词条目连词条删掉）
 - [x] **邮箱 / 网址识别**（`zhangsan@gmail.com`、`http://x.com`、
       `www.example.com` 原样上屏，不再被切成拼音）
+- [x] **英文前缀补全（M1）**：纯字母输入额外走一条独立英文通道——精确查询 +
+      前缀补全（`pyth` → `Python`），中英意图分档后再稳定混排（中文候选的
+      字段与相对次序不变）。英文有**独立**用户文件 `user_english.txt`，
+      选择即学习、Ctrl+Delete 按目标完整词屏蔽、Ctrl+Shift+Delete 撤销
+      **真正最近**的一次删除（中英共享一个撤销槽位）。连续英文单词自动补
+      前导空格（`hello` + ` world`），用户显式敲过空格时不重复补。
+      词库缺失只关闭英文通道，中文完全不受影响。
+      **下一词预测（M2）未实现**，`XWX_ENGLISH_PREDICT` 目前不产生任何效果。
 
 ## 依赖
 
@@ -108,7 +116,8 @@ just install
    （exec 指向第 2 步的二进制）；
 4. 拷贝数据文件到 `~/.local/share/xwx/`（各自**存在才拷**，缺了只降级不报错）：
    `dict.bin`（词库）、`abbrev.bin`（简拼副索引）、`syllable_graph.bin`
-   （缩写弧建边的加速索引，缺了简拼走慢路径、功能不变）；
+   （缩写弧建边的加速索引，缺了简拼走慢路径、功能不变）、`english.bin`
+   （英文词库，缺了只是没有英文前缀补全、中文不受影响）；
 5. 重启 `ibus-daemon`。
 
 之后 `gsettings set org.gnome.desktop.input-sources sources "[('xkb','us'),('ibus','xwx')]"`
@@ -191,6 +200,16 @@ gdbus call --session --dest org.freedesktop.IBus --object-path /org/freedesktop/
 - `XWX_ABBREV_PATH`:覆盖简拼副索引 `abbrev.bin`（缺省与 `dict.bin` 同目录）;
 - `XWX_SYLLABLE_GRAPH_PATH`:覆盖音节级转移索引 `syllable_graph.bin`
   （缺省与 `dict.bin` 同目录）;
+- `XWX_ENGLISH`:英文通道总开关(默认 `1`)。设为 `0` 时**不打开英文词库、
+  也不打开/创建英文用户文件**——关闭功能后不留下任何新的路径访问与写文件
+  副作用;
+- `XWX_ENGLISH_DICT_PATH`:覆盖英文词库 `english.bin` 的读取路径(缺省
+  `$XDG_DATA_HOME/xwx/english.bin`,其次 `/usr/share/xwx/english.bin`);
+- `XWX_ENGLISH_USER_LM_PATH`:覆盖英文用户文件(缺省
+  `$XDG_DATA_HOME/xwx/user_english.txt`;debug 构建用
+  `user_english.dev.txt`)。**可写路径永不回落系统目录**;
+- `XWX_ENGLISH_PREDICT`:M2 零输入下一词面板开关(默认 `0`,M1 无效果);
+- `XWX_ENGLISH_BIGRAM_PATH`:M2 静态二元数据路径(M1 只解析并记录,不读取);
 - `XWX_LM_PATH`:覆盖**运行时读取**的语言模型路径。未设置时按优先级自动
   探测 `$XDG_DATA_HOME/xwx/` 下的 `.gram`(首选 `wanxiang-lts-zh-hans.gram`,
   否则任意 `.gram` 按文件名字典序第一个),最后回落 `bigram.txt`;

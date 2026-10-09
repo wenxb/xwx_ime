@@ -95,7 +95,7 @@ install:
     @sudo install -d {{sys_comp_dir}}
     @sudo install -m 644 /tmp/xwx-component.xml {{sys_comp_dir}}/xwx.xml
     @rm -f /tmp/xwx-component.xml
-    @echo "==> [4/6] 词库 / 副索引 / 音节图 / 语言模型检查"
+    @echo "==> [4/6] 词库 / 副索引 / 音节图 / 英文词库 / 语言模型检查"
     # 词库与副索引：缺任何一个只是功能降级，提醒但不算失败。
     @if test -f data/dict.bin; then install -m 644 data/dict.bin {{xwx_data}}/dict.bin; \
     else echo "警告：data/dict.bin 不存在，引擎只剩极小的内置词库。"; fi
@@ -105,6 +105,9 @@ install:
     # 跨页二分（实测慢 1.4~2 倍），所以是「提示」不是「警告」。
     @if test -f data/syllable_graph.bin; then install -m 644 data/syllable_graph.bin {{xwx_data}}/syllable_graph.bin; \
     else echo "提示：data/syllable_graph.bin 不存在，简拼建格走慢路径（生成：python3 scripts/build_syllable_graph.py）。"; fi
+    # 英文词库（可选能力）：缺它只是没有英文前缀补全，中文完全不受影响，
+    # 所以是「提示」不是「警告」。生成：python3 scripts/build_english_dict.py --wordfreq。
+    @if test -f data/english.bin; then install -m 644 data/english.bin {{xwx_data}}/english.bin;     else echo "提示：data/english.bin 不存在，英文前缀补全不可用（生成：python3 scripts/build_english_dict.py --wordfreq --out data/english.bin）。"; fi
     @if pgrep -x fcitx5 >/dev/null; then echo "警告：fcitx5 正在运行，它会占用 IBus 总线名（需要时 fcitx5 -k）。"; fi
     @if ! ls {{xwx_data}}/*.gram >/dev/null 2>&1 && ! test -f {{xwx_data}}/bigram.txt; then \
         echo "提示：未检测到语言模型，候选排序退化为纯词频（把万象 .gram 放进 {{xwx_data}}/ 即可）。"; \
@@ -116,6 +119,7 @@ install:
     @echo "已安装  {{bin_dir}}/xwx_ime  $(stat -c%s {{bin_dir}}/xwx_ime) 字节  sha256 $(sha256sum {{bin_dir}}/xwx_ime | cut -c1-12)"
     @echo "组件    {{sys_comp_dir}}/xwx.xml  engine xwx / zh_CN"
     @echo "词库    {{xwx_data}}/dict.bin + abbrev.bin + syllable_graph.bin"
+    @echo "英文    {{xwx_data}}/english.bin（可选；缺省时英文通道自动关闭）"
     @echo "输入源  gsettings set org.gnome.desktop.input-sources sources \"[('xkb','us'),('ibus','xwx')]\""
 
 # 打 deb 包

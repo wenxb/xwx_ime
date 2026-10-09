@@ -71,4 +71,14 @@ assets = [
     # 音节级转移索引(缩写弧建边的加速索引):与 dict.bin 同目录才会被装配
     # (src/main.rs 默认取 `dict.bin.with_file_name("syllable_graph.bin")`)。
     ["data/syllable_graph.bin", "usr/share/xwx/syllable_graph.bin", "644"],
+    # 英文词库(可选能力):缺它时 `src/main.rs` 只关闭英文通道并告警,
+    # 中文候选与按键行为完全不受影响(可选的降级面)。由
+    # `python3 scripts/build_english_dict.py --wordfreq ...` 生成,不进 git。
+    ["data/english.bin", "usr/share/xwx/english.bin", "644"],
+    # 英文数据的署名与许可:wordfreq 的**数据**按 CC BY-SA 4.0 再分发
+    # (软件许可是 Apache-2.0,不覆盖数据),派生数据产品必须随包带上署名。
+    ["data/english/NOTICE.md", "usr/share/doc/xwx-ime/english-data-NOTICE.md", "644"],
+    ["data/english/LICENSES/wordfreq-LICENSE.txt", "usr/share/doc/xwx-ime/wordfreq-LICENSE.txt", "644"],
+    ["data/english/LICENSES/CC-BY-SA-4.0.txt", "usr/share/doc/xwx-ime/CC-BY-SA-4.0.txt", "644"],
+    ["data/english/LICENSES/Apache-2.0.txt", "usr/share/doc/xwx-ime/Apache-2.0.txt", "644"],
 ]
