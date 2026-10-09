@@ -11,9 +11,10 @@ use std::collections::BTreeMap;
 use crate::candidate::EnglishMatchKind;
 use crate::user_lm::UserLmSnapshot;
 
+use super::bigram::EnglishBigram;
 use super::context::EnglishContext;
 use super::dict::EnglishDict;
-use super::rank::{user_counts, EnglishHit};
+use super::rank::{conditional_base, user_counts, EnglishHit};
 
 /// 单个来源的条数上限（静态前缀 / 用户前缀 / 两种上文列表）。
 const SOURCE_LIMIT: usize = 32;
@@ -24,6 +25,14 @@ const SOURCE_LIMIT: usize = 32;
 /// 共用同一个命名空间键。
 pub const ENGLISH_BLOCK_NAMESPACE: &str = "__english__";
 
+/// 该行里某个 next 的计数（未收录返回 0）。
+fn count_in(row: &super::bigram::BigramRow, model: &EnglishBigram, next: &str) -> u64 {
+    row.iter(model)
+        .find(|e| e.next == next)
+        .map(|e| e.count)
+        .unwrap_or(0)
+}
+
 /// 当前输入的英文是否允许「补全」（`key != input_key`）。
 ///
 /// 无英文上文时 1 个字母不出英文、2 个字母只查精确；有可信英文上文时允许
@@ -33,11 +42,14 @@ pub(crate) fn completion_allowed(input_key: &str, ctx: &EnglishContext<'_>) -> b
 }
 
 /// 召回：合并五个来源、按完整 key 去重、统一过滤屏蔽词。
+///
+/// `static_bigram` 是 M2 的可选静态二元模型（`None` = M1 行为，去重前上界 97）。
 pub(crate) fn recall_english(
     dict: &EnglishDict,
     input_key: &str,
     ctx: &EnglishContext<'_>,
     snapshot: &UserLmSnapshot,
+    static_bigram: Option<&EnglishBigram>,
 ) -> Result<Vec<EnglishHit>, super::EnglishError> {
     let allow_completion = completion_allowed(input_key, ctx);
     // 去重按**目标完整 key**；BTreeMap 让遍历顺序确定（结果与插入顺序无关）。
@@ -56,6 +68,18 @@ pub(crate) fn recall_english(
             return Ok(()); // 升级后已移除的词不凭旧计数复活
         };
         let (uni, bi) = user_counts(snapshot, ctx, e.key);
+        // M2：静态条件基础项（该 prev 行存在且收录了这个词对时才算，
+        // 不存在时 `conditional_base` 返回 `None`，分数退回 M1 的 z）。
+        let static_base = match (static_bigram, ctx.previous_word) {
+            (Some(model), Some(prev)) => {
+                let row = model.row(prev)?;
+                match row {
+                    Some(r) => conditional_base(e.zipf_centi, count_in(&r, model, e.key), r.observed_total),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
         merged.insert(
             e.key.to_string(),
             EnglishHit {
@@ -69,6 +93,7 @@ pub(crate) fn recall_english(
                 },
                 user_unigram: uni,
                 user_bigram: bi,
+                static_base,
             },
         );
         Ok(())
@@ -91,7 +116,16 @@ pub(crate) fn recall_english(
                 push(key, &mut merged)?;
             }
         }
-        // ⑤ M2 静态上文 Top-32 在 `bigram.rs` 接入后补在这里。
+        // ⑤ M2 静态上文 Top-32 中匹配当前前缀的词。
+        if let Some(model) = static_bigram {
+            if let Some(row) = model.row(prev)? {
+                for e in row.iter(model).take(SOURCE_LIMIT) {
+                    if e.next.starts_with(input_key) {
+                        push(e.next, &mut merged)?;
+                    }
+                }
+            }
+        }
     }
 
     // 屏蔽在**所有召回源合并之后**统一过滤一次。

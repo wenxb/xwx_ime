@@ -1,0 +1,43 @@
+{
+  "format": {
+    "context_record_len": 24,
+    "edge_record_len": 16,
+    "header_len": 64,
+    "magic": "XWXENB1\u0000",
+    "top_per_context": 32,
+    "version": 1
+  },
+  "lexicon": {
+    "file": "words.bin",
+    "sha256": "adadc7b99bfec523ae6e0387397ebf1b28455c2e8730c867fd7da8a729342156"
+  },
+  "parameters": {
+    "top_per_context": 32
+  },
+  "product": {
+    "bytes": 413,
+    "context_count": 6,
+    "edge_count": 8,
+    "file_len": 413,
+    "name": "bigram.bin",
+    "sha256": "30f1b7cf69563beed32683a10907b93034508f22bd9a32d7c96367343a200901",
+    "string_bytes": 77
+  },
+  "source": {
+    "file": "bigram.tsv",
+    "pinned_sha256": null,
+    "sha256": "39384c108a6b40026ac78bb12574d3bdd161155a42a9420f3e048ee9b16d5576",
+    "url": null
+  },
+  "stats": {
+    "contexts": 6,
+    "drop_absent": 1,
+    "drop_invalid_key": 1,
+    "edges": 8,
+    "lines": 12,
+    "merged_duplicates": 2,
+    "observed_total_max": 733381704,
+    "observed_total_sum": 1013272793,
+    "skipped_comment": 6
+  }
+}

@@ -56,7 +56,13 @@ impl ImeEngine {
         let zh = self.lookup_candidates(raw_input, chinese_context)?;
 
         let snapshot = en.user().snapshot();
-        let hits = recall_english(en.dict(), &key, english_context, &snapshot)?;
+        let hits = recall_english(
+            en.dict(),
+            &key,
+            english_context,
+            &snapshot,
+            en.bigram(),
+        )?;
         if hits.is_empty() {
             return Ok(zh); // 英文为空:原样返回，不重排
         }

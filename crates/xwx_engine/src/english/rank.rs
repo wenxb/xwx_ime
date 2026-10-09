@@ -17,6 +17,31 @@ const UNIGRAM_GAIN: f32 = 0.6;
 /// 二元增益系数。
 const BIGRAM_GAIN: f32 = 0.9;
 
+/// M2 条件基础项：有该 prev 行时用平滑频率估计，否则返回 `None`
+/// （调用方退回 M1 的 `z = zipf_centi / 100`）。
+///
+/// ```text
+/// p0 = 10^(z - 9)
+/// p  = 0.8 × c/T + 0.2 × p0
+/// lexical = 9 + log10(p)
+/// ```
+///
+/// `c = 0`（词对未收录）时 `p = 0.2 × p0 > 0`，所以结果永远有限——
+/// **绝不会出现 log10(0) 或负无穷**。0.8/0.2 是待调参起点，不是最优。
+pub(crate) fn conditional_base(zipf_centi: u16, count: u64, observed_total: u64) -> Option<f32> {
+    if observed_total == 0 {
+        return None; // 没有这一行：基础项直接用 z
+    }
+    let z = zipf_centi as f64 / 100.0;
+    let p0 = 10f64.powf(z - 9.0);
+    let p = 0.8 * (count as f64 / observed_total as f64) + 0.2 * p0;
+    if !(p > 0.0) || !p.is_finite() {
+        return None; // 防御：任何非正/非有限值都退回 M1 的 z
+    }
+    let lexical = 9.0 + p.log10();
+    lexical.is_finite().then_some(lexical as f32)
+}
+
 /// 一条召回命中的英文词（去重后、打分前）。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EnglishHit {
@@ -32,6 +57,8 @@ pub(crate) struct EnglishHit {
     pub user_unigram: u32,
     /// 用户二元计数（`上文 → 该词`）。
     pub user_bigram: u32,
+    /// M2 的静态条件基础项（`None` = 没有该 prev 行，用 M1 的 z）。
+    pub static_base: Option<f32>,
 }
 
 /// 英文分：`S = z - 0.15 × extra + U + B`。
@@ -41,8 +68,13 @@ pub(crate) struct EnglishHit {
 /// 不受两次浮点舍入影响。
 pub(crate) fn english_score(hit: &EnglishHit, input_len: usize) -> f32 {
     let extra = hit.key.len().saturating_sub(input_len);
-    let base_centi = hit.zipf_centi as i32 - 15 * extra as i32;
-    base_centi as f32 / 100.0 + unigram_gain(hit.user_unigram) + bigram_gain(hit.user_bigram)
+    // 没有静态二元行时走**整数** base：同分关系与离线 Top-32 缓存逐位一致，
+    // 不受两次浮点舍入影响（M1 的行为不能因为 M2 而漂移）。
+    let base = match hit.static_base {
+        Some(b) => b - 0.15 * extra as f32,
+        None => (hit.zipf_centi as i32 - 15 * extra as i32) as f32 / 100.0,
+    };
+    base + unigram_gain(hit.user_unigram) + bigram_gain(hit.user_bigram)
 }
 
 /// `U = 0.6 × log10(1 + min(u, 1000))`；0 次严格加 0。
@@ -151,7 +183,48 @@ mod tests {
             match_kind: kind,
             user_unigram: u,
             user_bigram: b,
+            static_base: None,
         }
+    }
+
+    #[test]
+    fn conditional_base_matches_the_hand_computed_formula() {
+        // 手算例：z=4.72（hello 的 q=472）、c=7_852_480、T=2_718_215_040
+        // p0 = 10^(4.72-9) = 1.9055e-5
+        // p  = 0.8×0.002889 + 0.2×1.9055e-5 = 0.0023151
+        // lexical = 9 + log10(0.0023151) = 6.36449
+        let got = conditional_base(472, 7_852_480, 2_718_215_040).expect("有行");
+        assert!((got - 6.36449).abs() < 1e-4, "lexical={got}");
+    }
+
+    #[test]
+    fn conditional_base_is_finite_for_unseen_pairs_and_when_there_is_no_row() {
+        // c = 0：不能是负无穷，只能是 z - log10(5) ≈ z - 0.699
+        let got = conditional_base(472, 0, 1_000_000).expect("有行");
+        assert!(got.is_finite());
+        assert!((got - (4.72 - 0.69897)).abs() < 1e-4, "未收录词对={got}");
+        // 没有这一行：退回 None（调用方用 z），不做指数/对数往返
+        assert_eq!(conditional_base(472, 0, 0), None);
+    }
+
+    #[test]
+    fn conditional_base_never_exceeds_the_observed_distribution() {
+        // c = T（该 prev 只连这一个词）：p = 0.8 + 0.2p0，lexical ≈ 9 + log10(0.8)
+        let got = conditional_base(900, 1_000_000, 1_000_000).expect("有行");
+        assert!(got < 9.0, "lexical 不得超过 9（log10(p≤1)）: {got}");
+        assert!((got - (9.0 + 0.8f64.log10()) as f32).abs() < 1e-3, "{got}");
+    }
+
+    #[test]
+    fn conditional_base_makes_a_strong_pair_beat_a_stronger_unpaired_word() {
+        // 这是 M2 存在的理由：`thank → you`(T 很大) 的 lexical 必须高过
+        // 一个静态频率更高、但没有该 prev 行的词退化成 z 的结果。
+        let paired = conditional_base(500, 733_376_704, 800_000_000).expect("有行");
+        let unpaired_z = 5.60f32; // 假设另一个词的 z 更高
+        assert!(
+            paired > unpaired_z,
+            "成对证据必须能压过更高的裸词频: {paired} vs {unpaired_z}"
+        );
     }
 
     #[test]

@@ -1,0 +1,43 @@
+{
+  "format": {
+    "context_record_len": 24,
+    "edge_record_len": 16,
+    "header_len": 64,
+    "magic": "XWXENB1\u0000",
+    "top_per_context": 32,
+    "version": 1
+  },
+  "lexicon": {
+    "file": "english.bin",
+    "sha256": "a6bfd0bcf63177f5296df3870970005204b8553bda2e500232c122ea7bde1646"
+  },
+  "parameters": {
+    "top_per_context": 32
+  },
+  "product": {
+    "bytes": 2355060,
+    "context_count": 16315,
+    "edge_count": 114890,
+    "file_len": 2355060,
+    "name": "english_bigram.bin",
+    "sha256": "e5761d8353fa737251f5bbcc88cd89bae60d4beb2b63ba92eb635301589c5b83",
+    "string_bytes": 125196
+  },
+  "source": {
+    "file": "symspell-bigram.txt",
+    "pinned_sha256": "fd892a160184101dd7ae807ac5a302d01fcea1c47304181a8ed7ed9c94545bcd",
+    "sha256": "fd892a160184101dd7ae807ac5a302d01fcea1c47304181a8ed7ed9c94545bcd",
+    "url": "https://raw.githubusercontent.com/wolfgarbe/SymSpell/736034a4f0436da6a98c94f83f54ec6de2ec25c6/SymSpell/frequency_bigramdictionary_en_243_342.txt"
+  },
+  "stats": {
+    "contexts": 16315,
+    "drop_absent": 726,
+    "drop_invalid_key": 0,
+    "edges": 114890,
+    "lines": 242342,
+    "merged_duplicates": 0,
+    "observed_total_max": 850416990208,
+    "observed_total_sum": 12393708236928,
+    "skipped_comment": 0
+  }
+}

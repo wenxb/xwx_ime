@@ -1,0 +1,18 @@
+# 小型人工二元表（TAB 或空格分隔：prev next count）。
+# 词表是 tests/fixtures/english/words.tsv 生成的 23 词夹具，所以只在其中取词。
+hello	world	7852480
+hello	there	120000
+thank	you	733376704
+thank	them	5000
+looking	forward	271821504
+developer	development	90000
+docker	docket	3000
+word	world	4000
+
+# 大小写归一化后与上一行重复 → 必须合并（checked_add）
+HELLO	World	100
+hello	world	5
+# 非法键（非字母）→ 过滤并计数
+bad_key	world	3
+# 目标不在词库里 → 过滤并计数
+hello	zzzznotaword	7

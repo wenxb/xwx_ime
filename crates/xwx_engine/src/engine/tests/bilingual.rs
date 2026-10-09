@@ -238,6 +238,7 @@ fn learned_word_enters_recall_from_user_index() {
         "pta",
         &EnglishContext::empty(),
         &snapshot,
+        None,
     )
     .expect("召回失败");
     assert!(
@@ -254,6 +255,7 @@ fn learned_word_enters_recall_from_user_index() {
         "pta",
         &EnglishContext::empty(),
         &snapshot,
+        None,
     )
     .expect("召回失败");
     assert!(
