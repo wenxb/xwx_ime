@@ -138,3 +138,42 @@ tail -20 ~/.local/share/xwx/stall.log
 
 第二条是反证：「日志非空」不是因为看门狗无条件在写。第四条复现的正是用户描述的
 那种**进程级冻结**。
+
+---
+
+## 七、生产链路验证与安装循环（2026-10-11）
+
+### 安装不需要 sudo
+
+`just install` 的 6 步里只有第 3 步（`/usr/share/ibus/component/xwx.xml`）要 sudo，
+而**它的 exec 路径不变就不必重装**——XML 里已经是
+`/home/youngwen/.local/bin/xwx_ime --ibus`。其余全都是 `~/.local`：
+
+| 目标 | 路径 | 需要 sudo |
+|---|---|---|
+| 二进制 | `~/.local/bin/xwx_ime` | 否 |
+| 词库/英文词库等 | `~/.local/share/xwx/` | 否 |
+| 组件 XML | `/usr/share/ibus/component/xwx.xml` | 是（**路径不变则不用动**） |
+
+所以改完代码可以直接自己装：
+
+```bash
+cargo build --release -p xwx_ime
+install -m 755 <target>/release/xwx_ime ~/.local/bin/xwx_ime.new
+mv -f ~/.local/bin/xwx_ime.new ~/.local/bin/xwx_ime   # 先装临时名再 mv，避开 ETXTBSY
+ibus restart                                          # 让 daemon 重新拉起引擎
+```
+
+### 在生产进程上验过一次真实触发
+
+装上之后，用 SIGSTOP 把**正在运行的引擎**冻 2 秒再放开（模拟用户描述的进程级
+冻结），引擎自己写下了：
+
+```
+2026-10-11 04:46:14 2107ms  heartbeat  事件循环被堵住（本次按键路径未覆盖到）
+```
+
+2107ms 与 2 秒的冻结对得上。这一次同时验证了整条生产链路：`XDG_DATA_HOME`
+未设置时解析到 `$HOME/.local/share/xwx/stall.log`（已核对
+`/proc/<pid>/environ`）、默认 300ms 阈值生效、目录可写、心跳判定正确。
+验证用的记录已清除，`stall.log` 现在是干净的。
