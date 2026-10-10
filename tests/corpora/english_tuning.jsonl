@@ -117,7 +117,7 @@
 {"id": "tune-a001", "kind": "query", "input": "can", "target": "can", "intent": "ambiguous", "previous_english": null, "max_rank": 3, "expected_first_language": "chinese", "note": "中英同形：can 两边都合理，保护中文首选"}
 {"id": "tune-a002", "kind": "query", "input": "he", "target": "he", "intent": "ambiguous", "previous_english": null, "max_rank": 3, "expected_first_language": "chinese", "note": "中英同形：he 两边都合理，保护中文首选"}
 {"id": "tune-a003", "kind": "query", "input": "an", "target": "an", "intent": "ambiguous", "previous_english": null, "max_rank": 3, "expected_first_language": "chinese", "note": "中英同形：an 两边都合理，保护中文首选"}
-{"id": "tune-a004", "kind": "query", "input": "wo", "target": "wo", "intent": "ambiguous", "previous_english": null, "max_rank": 3, "expected_first_language": "chinese", "note": "中英同形：wo 两边都合理，保护中文首选"}
+{"id": "tune-a004", "kind": "query", "input": "wo", "target": "word", "intent": "ambiguous", "previous_english": null, "max_rank": 3, "expected_first_language": "chinese", "note": "中英同形：wo 两边都合理，保护中文首选（原 target=wo，但 wo 不是英文单词而是拼音音节，已改为 word）"}
 {"id": "tune-c000", "kind": "query", "input": "y", "target": "you", "intent": "english", "previous_english": "thank", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 thank：y 应补全成 you"}
 {"id": "tune-c001", "kind": "query", "input": "w", "target": "word", "intent": "english", "previous_english": "hello", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 hello：w 应补全成 word"}
 {"id": "tune-c002", "kind": "query", "input": "print", "target": "printer", "intent": "english", "previous_english": "help", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 help：print 应补全成 printer"}

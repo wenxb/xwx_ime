@@ -231,7 +231,7 @@ recent_en 只影响有实际英文词条/前缀证据的查询；nihao 没有英
 
 首屏采用以下来源模板，从相应序列头部依次取一个；该来源耗尽则跳过槽位：
 
-    EnglishFirst: E E Z E Z Z Z Z Z
+    EnglishFirst: E E E Z Z Z Z Z Z
     Mixed:        Z E Z E Z Z Z Z Z
     ChineseFirst: Z Z Z Z Z Z Z Z E
 

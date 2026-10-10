@@ -17,11 +17,44 @@
 **生成**:
 
     python3 scripts/build_english_dict.py --wordfreq --limit 50000 \
+        --reference /tmp/symspell-unigram.txt \
+        --reference /usr/share/hunspell/en_US.dic \
         --overrides data/english/overrides.tsv --out data/english.bin
 
 `--wordfreq` 需要 `pip install wordfreq==3.1.1`(构建期依赖,**运行时不依赖
 Python**);没有网络时可用 `--entries <词表.tsv>` 走纯本地条目表,格式见
 `tests/fixtures/english/words.tsv`(`key<TAB>display<TAB>zipf_centi`)。
+
+### 质量过滤(`--reference`,不给就不过滤)
+
+wordfreq 的 large 表是**语料统计**,不是词典:除了真词还带一批碎片——
+脱掉撇号的缩合(`dont`)、社媒拼写(`lol`)、被切碎的词头(`gra`/`lun`/`bri`/
+`holi`)、两三个字母的 URL 残渣(`ve`/`im`/`gc`)。中文模式下打的是拼音缩写,
+这些碎片正在同一个键盘区:输入 `ve` 连中文候选都没有,碎片直接排第一位,
+按空格就把**一个不是单词的字符串**上屏了。
+
+`--reference` 给参考词表(可重复,取并集),规则见 `scripts/english/quality.py`:
+人工清单(`--entries`/`--overrides`)永远保留 → 精确命中参考表保留 →
+1~2 字母走白名单 → 去词尾(含双写辅音)后词干命中保留 → `zipf>=400` 保留 →
+其余丢弃。**没给 `--reference` 时是恒等变换**,旧产物逐字节不变。
+
+参考词表只是**输入**(和 `--wordfreq` 一样),不进仓库:调用方给路径,
+`meta.json` 的 `quality_filter` 记下路径、SHA-256 与逐条原因统计,构建可复现。
+
+用到的两份(都不是仓库资产,按需下载):
+
+| 词表 | 来源 | 形态 |
+|---|---|---|
+| `unigram.txt` | SymSpell 固定提交 `736034a4…` 的 `frequency_dictionary_en_82_765.txt` | `word count` |
+| `en_US.dic` | 发行版 `hunspell-en-us`(`/usr/share/hunspell/en_US.dic`) | `word/FLAGS` |
+
+hunspell 那行**必须先把 `/FLAGS` 剥掉**:`github/SM` 过不了「纯字母」检查,
+不剥的话整份文件里带标志的词(绝大多数)会被当成无效行丢掉,参考表从
+7.6 万缩到 1.5 万,过滤随之过激(`github`/`center` 都被误删)——踩过一次。
+
+实测(2026-10):50 002 词 → **42 770 词 / 103 819 前缀 / 3.94 MB**,
+丢弃 7 219 条(原因分布见 `meta.json`)。技术词与专名靠 `overrides.tsv`
+兜底(`api`/`css`/`sql`/`npm`/`nginx`/`redis`/…),它们不受过滤与截断影响。
 
 **格式(v1,全小端)**:
 

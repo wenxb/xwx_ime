@@ -1,6 +1,63 @@
+# 人工词表：key<TAB>display<TAB>zipf_centi（第 3 列留空 = 沿用 wordfreq 词频，
+# 词频表里没有的词用默认 300）。
+#
+# 这些词**不受质量过滤与前 5 万截断影响**（scripts/english/quality.py 第 1 条）。
+# 加词的判据：技术词、专名、缩写——参考词表（SymSpell 一元表 / hunspell en_US）
+# 对这类词覆盖很差，靠它们自己会被误删。
 python	Python	
 github	GitHub	
 docker	Docker	
 kubernetes	Kubernetes	350
 chatgpt	ChatGPT	350
 i	I	
+# —— 参考词表覆盖不到、但开发者天天要打的技术词 ——
+api	API	420
+css	CSS	430
+html	HTML	440
+json	JSON	410
+sql	SQL	420
+sdk	SDK	400
+cli	CLI	400
+gui	GUI	390
+cpu	CPU	440
+gpu	GPU	430
+dvi	DVI	320
+macos	macOS	380
+scp	SCP	330
+tcp	TCP	380
+udp	UDP	360
+dns	DNS	380
+vpn	VPN	390
+dhcp	DHCP	320
+ssl	SSL	380
+tls	TLS	370
+rsa	RSA	340
+ecc	ECC	300
+ui	UI	400
+ux	UX	380
+os	OS	430
+vm	VM	350
+vue	Vue	360
+jquery	jQuery	350
+django	Django	350
+mysql	MySQL	380
+dataset	dataset	400
+npm	NPM	380
+npx	NPX	300
+nginx	NGINX	350
+redis	Redis	360
+sqlite	SQLite	340
+mongodb	MongoDB	330
+postgres	Postgres	340
+gitlab	GitLab	350
+kubectl	kubectl	300
+ansible	Ansible	300
+terraform	Terraform	310
+toml	TOML	330
+yaml	YAML	350
+graphql	GraphQL	330
+grpc	gRPC	320
+oauth	OAuth	330
+jwt	JWT	320
+ssh	SSH	400
+sftp	SFTP	300

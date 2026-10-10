@@ -1,0 +1,3 @@
+76243199a73d5b0d991b1e00c9800a476255516f15ae123ae222cf67945cab4c  data/english.bin
+7aeccff020ce4f8ebdc63a00804e81aa2367b559e69fd5b5272216c3c331c8e6  data/english_bigram.bin
+adadc7b99bfec523ae6e0387397ebf1b28455c2e8730c867fd7da8a729342156  tests/fixtures/english/words.bin

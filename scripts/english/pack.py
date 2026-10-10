@@ -220,7 +220,7 @@ def verify_blob(blob):
 
 
 def build_meta(words, prefix_names, prefix_lists, strings_bytes, blob,
-               source, parameters, overrides_info, stats):
+               source, parameters, overrides_info, stats, reference_info=None):
     """构造 meta 字节串；只含确定性字段（无时间、随机数、机器绝对路径）。"""
     meta = {
         "format": {"name": "english.bin", "magic": "XWXENG1", "version": VERSION,
@@ -235,6 +235,10 @@ def build_meta(words, prefix_names, prefix_lists, strings_bytes, blob,
         "source": source,
         "parameters": parameters,
         "overrides": overrides_info,
+        "quality_filter": reference_info if reference_info is not None else {
+            "enabled": False,
+            "note": "构建时未给 --reference，未做质量过滤",
+        },
         "skipped_tokens": dict(sorted(stats["skipped"].items())),
         "counts": {
             "candidates_scanned": stats["scanned"],

@@ -33,7 +33,7 @@ pub mod session;
 pub mod user_lm;
 pub mod wanxiang;
 
-mod engine;
+pub mod engine;
 
 pub use engine::*;
 

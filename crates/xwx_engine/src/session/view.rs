@@ -114,6 +114,11 @@ impl InputSession {
         self.clear_prediction();
     }
 
+    /// 当前候选条数（探针与外部诊断只读这一项，不必构造整份快照）。
+    pub fn candidate_count(&self) -> usize {
+        self.candidates.len()
+    }
+
     /// 取当前界面快照。
     /// 组合还活着吗——**剩余串与已确认段任一非空**都算。
     ///

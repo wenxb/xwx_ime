@@ -1,0 +1,146 @@
+   Compiling xwx_engine v0.1.0 (/home/youngwen/Desktop/xwx_ime/crates/xwx_engine)
+    Finished `release` profile [optimized] target(s) in 3.38s
+     Running `/mnt/hdd/target/xwx_ime/release/examples/english_eval --data data --english data/english.bin --bigram data/english_bigram.bin --corpus tests/corpora/english_acceptance.jsonl --mode on`
+== 装配 ==
+中文数据目录: data
+语言模型    : /home/youngwen/.local/share/xwx/wanxiang-lts-zh-hans.gram
+英文词库    : data/english.bin (42770 词 / 103819 前缀 / 3980553 字节)
+英文开关    : on
+语料        : tests/corpora/english_acceptance.jsonl (217 行)
+
+== 指标（mode=on）==
+精确词 Top-1 : 88/98 = 89.8%
+精确词 Top-3 : 97/98 = 99.0%
+补全   Top-3 : 60/90 = 66.7%
+下一词 Top-1 : 10/11 = 90.9%
+下一词 Top-3 : 11/11 = 100.0%
+中文保护 Top-1: 17/18 = 94.4%
+中文保护 Top-9: 18/18 = 100.0%
+整体命中     : 212/217 = 97.7%
+
+OOV（目标不在英文词表里，仍计入整体分母）: 0
+
+首语言不符（expected_first_language 单独断言）: 15
+  acc-e006 期望首个=补全：ban → banana 实际=chinese 实际候选=["半(chinese)", "ban(english)", "办(chinese)", "bank(english)", "般(chinese)", "板(chinese)", "班(chinese)", "伴(chinese)", "版(chinese)", "搬(chinese)", "扮(chinese)", "斑(chinese)", "扳(chinese)", "瓣(chinese)"]
+  acc-e014 期望首个=补全：che → cheese 实际=chinese 实际候选=["车(chinese)", "che(english)", "彻(chinese)", "check(english)", "扯(chinese)", "撤(chinese)", "澈(chinese)", "掣(chinese)", "砗(chinese)", "坼(chinese)", "尺(chinese)", "cheap(english)", "chest(english)", "cheese(english)"]
+  acc-e020 期望首个=补全：lun → lunch 实际=chinese 实际候选=["论(chinese)", "伦(chinese)", "轮(chinese)", "仑(chinese)", "沦(chinese)", "抡(chinese)", "纶(chinese)", "囵(chinese)", "lunch(english)", "路(chinese)", "露(chinese)", "陆(chinese)", "鲁(chinese)", "录(chinese)"]
+  acc-e040 期望首个=补全：yea → year 实际=chinese 实际候选=["夜啊(chinese)", "yea(english)", "爷啊(chinese)", "year(english)", "也(chinese)", "业(chinese)", "夜(chinese)", "爷(chinese)", "叶(chinese)", "野(chinese)", "液(chinese)", "耶(chinese)", "页(chinese)", "曳(chinese)"]
+  acc-e042 期望首个=补全：min → minute 实际=chinese 实际候选=["民(chinese)", "min(english)", "敏(chinese)", "mind(english)", "抿(chinese)", "悯(chinese)", "闵(chinese)", "珉(chinese)", "泯(chinese)", "闽(chinese)", "皿(chinese)", "岷(chinese)", "旻(chinese)", "缗(chinese)"]
+  acc-e044 期望首个=补全：hou → hour 实际=chinese 实际候选=["后(chinese)", "候(chinese)", "厚(chinese)", "吼(chinese)", "侯(chinese)", "猴(chinese)", "喉(chinese)", "逅(chinese)", "house(english)", "篌(chinese)", "瘊(chinese)", "鲎(chinese)", "堠(chinese)", "垕(chinese)"]
+  acc-e048 期望首个=补全：gar → garden 实际=chinese 实际候选=["噶尔(chinese)", "公安人(chinese)", "关爱日(chinese)", "广安人(chinese)", "格安瑞(chinese)", "给爱人(chinese)", "滚啊(chinese)", "高啊(chinese)", "gar(english)", "干啊(chinese)", "贵啊(chinese)", "挂啊(chinese)", "哥啊(chinese)", "搞啊(chinese)"]
+  acc-e066 期望首个=补全：cit → city 实际=chinese 实际候选=["辞退(chinese)", "磁头(chinese)", "刺痛(chinese)", "祠堂(chinese)", "磁铁(chinese)", "此条(chinese)", "词条(chinese)", "刺探(chinese)", "cit(english)", "磁体(chinese)", "刺桐(chinese)", "磁条(chinese)", "此图(chinese)", "此帖(chinese)"]
+  acc-e094 期望首个=补全：jour → journey 实际=chinese 实际候选=["奇偶(chinese)", "解耦(chinese)", "建瓯(chinese)", "佳偶(chinese)", "接哦(chinese)", "金瓯(chinese)", "jour(english)", "journal(english)", "journey(english)", "journalist(english)", "journals(english)", "journalists(english)", "journalism(english)", "journeys(english)"]
+  acc-e104 期望首个=补全：tradit → tradition 实际=chinese 实际候选=["他人啊地图(chinese)", "traditional(english)", "突然啊地图(chinese)", "tradition(english)", "土壤啊地图(chinese)", "他人啊地铁(chinese)", "突然(chinese)", "他人(chinese)", "土壤(chinese)", "踏入(chinese)", "他让(chinese)", "塔尔(chinese)", "他仍(chinese)", "图二(chinese)"]
+  acc-e122 期望首个=补全：mem → memory 实际=chinese 实际候选=["么么(chinese)", "马尔默(chinese)", "莫尔蒙(chinese)", "米尔曼(chinese)", "马儿们(chinese)", "马尔姆(chinese)", "猫儿面(chinese)", "玫而美(chinese)", "mem(english)", "名额(chinese)", "面额(chinese)", "满额(chinese)", "美俄(chinese)", "门额(chinese)"]
+  acc-e132 期望首个=补全：encrypt → encryption 实际=chinese 实际候选=["恩赐日语普通(chinese)", "恩赐日益普通(chinese)", "恩赐日语平台(chinese)", "恩仇日益普通(chinese)", "恩赐(chinese)", "恩仇(chinese)", "恩宠(chinese)", "恩城(chinese)", "encrypt(english)", "婀娜(chinese)", "讹你(chinese)", "恶念(chinese)", "恶女(chinese)", "额娘(chinese)"]
+  acc-e135 期望首个=精确：完整词 cache → cache 实际=chinese 实际候选=["擦车(chinese)", "cache(english)", "擦(chinese)", "caches(english)", "嚓(chinese)", "擦成(chinese)", "擦城(chinese)", "cached(english)"]
+  acc-e160 期望首个=补全：neu → neural 实际=chinese 实际候选=["耐饿(chinese)", "neutral(english)", "哪呃(chinese)", "neural(english)", "牛呃(chinese)", "牛轭(chinese)", "诺厄(chinese)", "呢(chinese)", "讷(chinese)", "哪(chinese)", "neurons(english)", "neutron(english)", "neuron(english)", "neutrality(english)"]
+  acc-e163 期望首个=精确：完整词 docker → Docker 实际=chinese 实际候选=["打捞出客人(chinese)", "大懒虫客人(chinese)", "对哦此刻而(chinese)", "对哦才可而(chinese)", "对哦此刻儿(chinese)", "对哦此刻二(chinese)", "对哦(chinese)", "Docker(english)", "dockers(english)"]
+
+== 失败明细（含实际候选与意图证据）==
+  acc-e006 input="ban" target="banana" intent=english prev=None max_rank=3 → rank=None
+      实际: ["半(chinese)", "ban(english)", "办(chinese)", "bank(english)", "般(chinese)", "板(chinese)", "班(chinese)", "伴(chinese)", "版(chinese)", "搬(chinese)", "扮(chinese)", "斑(chinese)", "扳(chinese)", "瓣(chinese)"]
+      说明: 补全：ban → banana
+  acc-e014 input="che" target="cheese" intent=english prev=None max_rank=3 → rank=Some(14)
+      实际: ["车(chinese)", "che(english)", "彻(chinese)", "check(english)", "扯(chinese)", "撤(chinese)", "澈(chinese)", "掣(chinese)", "砗(chinese)", "坼(chinese)", "尺(chinese)", "cheap(english)", "chest(english)", "cheese(english)"]
+      说明: 补全：che → cheese
+  acc-e020 input="lun" target="lunch" intent=english prev=None max_rank=4 → rank=Some(9)
+      实际: ["论(chinese)", "伦(chinese)", "轮(chinese)", "仑(chinese)", "沦(chinese)", "抡(chinese)", "纶(chinese)", "囵(chinese)", "lunch(english)", "路(chinese)", "露(chinese)", "陆(chinese)", "鲁(chinese)", "录(chinese)"]
+      说明: 补全：lun → lunch
+  acc-e026 input="even" target="evening" intent=english prev=None max_rank=4 → rank=Some(79)
+      实际: ["even(english)", "event(english)", "events(english)", "嗯嗯(chinese)", "而(chinese)", "儿(chinese)", "二(chinese)", "尔(chinese)", "耳(chinese)", "饵(chinese)", "迩(chinese)", "贰(chinese)", "洱(chinese)", "珥(chinese)"]
+      说明: 补全：even → evening
+  acc-e040 input="yea" target="year" intent=english prev=None max_rank=3 → rank=Some(4)
+      实际: ["夜啊(chinese)", "yea(english)", "爷啊(chinese)", "year(english)", "也(chinese)", "业(chinese)", "夜(chinese)", "爷(chinese)", "叶(chinese)", "野(chinese)", "液(chinese)", "耶(chinese)", "页(chinese)", "曳(chinese)"]
+      说明: 补全：yea → year
+  acc-e042 input="min" target="minute" intent=english prev=None max_rank=4 → rank=Some(56)
+      实际: ["民(chinese)", "min(english)", "敏(chinese)", "mind(english)", "抿(chinese)", "悯(chinese)", "闵(chinese)", "珉(chinese)", "泯(chinese)", "闽(chinese)", "皿(chinese)", "岷(chinese)", "旻(chinese)", "缗(chinese)"]
+      说明: 补全：min → minute
+  acc-e044 input="hou" target="hour" intent=english prev=None max_rank=4 → rank=Some(21)
+      实际: ["后(chinese)", "候(chinese)", "厚(chinese)", "吼(chinese)", "侯(chinese)", "猴(chinese)", "喉(chinese)", "逅(chinese)", "house(english)", "篌(chinese)", "瘊(chinese)", "鲎(chinese)", "堠(chinese)", "垕(chinese)"]
+      说明: 补全：hou → hour
+  acc-e048 input="gar" target="garden" intent=english prev=None max_rank=4 → rank=Some(29)
+      实际: ["噶尔(chinese)", "公安人(chinese)", "关爱日(chinese)", "广安人(chinese)", "格安瑞(chinese)", "给爱人(chinese)", "滚啊(chinese)", "高啊(chinese)", "gar(english)", "干啊(chinese)", "贵啊(chinese)", "挂啊(chinese)", "哥啊(chinese)", "搞啊(chinese)"]
+      说明: 补全：gar → garden
+  acc-e050 input="flo" target="flower" intent=english prev=None max_rank=4 → rank=Some(277)
+      实际: ["flo(english)", "floor(english)", "flow(english)", "飞龙(chinese)", "防漏(chinese)", "疯咯(chinese)", "樊笼(chinese)", "服喽(chinese)", "封咯(chinese)", "风龙(chinese)", "福隆(chinese)", "福利哦(chinese)", "房龙(chinese)", "凤龙(chinese)"]
+      说明: 补全：flo → flower
+  acc-e052 input="gra" target="grass" intent=english prev=None max_rank=4 → rank=Some(148)
+      实际: ["grand(english)", "grade(english)", "grab(english)", "感染(chinese)", "果然(chinese)", "干扰(chinese)", "固然(chinese)", "更让(chinese)", "公然(chinese)", "该让(chinese)", "割让(chinese)", "广饶(chinese)", "瓜瓤(chinese)", "告饶(chinese)"]
+      说明: 补全：gra → grass
+  acc-e062 input="for" target="forest" intent=english prev=None max_rank=4 → rank=None
+      实际: ["for(english)", "form(english)", "force(english)", "非偶然(chinese)", "佛(chinese)", "former(english)", "forget(english)", "forces(english)", "forward(english)", "foreign(english)"]
+      说明: 补全：for → forest
+  acc-e066 input="cit" target="city" intent=english prev=None max_rank=4 → rank=Some(55)
+      实际: ["辞退(chinese)", "磁头(chinese)", "刺痛(chinese)", "祠堂(chinese)", "磁铁(chinese)", "此条(chinese)", "词条(chinese)", "刺探(chinese)", "cit(english)", "磁体(chinese)", "刺桐(chinese)", "磁条(chinese)", "此图(chinese)", "此帖(chinese)"]
+      说明: 补全：cit → city
+  acc-e084 input="stat" target="station" intent=english prev=None max_rank=4 → rank=Some(104)
+      实际: ["stat(english)", "state(english)", "states(english)", "斯塔特(chinese)", "施塔特(chinese)", "三天啊他(chinese)", "三天啊她(chinese)", "三天(chinese)", "斯特(chinese)", "三条(chinese)", "司徒(chinese)", "斯坦(chinese)", "四条(chinese)", "四天(chinese)"]
+      说明: 补全：stat → station
+  acc-e094 input="jour" target="journey" intent=english prev=None max_rank=4 → rank=Some(9)
+      实际: ["奇偶(chinese)", "解耦(chinese)", "建瓯(chinese)", "佳偶(chinese)", "接哦(chinese)", "金瓯(chinese)", "jour(english)", "journal(english)", "journey(english)", "journalist(english)", "journals(english)", "journalists(english)", "journalism(english)", "journeys(english)"]
+      说明: 补全：jour → journey
+  acc-e096 input="tra" target="travel" intent=english prev=None max_rank=4 → rank=Some(152)
+      实际: ["trade(english)", "track(english)", "train(english)", "突然(chinese)", "天然(chinese)", "土壤(chinese)", "坦然(chinese)", "他让(chinese)", "她让(chinese)", "退让(chinese)", "颓然(chinese)", "陶然(chinese)", "徒然(chinese)", "叨扰(chinese)"]
+      说明: 补全：tra → travel
+  acc-e104 input="tradit" target="tradition" intent=english prev=None max_rank=5 → rank=Some(4)
+      实际: ["他人啊地图(chinese)", "traditional(english)", "突然啊地图(chinese)", "tradition(english)", "土壤啊地图(chinese)", "他人啊地铁(chinese)", "突然(chinese)", "他人(chinese)", "土壤(chinese)", "踏入(chinese)", "他让(chinese)", "塔尔(chinese)", "他仍(chinese)", "图二(chinese)"]
+      说明: 补全：tradit → tradition
+  acc-e118 input="compi" target="compiler" intent=english prev=None max_rank=5 → rank=Some(50)
+      实际: ["compiled(english)", "compile(english)", "compilation(english)", "凑(chinese)", "辏(chinese)", "腠(chinese)", "草(chinese)", "操(chinese)", "肏(chinese)", "艹(chinese)", "曹(chinese)", "嘈(chinese)", "糙(chinese)", "槽(chinese)"]
+      说明: 补全：compi → compiler
+  acc-e122 input="mem" target="memory" intent=english prev=None max_rank=4 → rank=Some(21)
+      实际: ["么么(chinese)", "马尔默(chinese)", "莫尔蒙(chinese)", "米尔曼(chinese)", "马儿们(chinese)", "马尔姆(chinese)", "猫儿面(chinese)", "玫而美(chinese)", "mem(english)", "名额(chinese)", "面额(chinese)", "满额(chinese)", "美俄(chinese)", "门额(chinese)"]
+      说明: 补全：mem → memory
+  acc-e124 input="stor" target="storage" intent=english prev=None max_rank=4 → rank=Some(127)
+      实际: ["story(english)", "store(english)", "storm(english)", "受托人(chinese)", "石头人(chinese)", "三天(chinese)", "沙滩(chinese)", "舌头(chinese)", "斯特(chinese)", "三条(chinese)", "司徒(chinese)", "斯坦(chinese)", "四条(chinese)", "四天(chinese)"]
+      说明: 补全：stor → storage
+  acc-e126 input="proces" target="processor" intent=english prev=None max_rank=5 → rank=Some(41)
+      实际: ["process(english)", "processes(english)", "processing(english)", "譬如哦厕所(chinese)", "派人哦厕所(chinese)", "仆人哦厕所(chinese)", "普洱哦厕所(chinese)", "譬如(chinese)", "派人(chinese)", "仆人(chinese)", "普洱(chinese)", "疲软(chinese)", "普尔(chinese)", "排入(chinese)"]
+      说明: 补全：proces → processor
+  acc-e132 input="encrypt" target="encryption" intent=english prev=None max_rank=5 → rank=Some(65)
+      实际: ["恩赐日语普通(chinese)", "恩赐日益普通(chinese)", "恩赐日语平台(chinese)", "恩仇日益普通(chinese)", "恩赐(chinese)", "恩仇(chinese)", "恩宠(chinese)", "恩城(chinese)", "encrypt(english)", "婀娜(chinese)", "讹你(chinese)", "恶念(chinese)", "恶女(chinese)", "额娘(chinese)"]
+      说明: 补全：encrypt → encryption
+  acc-e135 input="cache" target="cache" intent=english prev=None max_rank=2 → rank=Some(2)
+      实际: ["擦车(chinese)", "cache(english)", "擦(chinese)", "caches(english)", "嚓(chinese)", "擦成(chinese)", "擦城(chinese)", "cached(english)"]
+      说明: 精确：完整词 cache → cache
+  acc-e138 input="thr" target="thread" intent=english prev=None max_rank=4 → rank=Some(199)
+      实际: ["three(english)", "through(english)", "throw(english)", "他忽然(chinese)", "她忽然(chinese)", "提货人(chinese)", "图赫尔(chinese)", "天很热(chinese)", "天好热(chinese)", "听话人(chinese)", "唐河人(chinese)", "唐浩然(chinese)", "太哈人(chinese)", "太火热(chinese)"]
+      说明: 补全：thr → thread
+  acc-e150 input="clo" target="cloud" intent=english prev=None max_rank=4 → rank=Some(516)
+      实际: ["close(english)", "closed(english)", "closer(english)", "成龙(chinese)", "丑陋(chinese)", "茶楼(chinese)", "错漏(chinese)", "城楼(chinese)", "长龙(chinese)", "出笼(chinese)", "葱茏(chinese)", "苍龙(chinese)", "侧漏(chinese)", "凑拢(chinese)"]
+      说明: 补全：clo → cloud
+  acc-e152 input="contai" target="container" intent=english prev=None max_rank=5 → rank=Some(82)
+      实际: ["contains(english)", "contain(english)", "contained(english)", "餐台(chinese)", "丛台(chinese)", "从(chinese)", "匆(chinese)", "聪(chinese)", "丛(chinese)", "参(chinese)", "残(chinese)", "惨(chinese)", "餐(chinese)", "葱(chinese)"]
+      说明: 补全：contai → container
+  acc-e160 input="neu" target="neural" intent=english prev=None max_rank=5 → rank=Some(4)
+      实际: ["耐饿(chinese)", "neutral(english)", "哪呃(chinese)", "neural(english)", "牛呃(chinese)", "牛轭(chinese)", "诺厄(chinese)", "呢(chinese)", "讷(chinese)", "哪(chinese)", "neurons(english)", "neutron(english)", "neuron(english)", "neutrality(english)"]
+      说明: 补全：neu → neural
+  acc-e163 input="docker" target="Docker" intent=english prev=None max_rank=2 → rank=Some(8)
+      实际: ["打捞出客人(chinese)", "大懒虫客人(chinese)", "对哦此刻而(chinese)", "对哦才可而(chinese)", "对哦此刻儿(chinese)", "对哦此刻二(chinese)", "对哦(chinese)", "Docker(english)", "dockers(english)"]
+      说明: 精确：完整词 docker → Docker
+  acc-e164 input="doc" target="Docker" intent=english prev=None max_rank=4 → rank=None
+      实际: ["doc(english)", "doctor(english)", "doctors(english)", "调查(chinese)", "对此(chinese)", "对哦(chinese)", "dock(english)", "document(english)", "documents(english)", "docs(english)", "docks(english)"]
+      说明: 补全：doc → Docker
+  acc-e170 input="chat" target="ChatGPT" intent=english prev=None max_rank=4 → rank=Some(216)
+      实际: ["chat(english)", "chats(english)", "chatting(english)", "插图(chinese)", "插头(chinese)", "茶汤(chinese)", "茶托(chinese)", "查探(chinese)", "插条(chinese)", "查体(chinese)", "茶摊(chinese)", "叉腿(chinese)", "差忒(chinese)", "茶亭(chinese)"]
+      说明: 补全：chat → ChatGPT
+  acc-c000 input="to" target="tomorrow" intent=english prev=Some("today") max_rank=3 → rank=None
+      实际: ["to(english)", "too(english)", "top(english)", "头(chinese)", "同(chinese)", "通(chinese)", "痛(chinese)", "统(chinese)", "投(chinese)", "偷(chinese)", "透(chinese)", "童(chinese)", "铜(chinese)", "筒(chinese)"]
+      说明: 有英文上文 today：to 应补全成 tomorrow
+  acc-c001 input="teach" target="teaching" intent=english prev=Some("school") max_rank=3 → rank=Some(25)
+      实际: ["teach(english)", "teacher(english)", "teachers(english)", "特权车(chinese)", "特勤处(chinese)", "特阿昌(chinese)", "特阿蝉(chinese)", "天鹅阿昌(chinese)", "忑阿昌(chinese)", "天鹅(chinese)", "提额(chinese)", "太饿(chinese)", "天峨(chinese)", "挺饿(chinese)"]
+      说明: 有英文上文 school：teach 应补全成 teaching
+  acc-c003 input="cont" target="container" intent=english prev=Some("cloud") max_rank=3 → rank=None
+      实际: ["cont(english)", "control(english)", "content(english)", "从(chinese)", "匆(chinese)", "聪(chinese)", "丛(chinese)", "葱(chinese)", "琮(chinese)", "淙(chinese)", "囱(chinese)", "骢(chinese)", "苁(chinese)", "枞(chinese)"]
+      说明: 有英文上文 cloud：cont 应补全成 container
+失败条数: 32
+
+补全行根因：英文通道内部 Top-3 = 69/90；进过英文召回池 = 85/90（其余被有界近似挡在池外）
+  其中目标在**纯静态词频**下：前 4 名 79 行（可达），第 5 名及以后 11 行（标注本身要求打败词频先验）
+  其中 E0 静态频率 < 300（或没有 E0）⇒ good_en 为假、落到 ChineseFirst 的行: 7/90
+    E0 250<=q<300: 7 行
+    E0 q>=300: 83 行
+
+意图分布: {"ambiguous": 8, "chinese": 18, "english": 191}
+  补全行 E0 例（key[静态分]）: [Some("app[4.86]"), Some("ora[3.12]"), Some("ban[4.55]"), Some("coffee[4.41]"), Some("wat[3.44]"), Some("break[4.88]"), Some("che[3.46]"), Some("pizza[4.13]")]

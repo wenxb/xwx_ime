@@ -304,7 +304,8 @@ fn escaped_word_is_not_revived_by_stale_user_counts() {
 
 #[test]
 fn blend_template_places_sources_by_band() {
-    // 模板本身：EnglishFirst 首屏两槽给英文，ChineseFirst 末槽给英文。
+    // 模板本身：EnglishFirst 首屏**三槽**给英文（原为两槽，第 3 槽被中文占掉，
+    // 使英文通道第 3 名在混排里恒为第 4 名），ChineseFirst 末槽给英文。
     let mk = |word: &str, en: bool| -> Candidate {
         if en {
             Candidate::new_english(word, word, EnglishMatchKind::Completion, 1.0, 1)
@@ -317,7 +318,7 @@ fn blend_template_places_sources_by_band() {
 
     let ef = crate::engine::blend::stable_blend(z.clone(), e.clone(), crate::engine::blend::IntentBand::EnglishFirst);
     let head: Vec<bool> = ef.iter().take(9).map(|c| c.is_english()).collect();
-    assert_eq!(head, vec![true, true, false, true, false, false, false, false, false]);
+    assert_eq!(head, vec![true, true, true, false, false, false, false, false, false]);
 
     let m = crate::engine::blend::stable_blend(z.clone(), e.clone(), crate::engine::blend::IntentBand::Mixed);
     let head: Vec<bool> = m.iter().take(9).map(|c| c.is_english()).collect();

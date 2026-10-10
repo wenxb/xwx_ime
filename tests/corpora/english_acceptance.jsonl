@@ -195,7 +195,7 @@
 {"id": "acc-a006", "kind": "query", "input": "or", "target": "or", "intent": "ambiguous", "previous_english": null, "max_rank": 3, "expected_first_language": "chinese", "note": "中英同形：or 两边都合理，保护中文首选"}
 {"id": "acc-a007", "kind": "query", "input": "do", "target": "do", "intent": "ambiguous", "previous_english": null, "max_rank": 3, "expected_first_language": "chinese", "note": "中英同形：do 两边都合理，保护中文首选"}
 {"id": "acc-c000", "kind": "query", "input": "to", "target": "tomorrow", "intent": "english", "previous_english": "today", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 today：to 应补全成 tomorrow"}
-{"id": "acc-c001", "kind": "query", "input": "teach", "target": "training", "intent": "english", "previous_english": "school", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 school：teach 应补全成 training"}
+{"id": "acc-c001", "kind": "query", "input": "teach", "target": "teaching", "intent": "english", "previous_english": "school", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 school：teach 应补全成 teaching"}
 {"id": "acc-c002", "kind": "query", "input": "vil", "target": "village", "intent": "english", "previous_english": "city", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 city：vil 应补全成 village"}
 {"id": "acc-c003", "kind": "query", "input": "cont", "target": "container", "intent": "english", "previous_english": "cloud", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 cloud：cont 应补全成 container"}
 {"id": "acc-c004", "kind": "query", "input": "pyth", "target": "Python", "intent": "english", "previous_english": "docker", "max_rank": 3, "expected_first_language": "english", "note": "有英文上文 docker：pyth 应补全成 Python"}

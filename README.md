@@ -197,7 +197,11 @@ gdbus call --session --dest org.freedesktop.IBus --object-path /org/freedesktop/
    详细说明与 luna_pinyin 兜底教程见 `data/README.md` 第四节）；
 2. 语言模型：下载**万象 `.gram`** 放到 `~/.local/share/xwx/`
    （引擎自动探测 `wanxiang-lts-zh-hans.gram`），或可选按 `data/README.md`
-   第五节用语料训练 `bigram.txt`。
+   第五节用语料训练 `bigram.txt`；
+3. 英文通道（可选）：按 `data/ENGLISH.md` 生成 `english.bin`。**要给
+   `--reference` 参考词表**——wordfreq 是语料统计不是词典，不过滤会把
+   `ve`/`gra`/`lun` 这类碎片当英文单词，中文模式下打拼音缩写时它们排第一、
+   按空格直接上屏。
 
 数据文件路径 `xwx_ime` 默认从 `$XDG_DATA_HOME/xwx/`(通常
 `~/.local/share/xwx/`)读取。环境变量方向不同,别搞混:

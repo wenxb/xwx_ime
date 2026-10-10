@@ -31,7 +31,14 @@ impl IntentBand {
 }
 
 /// 首屏模板：`true` = 取英文，`false` = 取中文非回声候选。
-const TEMPLATE_ENGLISH_FIRST: [bool; 9] = [true, true, false, true, false, false, false, false, false];
+///
+/// `EnglishFirst` 给英文**前三个槽位**。原模板是 `E E Z E Z Z Z Z Z`：
+/// 第 3 槽被中文占掉，于是英文通道的第 3 名在混排里恒为第 4 名——
+/// 档名与档义（「英文靠前」，第 8 节决策表的 `good_en 且 strong_completion
+/// ⇒ EnglishFirst` 就是为了让补全能进首屏）自相矛盾，验收里
+/// 「补全 Top-3」因此有一条结构性的天花板。中文候选一个不丢（模板只调
+/// 次序），只是首个中文位从第 3 槽挪到第 4 槽。
+const TEMPLATE_ENGLISH_FIRST: [bool; 9] = [true, true, true, false, false, false, false, false, false];
 const TEMPLATE_MIXED: [bool; 9] = [false, true, false, true, false, false, false, false, false];
 const TEMPLATE_CHINESE_FIRST: [bool; 9] = [false, false, false, false, false, false, false, false, true];
 

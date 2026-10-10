@@ -54,6 +54,12 @@ struct Outcome {
     en_rank: Option<usize>,
     /// 首要英文候选（key + 静态频率），用于解释 good_en 为什么为假。
     e0: Option<String>,
+    /// 目标词在**全部同前缀词**里按静态分（q - 15×extra）的名次（1 起）。
+    ///
+    /// 这是「纯词频先验能排到几名」：如果目标本身静态只有第 7 名，那么要求
+    /// 系统把它排进混排 Top-3 就是在要求它打败词频先验——标注不合理，
+    /// 不是实现缺陷。有了这个数才能把「标注问题」与「实现问题」分开。
+    static_rank: Option<usize>,
     /// E0 的静态频率（百分之一 Zipf）——`good_en` 的另一半判据。
     e0_zipf: Option<u16>,
     note: String,
@@ -166,6 +172,27 @@ fn hit_rank(cands: &[xwx_engine::Candidate], row: &Row) -> (Option<usize>, bool)
     (None, false)
 }
 
+/// 目标词在全部同前缀词里按**静态分**（`q - 15×extra`）的名次。
+///
+/// 扫描整张词表而不是只看 Top-32 缓存：要的是「纯词频先验会把它排第几」，
+/// 这决定了这条标注是否可达。
+fn static_rank_of(dict: &EnglishDict, input: &str, target: &str) -> Option<usize> {
+    let key = target.to_ascii_lowercase();
+    let mut scored: Vec<(i32, String)> = Vec::new();
+    for id in 0..dict.word_count() as u32 {
+        let Ok(e) = dict.entry_at(id) else { continue };
+        if !e.key.starts_with(input) {
+            continue;
+        }
+        scored.push((
+            xwx_engine::english::static_score_centi(e.zipf_centi, e.key.len(), input.len()),
+            e.key.to_string(),
+        ));
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    scored.iter().position(|(_, k)| *k == key).map(|i| i + 1)
+}
+
 fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<Outcome> {
     let mut out = Vec::new();
     for row in rows {
@@ -199,6 +226,7 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
                 en_rank: rank,
                 e0: cands.first().map(|c| c.word.clone()),
                 e0_zipf: None,
+                static_rank: None,
                 note: row.note.clone(),
             });
             continue;
@@ -216,6 +244,7 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
                 en_rank: None,
                 e0: None,
                 e0_zipf: None,
+                static_rank: None,
                 note: row.note.clone(),
             });
             continue;
@@ -241,6 +270,11 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
             .iter()
             .position(|c| c.english_key() == Some(row.target.to_ascii_lowercase().as_str()))
             .map(|i| i + 1);
+        let static_rank = en.and_then(|d| {
+            (row.intent != "chinese" && !row.input.is_empty())
+                .then(|| static_rank_of(d, &row.input.to_ascii_lowercase(), &row.target))
+                .flatten()
+        });
         let e0_zipf = en_only
             .first()
             .and_then(|c| c.english_key())
@@ -284,6 +318,7 @@ fn evaluate(engine: &ImeEngine, en: Option<&EnglishDict>, rows: &[Row]) -> Vec<O
             en_rank,
             e0,
             e0_zipf,
+            static_rank,
             note: row.note.clone(),
         });
     }
@@ -437,6 +472,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "\n补全行根因：英文通道内部 Top-3 = {in_en_top3}/{}；进过英文召回池 = {recalled}/{}（其余被有界近似挡在池外）",
         comp.len(),
         comp.len()
+    );
+    // 标注可达性：目标在**纯静态词频**下排第几。静态都进不了前 4 的目标，
+    // 要求混排 Top-3 就是要求打败词频先验——那是标注问题，不是实现问题。
+    let mut impossible = 0usize;
+    let mut reachable = 0usize;
+    for (_, o) in &comp {
+        match o.static_rank {
+            Some(r) if r > 4 => impossible += 1,
+            Some(_) => reachable += 1,
+            None => {}
+        }
+    }
+    println!(
+        "  其中目标在**纯静态词频**下：前 4 名 {reachable} 行（可达），第 5 名及以后 {impossible} 行（标注本身要求打败词频先验）"
     );
     let weak = comp
         .iter()

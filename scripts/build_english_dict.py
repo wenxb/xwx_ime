@@ -4,6 +4,9 @@
 来源二选一：
   --wordfreq   wordfreq 3.1.1 英文 large 词表（仅构建期依赖，运行时不加载）
   --entries    TAB 分隔的 key/display/zipf_centi 清单（离线，仅标准库）
+  --reference  参考词表（可多次；纯文本，每行 `word` 或 `word count`）。
+               给了它才做质量过滤：把 wordfreq 里的非单词碎片（`ve`/`gra`/
+               `dont`/`lol`）挡在门外，详见 english/quality.py。
 
 格式见 docs/english-input/01-data.md 第 4～5 节：全部 little-endian，
 header(64) → words(16B/条) → prefixes(16B/条) → ids(u32) → strings（无 NUL）。
@@ -25,6 +28,7 @@ from english.pack import (
     MAX_PREFIX_COUNT, MAX_WORD_COUNT, PREFIX_PENALTY_CENTI, PREFIX_TOP_K, VERSION, Word,
     build_meta, build_prefix_index, meta_path_for, portable_path, serialize, sha256_file,
     verify_blob, write_atomic, write_verified)
+from english.quality import filter_entries, load_references
 from english.tables import apply_overrides, parse_entries_file, parse_overrides_file
 from english.tokens import (
     BuildError, MAX_WORD_LEN, SINGLE_LETTERS, SKIP_CATEGORIES, ZIPF_CENTI_MAX,
@@ -105,6 +109,9 @@ def parse_args(argv):
                         help="基础词条上限，只对 --wordfreq 有意义（默认 %d）" % DEFAULT_LIMIT)
     parser.add_argument("--overrides", metavar="TSV", default=None,
                         help="人工覆盖表；未给出时不应用任何覆盖")
+    parser.add_argument(
+        "--reference", metavar="WORDS", action="append", default=[],
+        help="参考词表路径（可重复）；给了才启用质量过滤")
     parser.add_argument("--out", metavar="BIN", required=True, help="输出 english.bin 路径")
     return parser.parse_args(argv)
 
@@ -150,6 +157,14 @@ def run(args):
 
     entries_before = len(entries)
     entries, added = apply_overrides(entries, overrides)
+    overrides_keys = {o.key for o in overrides}
+    # 质量过滤：人工清单（--entries 与 --overrides）永远保留，其余按参考词表判定。
+    # 没给 --reference 时是恒等变换（旧行为、旧产物逐字节不变）。
+    protected = set(entries) if not args.reference else set(overrides_keys)
+    if not args.reference and args.entries:
+        protected = set(entries)  # --entries 是纯人工清单，全量保留
+    quality_ref = load_references(args.reference)
+    entries, quality_stats = filter_entries(entries, quality_ref, protected)
     if not entries:
         raise BuildError("没有可用词条")
     words = [Word(key, value[0], value[1]) for key, value in sorted(entries.items())]
@@ -161,6 +176,12 @@ def run(args):
 
     blob = serialize(words, prefix_names, prefix_lists)
     verify_blob(blob)
+    reference_info = {
+        "paths": [portable_path(p) for p in args.reference],
+        "sha256": [sha256_file(p) for p in args.reference],
+        "words": len(quality_ref),
+        "reasons": quality_stats,
+    }
     overrides_info = {
         "path": portable_path(args.overrides) if args.overrides else None,
         "sha256": sha256_file(args.overrides) if args.overrides else None,
@@ -170,7 +191,7 @@ def run(args):
     meta_bytes = build_meta(words, prefix_names, prefix_lists,
                             len(blob) - struct.unpack_from("<Q", blob, 48)[0],
                             blob, source, build_parameters(limit_applied),
-                            overrides_info, stats)
+                            overrides_info, stats, reference_info)
     meta_path = meta_path_for(args.out)
     write_verified(args.out, blob)
     write_atomic(meta_path, meta_bytes)
