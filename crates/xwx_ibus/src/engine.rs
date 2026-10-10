@@ -53,8 +53,15 @@ impl XwxEngineServer {
     }
 
     /// 处理一个按键事件，返回是否被本输入法消费。
-    async fn handle_key(&self, ctxt: &zbus::SignalContext<'_>, event: InputEvent) -> bool {
-        let mut stall = crate::stall::Stall::new("ProcessKeyEvent");
+    /// `label` 是**调用方在 D-Bus 上的方法名**：翻页、点候选、属性激活都会走到
+    /// 这里，全记成 `ProcessKeyEvent` 会让现场记录指错方向。
+    async fn handle_key(
+        &self,
+        ctxt: &zbus::SignalContext<'_>,
+        event: InputEvent,
+        label: &'static str,
+    ) -> bool {
+        let mut stall = crate::stall::Stall::new(label);
         let output = {
             let mut session = self.session.lock().await;
             stall.mark("锁");
@@ -175,8 +182,13 @@ impl XwxEngineServer {
     }
 
     async fn reset_state(&self, ctxt: &zbus::SignalContext<'_>) {
+        // **焦点切换也必须计时**：`FocusOut`/`Reset`/`Disable` 都会走到这里，而
+        // 它们和按键一样是 ibus-daemon 等待的同步方法——这里卡住，用户同样打字
+        // 没反应。只测按键路径会漏掉「切窗口之后开始卡」这一整类现场。
+        let mut stall = crate::stall::Stall::new("FocusOut/Reset");
         let (was_active, pending) = {
             let mut session = self.session.lock().await;
+            stall.mark("锁");
             // 预测态 pinyin 为空，旧的 `is_active()` 会返回 false——
             // 那会让刚弹出的预测面板在焦点切换后僵在屏幕上。
             let active = session.has_visible_ui();
@@ -186,12 +198,15 @@ impl XwxEngineServer {
             let pending = session.reset_for_focus_change();
             (active, pending)
         };
+        stall.mark("引擎");
         if !pending.is_empty() {
             ui::commit_text_only(self, ctxt, &pending).await;
         }
         if was_active {
             ui::hide_ui(self, ctxt).await;
         }
+        stall.mark("发信号");
+        stall.finish();
     }
 }
 
@@ -238,7 +253,8 @@ impl XwxEngineServer {
                     | ibus_proto::IBUS_META_MASK)
                 == 0;
         if is_ctrl_space {
-            self.handle_key(&ctxt, InputEvent::ToggleAscii).await;
+            self.handle_key(&ctxt, InputEvent::ToggleAscii, "ProcessKeyEvent")
+                .await;
             // 模式变了就把新状态推给面板（顶栏的 中/英 靠这条信号）。
             self.sync_mode_property(&ctxt).await;
             return true; // 消费掉，应用不再收到 Ctrl+空格
@@ -262,7 +278,9 @@ impl XwxEngineServer {
                     | ibus_proto::IBUS_META_MASK)
                 == 0;
         if is_ctrl_delete {
-            return self.handle_key(&ctxt, InputEvent::DeleteCandidate).await;
+            return self
+                .handle_key(&ctxt, InputEvent::DeleteCandidate, "ProcessKeyEvent")
+                .await;
         }
 
         // —— Ctrl+Shift+Delete:撤销最近一次屏蔽 ——
@@ -281,7 +299,9 @@ impl XwxEngineServer {
                     | ibus_proto::IBUS_META_MASK)
                 == 0;
         if is_ctrl_shift_delete {
-            return self.handle_key(&ctxt, InputEvent::UnblockCandidate).await;
+            return self
+                .handle_key(&ctxt, InputEvent::UnblockCandidate, "ProcessKeyEvent")
+                .await;
         }
 
         // —— 其余：释放事件与 Ctrl/Alt/Super/Hyper/Meta 组合键透传给应用 ——
@@ -329,7 +349,7 @@ impl XwxEngineServer {
             }
             return false;
         };
-        self.handle_key(&ctxt, event).await
+        self.handle_key(&ctxt, event, "ProcessKeyEvent").await
     }
 
     /// 焦点进入应用。TODO: 记录焦点上下文（用户词频学习等）。
@@ -378,7 +398,8 @@ impl XwxEngineServer {
         if self.session.lock().await.english_mode() == want_english {
             return;
         }
-        self.handle_key(&ctxt, InputEvent::ToggleAscii).await;
+        self.handle_key(&ctxt, InputEvent::ToggleAscii, "PropertyActivate")
+            .await;
         self.sync_mode_property(&ctxt).await;
     }
 
@@ -404,23 +425,23 @@ impl XwxEngineServer {
     /// 候选窗翻页（daemon 转发面板按键）。
     #[zbus(name = "PageUp")]
     async fn page_up(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
-        self.handle_key(&ctxt, InputEvent::PageUp).await;
+        self.handle_key(&ctxt, InputEvent::PageUp, "PageUp").await;
     }
 
     #[zbus(name = "PageDown")]
     async fn page_down(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
-        self.handle_key(&ctxt, InputEvent::PageDown).await;
+        self.handle_key(&ctxt, InputEvent::PageDown, "PageDown").await;
     }
 
     /// 候选高亮上移（daemon 转发面板按键）。
     #[zbus(name = "CursorUp")]
     async fn cursor_up(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
-        self.handle_key(&ctxt, InputEvent::Up).await;
+        self.handle_key(&ctxt, InputEvent::Up, "CursorUp").await;
     }
 
     #[zbus(name = "CursorDown")]
     async fn cursor_down(&self, #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>) {
-        self.handle_key(&ctxt, InputEvent::Down).await;
+        self.handle_key(&ctxt, InputEvent::Down, "CursorDown").await;
     }
 
     /// 候选窗点击（由 daemon 转发 `CandidateClicked`）：`index` 是**页内**下标。
@@ -441,8 +462,12 @@ impl XwxEngineServer {
         let _ = (button, state);
         // 走会话事件的统一出口(而不是直接 `commit_immediately`):点击与空格/数字
         // 共用同一条分段上屏路径,剩余串继续组合的界面刷新也一样。
-        self.handle_key(&ctxt, InputEvent::CandidateClicked(index as usize))
-            .await;
+        self.handle_key(
+            &ctxt,
+            InputEvent::CandidateClicked(index as usize),
+            "CandidateClicked",
+        )
+        .await;
     }
 
     // —— 以下为信号声明（无函数体，zbus 会生成发射器）——

@@ -15,15 +15,23 @@ use std::time::Duration;
 
 use support::Harness;
 
-/// 起一个把看门狗阈值压到 1ms、日志写到 `<root>/stall.log` 的引擎。
-fn start_with_watchdog(label: &str) -> (Harness, PathBuf) {
+/// 起一个日志写到 `<root>/stall.log` 的引擎，阈值按需压低。
+///
+/// 阈值要能压到 **1ms 以下**：按键因为有引擎真活干，通常 1~2ms，1ms 就够；
+/// 而 `FocusOut` 只发一条信号、约 0.2ms，用 1ms 根本触发不了——那会让
+/// 「焦点路径已覆盖」这条用例假失败。
+fn start_with_watchdog_ms(label: &str, ms: &str) -> (Harness, PathBuf) {
     let mut h = Harness::new(label);
     let log = h.root.join("stall.log");
     h = h
-        .with_env("XWX_STALL_MS", "1")
+        .with_env("XWX_STALL_MS", ms)
         .with_env("XWX_STALL_LOG", log.to_string_lossy().to_string());
     h.start_engine(support::shared_fixture());
     (h, log)
+}
+
+fn start_with_watchdog(label: &str) -> (Harness, PathBuf) {
+    start_with_watchdog_ms(label, "1")
 }
 
 fn read_log(path: &Path) -> String {
@@ -89,6 +97,41 @@ fn heartbeat_records_when_the_event_loop_is_blocked_from_outside() {
         text.contains("heartbeat"),
         "进程被冻住 1.5s 后应留下心跳记录，实际:\n{text}"
     );
+}
+
+#[test]
+fn focus_change_is_covered_too() {
+    // 冻结不一定发生在按键上：切窗口走 `FocusOut` → `reset_state`，它同样是
+    // ibus-daemon 等待的同步方法。只测按键路径会漏掉「切窗口之后开始卡」
+    // 那一整类现场，所以这条用例专门守住 FocusOut 的记录。
+    let (h, log) = start_with_watchdog_ms("stall-focus", "0.01");
+    let _ = h.focus_in();
+    h.type_ascii("nihao");
+    let _ = h.focus_out();
+    std::thread::sleep(Duration::from_millis(200));
+    let text = read_log(&log);
+    assert!(
+        text.contains("FocusOut/Reset"),
+        "FocusOut 应留下记录，实际:\n{text}"
+    );
+    let line = text
+        .lines()
+        .find(|l| l.contains("FocusOut/Reset"))
+        .expect("应有 FocusOut/Reset 行");
+    for seg in ["锁=", "引擎=", "发信号="] {
+        assert!(line.contains(seg), "FocusOut 记录缺 {seg} 段: {line}");
+    }
+}
+
+#[test]
+fn non_key_methods_report_their_own_name() {
+    // 翻页/点候选也走 handle_key，但记成 `ProcessKeyEvent` 会指错方向。
+    let (h, log) = start_with_watchdog_ms("stall-label", "0.01");
+    h.type_ascii("nihao");
+    let _ = h.page_down();
+    std::thread::sleep(Duration::from_millis(200));
+    let text = read_log(&log);
+    assert!(text.contains("PageDown"), "翻页应记成 PageDown，实际:\n{text}");
 }
 
 #[test]

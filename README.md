@@ -197,6 +197,10 @@ tail -20 ~/.local/share/xwx/stall.log
 | `heartbeat` | **整个进程**被堵住，不是按键方法内部 |
 | 什么都没有却确实卡了 | 卡点在本进程之外（ibus-daemon / GNOME Shell） |
 
+第一列的方法名是**真实的 D-Bus 方法**：翻页记 `PageDown`、切窗口记
+`FocusOut/Reset`、点候选记 `CandidateClicked`——冻结不一定发生在打字上，
+全记成 `ProcessKeyEvent` 会指错方向。
+
 环境变量：`XWX_STALL_MS`（毫秒，默认 300；`off`/`0` 关闭，心跳一并关闭）、
 `XWX_STALL_LOG`（改路径）。文件超过 256 KiB 自动轮转出 `stall.log.1`，只留一代。
 
