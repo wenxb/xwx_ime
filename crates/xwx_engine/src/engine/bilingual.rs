@@ -8,7 +8,7 @@ use crate::candidate::Candidate;
 use crate::english::{rank_english, recall_english, EnglishContext, InputLen};
 use crate::lm::LmContext;
 
-use super::blend::{classify_intent, stable_blend, strong_chinese};
+use super::blend::{classify_intent, good_english, stable_blend};
 
 use super::*;
 
@@ -72,15 +72,8 @@ impl ImeEngine {
         let e0_unigram = ranked.first().map(|h| h.user_unigram).unwrap_or(0);
         let recent_en = english_context.previous_word.is_some();
         let en_cands = ranked.candidates(key.len());
-        let strong_zh = strong_chinese(&zh, raw_input);
-        let band = match classify_intent(
-            raw_input,
-            &zh,
-            &en_cands,
-            e0_zipf,
-            e0_unigram,
-            recent_en,
-        ) {
+        let good_en = good_english(e0_zipf, e0_unigram);
+        let band = match classify_intent(raw_input, &zh, &en_cands, recent_en, good_en) {
             Some(b) => b,
             None => return Ok(zh),
         };
@@ -106,10 +99,9 @@ impl ImeEngine {
                 .collect::<Vec<_>>()
                 .join("  ");
             format!(
-                "英文: input={key} 池={pool} 展示={} 意图={} strong_zh={strong_zh} good_en={} recent_en={recent_en}\n  命中: {detail}",
+                "英文: input={key} 池={pool} 展示={} 意图={} good_en={good_en} recent_en={recent_en}\n  命中: {detail}",
                 en_cands.len(),
                 band.label(),
-                crate::engine::blend::good_english(e0_zipf, e0_unigram),
             )
         });
 

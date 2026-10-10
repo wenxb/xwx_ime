@@ -336,6 +336,11 @@ const ABBREV_PER_WORD_PENALTY: f32 = 1.2;
 /// 可靠覆盖（`chu zai na` 全库只有「杵在那 = freq 100」就是这种）。
 const FILLER_FREQ_TIER: u64 = 100;
 
+/// 给 `engine/blend.rs` 的「中文可读」判据用：低于它的词频视为没有真实依据。
+pub(crate) fn filler_freq_tier() -> u64 {
+    FILLER_FREQ_TIER
+}
+
 /// —— 简拼纠错（阶段 B，`engine/abbrev_correct.rs`）——
 ///
 /// **触发闸**（三条同时满足才进纠错路径，强读法路径零成本）：
@@ -555,10 +560,6 @@ pub(crate) fn max_candidates() -> usize {
 }
 
 /// 词库「最低档词频」的对上层访问（混排判据用它，不复制字面量 100）。
-pub(crate) fn filler_freq_tier() -> u64 {
-    FILLER_FREQ_TIER
-}
-
 use rank::{ordered_candidates, prune_beam, sort_candidates};
 
 mod api;
