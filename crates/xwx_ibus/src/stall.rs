@@ -24,6 +24,17 @@ const DEFAULT_THRESHOLD_MS: f64 = 300.0;
 /// 日志文件大小上限，超了就轮转（保留上一代）。
 const MAX_LOG_BYTES: u64 = 256 * 1024;
 
+/// 心跳间隔与「事件循环被堵住」的判定阈值（毫秒）。
+///
+/// 为什么要心跳：分段计时只在 `ProcessKeyEvent` **被进入之后**才有用。如果冻结
+/// 发生在它之前（运行时线程全被占住、进程被内核挂起、某处同步阻塞调用），那这个
+/// 方法根本不会被调用，看门狗一条记录都不会产生——用户看到卡死，日志却是空的。
+/// 心跳用来区分这两种情况：**日志里有心跳记录 = 整个进程被堵住；没有 = 卡在我们
+/// 的方法里**（那就该有 ProcessKeyEvent 记录）。两者都没有却确实卡了，说明卡在
+/// 本进程之外（ibus-daemon / GNOME Shell）。
+const HEARTBEAT_INTERVAL_MS: u64 = 500;
+const HEARTBEAT_STALL_MS: u128 = 1000;
+
 /// 阈值（毫秒）；`None` = 关闭记录。只在进程启动时读一次环境变量。
 pub fn threshold_ms() -> Option<f64> {
     static CACHE: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
@@ -131,6 +142,35 @@ impl Stall {
         );
         append_line(&line);
     }
+}
+
+/// 起一个心跳任务：每 [`HEARTBEAT_INTERVAL_MS`] 醒一次，若两次醒来之间的间隔
+/// 超过 [`HEARTBEAT_STALL_MS`]，说明**事件循环整个被堵住了**，落一条记录。
+///
+/// tokio 的定时器在负载下会迟到几十毫秒，所以阈值取 1s——那是明确的「被堵住」，
+/// 不是调度抖动。看门狗关闭时这个任务直接不启动。
+pub fn spawn_heartbeat() -> Option<tokio::task::JoinHandle<()>> {
+    threshold_ms()?;
+    Some(tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(HEARTBEAT_INTERVAL_MS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut last = Instant::now();
+        loop {
+            tick.tick().await;
+            let now = Instant::now();
+            let gap = now.duration_since(last);
+            if gap.as_millis() >= HEARTBEAT_STALL_MS {
+                let ms = gap.as_secs_f64() * 1000.0;
+                let line = format!(
+                    "{} {ms:.0}ms  heartbeat  事件循环被堵住（本次按键路径未覆盖到）",
+                    timestamp()
+                );
+                tracing::warn!(stalled_ms = ms, "事件循环停顿");
+                append_line(&line);
+            }
+            last = now;
+        }
+    }))
 }
 
 /// `$XWX_STALL_LOG` > `$XDG_DATA_HOME/xwx/stall.log` > `$HOME/.local/share/xwx/stall.log`。
