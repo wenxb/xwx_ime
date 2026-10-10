@@ -16,6 +16,7 @@
 pub mod engine;
 pub mod factory;
 pub mod ibus_proto;
+pub mod stall;
 
 pub use engine::XwxEngineServer;
 pub use factory::EngineFactory;

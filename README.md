@@ -168,6 +168,22 @@ just xml -- --exec /usr/bin/xwx_ime   # 指定 exec 路径（打 deb 用）
 
 也可以直接用 `RUST_LOG=debug cargo run -p xwx_ime -- --ibus` 前台调试。
 
+### 卡死/卡顿的现场记录（`stall.log`）
+
+`ProcessKeyEvent` 是**同步方法**：ibus-daemon 每发一个键都要等它返回，它不
+返回，用户看到的就是输入法卡死。为了不靠猜，方法内部按**三段**计时——取会话
+锁 / 引擎处理 / 发 D-Bus 信号——单次超过 300ms 就记一条：
+
+```bash
+tail -20 ~/.local/share/xwx/stall.log
+# 2026-10-10 22:41:07 1832ms  ProcessKeyEvent  锁=1ms 引擎=8ms 发信号=1823ms  Char('a')
+```
+
+读到这种行就知道时间花在哪一段：`发信号` 占满 = 卡在总线（对端不消费导致
+zbus 反压），不是引擎算得慢。环境变量：`XWX_STALL_MS`（毫秒，默认 300；
+`off`/`0` 关闭）、`XWX_STALL_LOG`（改路径）。文件超过 256 KiB 自动轮转出
+`stall.log.1`，只留一代。
+
 验证引擎是否注册成功：
 
 ```bash

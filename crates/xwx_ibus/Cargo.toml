@@ -10,6 +10,7 @@ tokio.workspace        = true
 tracing.workspace      = true
 tracing-subscriber.workspace = true
 thiserror.workspace    = true
+libc.workspace         = true
 zbus      = { version = "4", features = ["tokio"] }
 # 注意：zbus 以 default-features=false 引入 zvariant，这里显式补上
 # gvariant 编码 feature（D-Bus 线上格式；Type 派生宏无需 feature）

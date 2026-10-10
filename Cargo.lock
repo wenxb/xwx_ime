@@ -1304,6 +1304,7 @@ dependencies = [
 name = "xwx_ibus"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "thiserror",
  "tokio",

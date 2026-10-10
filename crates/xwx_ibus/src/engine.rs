@@ -54,8 +54,10 @@ impl XwxEngineServer {
 
     /// 处理一个按键事件，返回是否被本输入法消费。
     async fn handle_key(&self, ctxt: &zbus::SignalContext<'_>, event: InputEvent) -> bool {
+        let mut stall = crate::stall::Stall::new("ProcessKeyEvent");
         let output = {
             let mut session = self.session.lock().await;
+            stall.mark("锁");
             match session.handle(event) {
                 Ok(o) => o,
                 Err(e) => {
@@ -64,7 +66,9 @@ impl XwxEngineServer {
                 }
             }
         };
-        match output {
+        stall.mark("引擎");
+        stall.detail(|| format!("{event:?}"));
+        let ret = match output {
             SessionOutput::Noop => false,
             SessionOutput::Commit(text) => {
                 ui::commit(self, ctxt, &text).await;
@@ -88,7 +92,13 @@ impl XwxEngineServer {
                 ui::refresh_ui(self, ctxt, &u).await;
                 false
             }
-        }
+        };
+        // **这一段是「发信号」**：zbus 的发送在对端不消费时会反压，而
+        // `ProcessKeyEvent` 是同步方法——它不返回，用户就看到输入法卡死。
+        // 看门狗把「锁 / 引擎 / 发信号」分开记，一眼能看出卡在哪一段。
+        stall.mark("发信号");
+        stall.finish();
+        ret
     }
 
     /// 中/英属性在面板上的三件套：`(symbol, label, state)`。

@@ -54,16 +54,29 @@ impl Stats {
     }
 }
 
+/// 取 `--name value` 的值；`required=true` 时缺参数直接报错。
+///
+/// 注意：**可选参数与布尔开关是两回事**——可选参数（如 `--english`）出现时
+/// 后面**必须**跟值，不能用它当开关（踩过：`--english` 取到空串导致
+/// 「文件不存在」误报）。布尔开关用 [`flag`]。
 fn arg(name: &str, required: bool) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     let pos = args.iter().position(|a| a == name)?;
-    Some(args.get(pos + 1).cloned().unwrap_or_else(|| panic!("{name} 缺参数")))
-        .filter(|v| {
-            if required && v.is_empty() {
-                panic!("{name} 不能为空");
-            }
-            true
-        })
+    let v = args.get(pos + 1).cloned().unwrap_or_else(|| {
+        if required {
+            panic!("{name} 缺参数");
+        }
+        String::new()
+    });
+    if required && v.is_empty() {
+        panic!("{name} 不能为空");
+    }
+    Some(v)
+}
+
+/// 布尔开关：出现即为真。值可以省略，或写 `--name 1`。
+fn flag(name: &str) -> bool {
+    std::env::args().any(|a| a == name)
 }
 
 /// 打一段中文（逐键），返回每一步的耗时。
@@ -118,7 +131,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("语言模型不存在: {}", lm.display()).into());
     }
 
+    let t_build = Instant::now();
     let engine = Arc::new(build(&data, &lm, english.as_deref())?);
+    let build_ms = t_build.elapsed().as_secs_f64() * 1000.0;
+    if flag("--assembly-only") {
+        println!("装配耗时 {build_ms:.1}ms（dict + abbrev + syllable_graph + LM + 英文）");
+        return Ok(());
+    }
     println!("== 逐键延迟（真实会话，release）==");
     println!("data = {}", data.display());
     println!(
