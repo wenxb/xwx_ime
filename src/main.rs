@@ -374,9 +374,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //   1. 定时检查:到批量阈值(needs_flush)就 flush 一次;
     //   2. Ctrl+C 退出时兜底 flush 一次,把不足阈值的尾巴也落盘。
     // flush 失败只告警不吞掉(用户词频是统计量,丢一批可接受,但绝不静默)。
-    // 卡死看门狗的心跳：捕获「冻结发生在按键方法之外」的情况（分段计时只在
-    // `ProcessKeyEvent` 被进入之后才有用）。关掉看门狗时它不启动。
-    let _heartbeat = xwx_ibus::stall::spawn_heartbeat();
     let mut flush_tick = tokio::time::interval(std::time::Duration::from_secs(30));
     flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // **SIGTERM 也要兜底**:`just dev` 停引擎用的是普通 `kill`(SIGTERM),

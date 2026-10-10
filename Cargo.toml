@@ -30,9 +30,6 @@ tokio       = { version = "1", features = ["full"] }
 tracing     = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror   = "1"
-# 只用于 stall 看门狗的本地时间戳（`localtime_r`）：已在依赖树里（tokio 传递
-# 引入），显式声明不增加任何编译成本。
-libc        = "0.2"
 xwx_engine  = { path = "crates/xwx_engine" }
 xwx_ibus    = { path = "crates/xwx_ibus" }
 

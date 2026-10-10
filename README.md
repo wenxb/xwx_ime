@@ -168,42 +168,6 @@ just xml -- --exec /usr/bin/xwx_ime   # 指定 exec 路径（打 deb 用）
 
 也可以直接用 `RUST_LOG=debug cargo run -p xwx_ime -- --ibus` 前台调试。
 
-### 卡死/卡顿的现场记录（`stall.log`）
-
-`ProcessKeyEvent` 是**同步方法**：ibus-daemon 每发一个键都要等它返回，它不
-返回，用户看到的就是输入法卡死。为了不靠猜，方法内部按**三段**计时——取会话
-锁 / 引擎处理 / 发 D-Bus 信号——单次超过 300ms 就记一条：
-
-```bash
-tail -20 ~/.local/share/xwx/stall.log
-# 2026-10-10 22:41:07 1832ms  ProcessKeyEvent  锁=1ms 引擎=8ms 发信号=1823ms  Char('a')
-```
-
-还有一种行是**心跳**记的：
-
-```
-2026-10-10 22:43:11 1503ms  heartbeat  事件循环被堵住（本次按键路径未覆盖到）
-```
-
-分段计时只在 `ProcessKeyEvent` **被进入之后**才有用。如果冻结发生在它之前
-（运行时线程全被占住、进程被挂起、某处同步阻塞），那个方法根本不会被调用，
-一条 `ProcessKeyEvent` 都不会有。心跳每 500ms 醒一次，间隔超过 1s 就记一条。
-所以三种情况可以分开：
-
-| 日志里看到 | 说明 |
-|---|---|
-| `ProcessKeyEvent` + `发信号` 占满 | 卡在总线（对端不消费导致 zbus 反压） |
-| `ProcessKeyEvent` + `引擎` 占满 | 确实卡在引擎里，配合 `XWX_TRACE=1` 继续拆 |
-| `heartbeat` | **整个进程**被堵住，不是按键方法内部 |
-| 什么都没有却确实卡了 | 卡点在本进程之外（ibus-daemon / GNOME Shell） |
-
-第一列的方法名是**真实的 D-Bus 方法**：翻页记 `PageDown`、切窗口记
-`FocusOut/Reset`、点候选记 `CandidateClicked`——冻结不一定发生在打字上，
-全记成 `ProcessKeyEvent` 会指错方向。
-
-环境变量：`XWX_STALL_MS`（毫秒，默认 300；`off`/`0` 关闭，心跳一并关闭）、
-`XWX_STALL_LOG`（改路径）。文件超过 256 KiB 自动轮转出 `stall.log.1`，只留一代。
-
 验证引擎是否注册成功：
 
 ```bash
