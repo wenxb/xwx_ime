@@ -7,7 +7,7 @@
 
 | 内容 | 现在谁负责 | 状态 |
 |---|---|---|
-| 二进制 `xwx_ime` | `just install` → `$XDG_BIN_HOME/xwx_ime`；deb → `/usr/bin/xwx_ime` | ✅ |
+| 二进制 `xwx_ime` | `just install` → `$XDG_BIN_HOME/xwx_ime`；deb → `/usr/libexec/ibus-engine-xwx` | ✅ |
 | IBus 组件 XML | `just install` → `/usr/share/ibus/component/xwx.xml`；deb → 同名路径 | ✅ |
 | 词库 `dict.bin` | `just install` → `$XDG_DATA_HOME/xwx/dict.bin` | ✅ |
 | 简拼副索引 `abbrev.bin` | 同上 | ✅ |
@@ -20,7 +20,7 @@
    `Cargo.toml` 的 `[package.metadata.deb]` 的 `assets` 只有两条：
    ```
    ["data/debian/xwx.xml", "usr/share/ibus/component/xwx.xml", "644"]
-   ["target/release/xwx_ime", "usr/bin/xwx_ime", "755"]
+   ["target/release/xwx_ime", "usr/libexec/ibus-engine-xwx", "755"]
    ```
    ⇒ 装了 deb 的机器上引擎会退化成内置小词库（`just install` 里那句警告说的就是这件事）。
    **已修**：`Cargo.toml` 加了 `data/dict.bin` / `data/abbrev.bin` 两条 asset → `usr/share/xwx/`。
@@ -33,7 +33,7 @@
 3. **`.gram` 与输入源注册没有任何交付说明**
    README 需要写清：模型放哪、为什么不能随包分发、如何把 `xwx` 加进输入源。
 4. **已修**：`cargo deb -p xwx_ime` 能出包（注意 `data/debian/xwx.xml` 是**生成物**，
-   需先跑 `xwx_ime --xml data/debian/xwx.xml --exec /usr/bin/xwx_ime`，`just deb` 里已有这步；
+   需先跑 `xwx_ime --xml data/debian/xwx.xml --exec /usr/libexec/ibus-engine-xwx`，`just deb` 里已有这步；
    产物在 `target_dir/debian/` 而不是仓库下的 `target/`）。**内容已验证**（见下）。
 
 ## 验证方式（补完后照此验收）

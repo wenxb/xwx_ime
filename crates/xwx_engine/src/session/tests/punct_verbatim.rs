@@ -211,23 +211,30 @@ fn shift_letters_spell_gpu_across_commits() {
 }
 
 #[test]
-fn shift_letter_mid_composition_commits_candidate_then_letter() {
-    // 中文模式、拼音串非空(`nihao`):Shift+G 先按空格语义上屏
-    // 高亮候选(首选整词「你好」),再追加大写字母——得到「你好G」,
-    // 与 `nihao,` → 「你好,」的 punctuator 既定做法一致。
+fn shift_letter_mid_composition_commits_raw_input_then_letter() {
+    // 中文模式、拼音串非空(`nihao`):Shift+G **原样保留**已敲的字母
+    // ——高亮候选是输入法的默认项,不替用户提交(旧实现会上屏「你好G」,
+    // 用户没选过的「你好」被强行带出)——得到 `nihaoG`。大写同时点亮
+    // 「英文跟随」,后续字母继续逐字按英文上屏(`ni`+Shift+P+`hone`
+    // → `niPhone` 的关键)。
     let mut s = session_with_dict();
     for c in "nihao".chars() {
         s.handle(InputEvent::Char(c)).expect("不应失败");
     }
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
     assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "你好G"),
-        "`nihao` + Shift+G 应上屏「你好G」: {out:?}"
+        matches!(out, SessionOutput::Commit(ref t) if t == "nihaoG"),
+        "`nihao` + Shift+G 应原样上屏「nihaoG」: {out:?}"
     );
     assert!(!s.is_active(), "上屏后会话应复位");
-    // 「你好」是词(last_word),大写字母紧随其后不覆盖它(与标点一致)
-    assert_eq!(s.last_word.as_deref(), Some("你好"));
-    assert_eq!(s.committed_tail, "你好G");
+    assert_eq!(s.last_word, None, "原样串不是词,last_word 应为 None");
+    assert_eq!(s.committed_tail, "nihaoG");
+    // 英文跟随已点亮:后续小写字母逐字上屏,不回拼音串
+    let out = s.handle(InputEvent::Char('m')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "m"),
+        "跟随态下后续字母应逐字上屏: {out:?}"
+    );
 }
 
 #[test]

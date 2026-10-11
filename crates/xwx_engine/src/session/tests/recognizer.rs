@@ -503,7 +503,7 @@ fn digit_select_and_capital_keep_their_normal_meaning_while_composing() {
     }
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
     assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "你好G"),
-        "普通拼音态大写仍是「上屏候选 + 大写字母」: {out:?}"
+        matches!(out, SessionOutput::Commit(ref t) if t == "nihaoG"),
+        "普通拼音态大写仍结束组合(不延长原文),已敲字母原样上屏: {out:?}"
     );
 }

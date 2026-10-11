@@ -9,21 +9,21 @@ mod support;
 use support::{Harness, keyval, last_commit, last_preedit, shared_fixture};
 
 /// Shift+letter verbatim input must survive the full D-Bus path — with
-/// docs/VERIFY.md row 13's exact shape: `nihao` + Shift+G → 「你好G」.
+/// docs/VERIFY.md row 13's exact shape: `nihao` + Shift+G → `nihaoG`.
 ///
 /// `translate_keyval` (`ibus_proto.rs:147-159`) converts Shift+letter into
-/// `InputEvent::Verbatim('G')`, and `session.rs:439-452` commits the highlighted
-/// candidate first and appends the letter. The *whole point* is that a single
-/// `CommitText` carries both, which is only visible on the wire.
+/// `InputEvent::Verbatim('G')`, and the session commits the typed letters
+/// **as-is**(不替用户提交高亮候选)and appends the letter. The *whole point*
+/// is that a single `CommitText` carries both, which is only visible on the wire.
 ///
 /// Wrong-behaviour witnesses:
 /// - Shift+letter normalised into the pinyin string instead of `Verbatim` →
 ///   the composed word is `nihaog` and the commit is a different word → red;
 /// - `Verbatim` committed as two separate signals → the concatenation is still
 ///   right, so this test also asserts the *number* of commits (exactly one) to
-///   pin the "one commit carrying candidate+letter" contract.
+///   pin the "one commit carrying raw letters+letter" contract.
 #[test]
-fn shift_letter_appends_verbatim_to_the_committed_candidate() {
+fn shift_letter_commits_raw_input_then_verbatim() {
     let h = &mut Harness::new("seq-verbatim");
     h.start_engine(shared_fixture());
     h.focus_out().expect("FocusOut");
@@ -45,9 +45,9 @@ fn shift_letter_appends_verbatim_to_the_committed_candidate() {
     let cs = support::commits(&sigs);
     assert_eq!(
         cs,
-        vec!["你好G".to_string()],
-        "Shift+G 必须产生一次 CommitText「你好G」——先上屏高亮候选再追加大写字母。\
-         实测 {cs:?};全部信号: {:?}",
+        vec!["nihaoG".to_string()],
+        "Shift+G 必须产生一次 CommitText「nihaoG」——已敲字母原样保留再追加大写字母,\
+         不替换成高亮候选。实测 {cs:?};全部信号: {:?}",
         support::member_names(&sigs)
     );
 }
@@ -57,7 +57,7 @@ fn shift_letter_appends_verbatim_to_the_committed_candidate() {
 ///
 /// The must-not half: if CapsLock were ignored, `G` would go into the pinyin
 /// buffer as a lowercase `g`, and the sequence `nihao` + CapsLock+`g` would
-/// compose `nihaog` instead of committing 「你好G」. Our fixture has no `nihaog`
+/// compose `nihaog` instead of committing `nihaoG`. Our fixture has no `nihaog`
 /// key, so the preedit assertion is the sharp one: the preedit must be *hidden*
 /// (commit → `hide_ui`), not updated to `nihaog`.
 ///
@@ -81,8 +81,8 @@ fn capslock_letter_is_verbatim_and_never_enters_the_pinyin_string() {
     let sigs = h.settle_default();
     assert_eq!(
         last_commit(&sigs).as_deref(),
-        Some("你好G"),
-        "CapsLock 下 g 必须是 Verbatim 大写,与候选一起上屏"
+        Some("nihaoG"),
+        "CapsLock 下 g 必须是 Verbatim 大写,与原样保留的已敲字母一起上屏"
     );
     // The must-not: no preedit may ever read "nihaog".
     assert!(
@@ -105,7 +105,7 @@ fn capslock_letter_is_verbatim_and_never_enters_the_pinyin_string() {
 /// one and fail the other.
 ///
 /// Wrong-behaviour witness: changing `if shift != caps` to `if shift || caps`
-/// makes this green case commit `你好G` instead of composing `nihaog` → red.
+/// makes this green case commit `nihaoG` instead of composing `nihaog` → red.
 #[test]
 fn capslock_plus_shift_returns_the_letter_to_the_pinyin_string() {
     let h = &mut Harness::new("seq-caps-shift");
@@ -125,7 +125,7 @@ fn capslock_plus_shift_returns_the_letter_to_the_pinyin_string() {
         last_preedit(&sigs).as_deref(),
         Some("nihaog"),
         "CapsLock+Shift+g 必须回到小写拼音串(两者各翻转一次,相互抵消)。\
-         若实测为 '你好G' 或空串,说明 shift/caps 的异或判定被写成了「任一即大写」"
+         若实测为 'nihaoG' 或空串,说明 shift/caps 的异或判定被写成了「任一即大写」"
     );
     assert!(
         !support::member_names(&sigs).contains(&"CommitText"),

@@ -53,12 +53,12 @@ fn positional_path_is_written_and_exec_lands_in_the_xml() {
     let dir = tmp_dir("out");
     let out_file = dir.join("xwx.xml");
 
-    let out = run(&["--xml", out_file.to_str().unwrap(), "--exec", "/usr/bin/xwx_ime"]);
+    let out = run(&["--xml", out_file.to_str().unwrap(), "--exec", "/usr/libexec/ibus-engine-xwx"]);
     assert!(out.status.success(), "应成功: {}", stderr_of(&out));
     assert!(out.stdout.is_empty(), "写了文件就不该再往 stdout 写");
     let xml = std::fs::read_to_string(&out_file).expect("读输出文件失败");
     assert!(
-        xml.contains("/usr/bin/xwx_ime"),
+        xml.contains("/usr/libexec/ibus-engine-xwx"),
         "--exec 的值应写进 XML: {xml}"
     );
 

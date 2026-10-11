@@ -397,13 +397,15 @@ fn committed_tail_is_bounded_on_char_boundary() {
     );
 }
 
-/// 大写/Verbatim 结束组合时同样不许丢后缀。
+/// 中途大写**原样保留**:未确认的高亮候选不替用户提交,已敲的字母
+/// 整串原样上屏,一个不丢。
 #[test]
-fn verbatim_after_a_segment_keeps_the_uncovered_suffix() {
+fn verbatim_mid_composition_keeps_raw_letters_instead_of_highlighted_candidate() {
     let mut s = session_with_segments();
     for c in "womenjintian".chars() {
         s.handle(InputEvent::Char(c)).expect("不应失败");
     }
+    // 高亮「我们」只是输入法的默认项,不算用户的选择
     let idx = s
         .candidates
         .iter()
@@ -413,9 +415,33 @@ fn verbatim_after_a_segment_keeps_the_uncovered_suffix() {
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
     match out {
         SessionOutput::Commit(text) => {
-            assert_eq!(text, "我们jintianG", "Shift+字母:候选 + 未覆盖后缀 + 大写字母");
+            assert_eq!(text, "womenjintianG", "已敲字母原样保留,不替换成高亮候选");
         }
-        other => panic!("期望 Commit(大写结束组合),实际 {other:?}"),
+        other => panic!("期望 Commit(大写原样上屏),实际 {other:?}"),
+    }
+    assert!(!s.is_active(), "组合结束");
+}
+
+/// **明确确认过**的段(空格/点击)不是默认项:中途大写时照常上屏,
+/// 剩余字母原样跟上——「原样保留」不吞用户已选的词。
+#[test]
+fn verbatim_mid_composition_still_commits_explicitly_confirmed_segments() {
+    let mut s = session_with_segments();
+    for c in "womenjintian".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    let idx = s
+        .candidates
+        .iter()
+        .position(|c| c.word == "我们")
+        .expect("候选里应有「我们」");
+    s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+    let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+    match out {
+        SessionOutput::Commit(text) => {
+            assert_eq!(text, "我们jintianG", "已确认段照常上屏,剩余字母原样保留");
+        }
+        other => panic!("期望 Commit(已确认段 + 原样串),实际 {other:?}"),
     }
     assert!(!s.is_active(), "组合结束");
 }

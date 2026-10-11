@@ -21,7 +21,7 @@
 //!   --data data --lm <gram> [--rounds 200] [--seed 1]
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -52,7 +52,7 @@ impl Rng {
     }
 }
 
-fn build(data: &PathBuf, lm: &PathBuf) -> Result<ImeEngine, Box<dyn std::error::Error>> {
+fn build(data: &Path, lm: &Path) -> Result<ImeEngine, Box<dyn std::error::Error>> {
     let mut engine = ImeEngine::new_with_lm(Some(&data.join("dict.bin")), Some(lm))?;
     engine.dict = engine.dict.with_abbrev(data.join("abbrev.bin"));
     engine.dict = engine.dict.with_syllable_graph(data.join("syllable_graph.bin"));
@@ -90,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for round in 0..rounds {
         // 轮换四种形态，权重均匀。
-        let (input, kind): (String, &str) = match round % 4 {
+        let (input, _kind): (String, &str) = match round % 4 {
             0 => {
                 // 越来越长的连续拼音（不打断）
                 let n = 8 + rng.range(40);
@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 同一字母重复（音节切分组合爆炸）
                 let c = PINYIN_LETTERS[rng.range(PINYIN_LETTERS.len())];
                 let n = 4 + rng.range(20);
-                (std::iter::repeat(c as char).take(n).collect(), "重复字母")
+                (std::iter::repeat_n(c as char, n).collect(), "重复字母")
             }
             _ => {
                 // 随机字母串

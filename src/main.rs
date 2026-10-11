@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.first().map(String::as_str) {
         Some("--xml") => {
             // 允许 `--xml [路径] [--exec PATH]`：deb 打包时 exec 需指向
-            // 安装后的二进制（/usr/bin/xwx_ime），而非构建期 current_exe。
+            // 安装后的二进制（/usr/libexec/ibus-engine-xwx），而非构建期 current_exe。
             //
             // **必须顺序解析**：`--exec` 吃掉它的**值**，输出路径只能来自独立的
             // 位置参数。旧实现用 `args.iter().find(|a| !a.starts_with("--"))` 找
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  xwx_ime --ibus     同上，显式指定");
             println!("  xwx_ime --xml [文件|-] [--exec PATH]  输出 component XML");
             println!("        （未知参数 / 缺值 / 输出路径重复一律报错并退出）");
-            println!("        （默认 stdout；--exec 指定 XML 里的引擎路径,\n         deb 打包时用 /usr/bin/xwx_ime）");
+            println!("        （默认 stdout；--exec 指定 XML 里的引擎路径,\n         deb 打包时用 /usr/libexec/ibus-engine-xwx）");
             return Ok(());
         }
         _ => {}

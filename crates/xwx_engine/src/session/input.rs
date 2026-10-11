@@ -82,7 +82,7 @@ impl InputSession {
                 Ok(SessionOutput::Noop)
             }
 
-            // —— 英文跟随：大写起头的英文单词，后面的字母直接上屏 ——
+            // —— 英文跟随：大写起头/中途转入的英文单词，后面的字母直接上屏 ——
             // 见 `english_run` 的文档。与 Verbatim 同一条路：不进候选、
             // 不学习，逐字交给应用（旧实现里 `H` 之后的 `ello` 会回到拼音）。
             InputEvent::Char(c) if self.english_run && c.is_ascii_alphabetic() => {
@@ -318,45 +318,20 @@ impl InputSession {
             }
             // —— Verbatim:直接上屏的字符(Shift+字母 / CapsLock,
             //    见 InputEvent::Verbatim 的文档) ——
-            // 处理与上面标点分支同一形状:拼音串非空时先按空格语义
-            // 上屏高亮候选(无候选则原样上屏拼音串),再追加该字符;
-            // 为空时直接上屏。差别只有两点:字符是原样半角(不做
-            // 全角映射),且语义上是「敲了一个英文字母」不是标点——
-            // 但两者都只用 push_tail 进上屏尾部、不学、不动 last_word。
+            // 大写字母(起头或组合中途)都是「用户明说要打英文」:已敲的
+            // 内容**原样保留**——已确认段(用户明确选过的)照常上屏,剩余
+            // 拼音串按原始字母上屏,**不替用户提交高亮候选**(高亮是输入法
+            // 的默认项,不是用户的选择),这个字符再原样拼在尾部。大写同时
+            // 点亮「英文跟随」,后续字母继续逐字按英文上屏(`ni`+`P`+
+            // `hone` → `niPhone`);小写 Verbatim(CapsLock+Shift)不带跟随。
+            // 单字母不是词:不进 UserLM 学习,也不动 last_word(与标点一致)。
             InputEvent::Verbatim(c) => {
-                if self.pinyin.is_empty() && self.confirmed.is_empty() {
-                    // 大写字母**起头**（身上没有未上屏的组合）＝ 用户明说这是
-                    // 英文单词的第一个字母，后面的字母跟着走英文。
-                    if c.is_ascii_uppercase() {
-                        self.english_run = true;
-                    }
-                    Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
-                } else {
-                    // 标点/英文字符结束这次组合:已确认段 + 当前候选(或原样
-                    // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
-                    // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
-                    // (段留在组合里),标点就没地方落地了。
-                    // 同标点分支:大写结束组合也是造词边界,
-                    // 且在提交之前划。
-                    self.break_coin_run();
-                    let out = match self.candidates.get(self.cursor).cloned() {
-                        Some(c) => {
-                            // 后缀守恒:与标点分支同一条规则(见那里的注释)。
-                            let rest = self.uncovered_suffix(&c);
-                            let mut text = self.commit_selection(&c);
-                            if !rest.is_empty() {
-                                self.push_tail(&rest);
-                                text.push_str(&rest);
-                            }
-                            SessionOutput::Commit(text)
-                        }
-                        None => SessionOutput::Commit(self.finish_with_raw(self.pinyin.clone())),
-                    };
-                    // 单字母不是词:不进 UserLM 学习(与标点同一取舍),
-                    // 也不动 last_word(刚上屏的候选仍是有效 bigram 上文)。
-                    self.push_tail(c.encode_utf8(&mut [0u8; 4]));
-                    Ok(append_to_commit(out, c.encode_utf8(&mut [0u8; 4])))
+                if c.is_ascii_uppercase() {
+                    self.english_run = true;
                 }
+                let head = self.finish_with_raw(self.pinyin.clone());
+                self.push_tail(c.encode_utf8(&mut [0u8; 4]));
+                Ok(SessionOutput::Commit(format!("{head}{c}")))
             }
             // —— `-`/`=` 翻页(librime `paging_with_minus_equal`,has_menu)——
             // 这两个键**没有全角标点映射**(上面 punctuator 分支够不着),

@@ -119,6 +119,11 @@ impl InputSession {
         self.candidates.len()
     }
 
+    /// 当前候选的只读视图（诊断/上层自绘用）。
+    pub fn candidates(&self) -> &[Candidate] {
+        &self.candidates
+    }
+
     /// 取当前界面快照。
     /// 组合还活着吗——**剩余串与已确认段任一非空**都算。
     ///

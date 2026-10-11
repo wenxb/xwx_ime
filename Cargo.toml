@@ -51,7 +51,9 @@ serde = { workspace = true }
 
 # ---- deb 打包（cargo deb）----
 # XML 必须进 /usr/share/ibus/component/（IBus 不扫用户目录）。
-# 打包前运行 `just deb`：先生成 exec=/usr/bin/xwx_ime 的
+# 引擎二进制随包进 /usr/libexec/ibus-engine-xwx（发行惯例，ibus-rime/
+# ibus-libpinyin 同款布局），用户不直接调用。
+# 打包前运行 `just deb`：先生成 exec=/usr/libexec/ibus-engine-xwx 的
 # XML 到 data/debian/xwx.xml，再 cargo deb 打进系统目录。
 [package.metadata.deb]
 section       = "utils"
@@ -63,7 +65,7 @@ recommends    = "ibus"
 maintainer-scripts = "data/debian"
 assets = [
     ["data/debian/xwx.xml", "usr/share/ibus/component/xwx.xml", "644"],
-    ["target/release/xwx_ime", "usr/bin/xwx_ime", "755"],
+    ["target/release/xwx_ime", "usr/libexec/ibus-engine-xwx", "755"],
     # 词库与简拼副索引随包分发:没有它们,装了包也只退化成内置小词库(Q5「不依赖
     # 在线重建」)。引擎的数据路径已支持系统级目录(见 src/lm_path.rs)。
     ["data/dict.bin", "usr/share/xwx/dict.bin", "644"],

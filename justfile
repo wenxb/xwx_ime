@@ -76,7 +76,7 @@ dev:
     @echo "==> 调试引擎  {{target_dir}}/debug/xwx_ime（Ctrl-C 退出；日志照常打在终端）"
     @exec {{target_dir}}/debug/xwx_ime --ibus
 
-# 输出 component XML 到 stdout（打 deb 时用 --exec 指 /usr/bin/xwx_ime）
+# 输出 component XML 到 stdout（打 deb 时用 --exec 指 /usr/libexec/ibus-engine-xwx）
 xml *args:
     cargo build -p xwx_ime
     @{{target_dir}}/debug/xwx_ime --xml {{args}}
@@ -129,5 +129,5 @@ install:
 deb:
     cargo build --release -p xwx_ime
     mkdir -p data/debian
-    {{target_dir}}/release/xwx_ime --xml data/debian/xwx.xml --exec /usr/bin/xwx_ime
+    {{target_dir}}/release/xwx_ime --xml data/debian/xwx.xml --exec /usr/libexec/ibus-engine-xwx
     cargo deb -p xwx_ime --no-strip

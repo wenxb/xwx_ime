@@ -163,7 +163,7 @@ ibus restart   # 或 ibus-daemon -rd
 ```bash
 just dev            # 前台跑引擎（debug，连接到 ibus-daemon），Ctrl+C 退出
 just xml            # 输出 component XML 到 stdout
-just xml -- --exec /usr/bin/xwx_ime   # 指定 exec 路径（打 deb 用）
+just xml -- --exec /usr/libexec/ibus-engine-xwx   # 指定 exec 路径（打 deb 用）
 ```
 
 也可以直接用 `RUST_LOG=debug cargo run -p xwx_ime -- --ibus` 前台调试。
@@ -321,7 +321,7 @@ data/
 ├── README.md              词库二进制格式、LM 格式、Rime 导入教程
 └── debian/               deb 打包资产（cargo deb 用）
     ├── postinst             deb 装完刷新 ibus-daemon 的钩子
-    └── xwx.xml             打 deb 生成的 component XML（构建产物，exec=/usr/bin/xwx_ime）
+    └── xwx.xml             打 deb 生成的 component XML（构建产物，exec=/usr/libexec/ibus-engine-xwx）
 scripts/
 ├── build_dict.py          词库构建工具（Rime → dict.sqlite3）
 ├── dict_to_bin.py         dict.sqlite3 → dict.bin(运行时二进制格式)
@@ -404,3 +404,10 @@ justfile                    任务入口：build / dev / install / deb
 - 看到的是旧行为 / 完全没有候选：先确认跑的是新二进制（`just dev` 用 debug 构建、
   `just install` 用 release），以及 `--ibus` 进程路径（`pgrep -af xwx_ime`）；
 - 简拼不工作：多半是副索引缺失或不同代，看日志里有没有「副索引…不装配」的告警。
+
+## 许可证
+
+[MIT](LICENSE) © 2025 wenxb
+
+词库与语言模型数据**不在本许可证覆盖范围内**（不随仓库分发），使用时请遵守
+各自的授权条款。

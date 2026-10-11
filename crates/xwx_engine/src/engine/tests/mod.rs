@@ -54,6 +54,43 @@ fn entry_tier_exception(inp: &str, seg: &Segmenter, has_abbrev: bool) -> bool {
     pure_abbrev_input(inp, has_abbrev) || leading_abbrev_input(seg, inp, has_abbrev)
 }
 
+/// 万象 gram 的常规位置（与 indexed_mixed 的查找规则一致）。
+fn gram_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("XWX_LM_PATH") {
+        let p = std::path::PathBuf::from(p);
+        return p.is_file().then_some(p);
+    }
+    let home = std::env::var("HOME").ok()?;
+    let p = std::path::PathBuf::from(home).join(".local/share/xwx/wanxiang-lts-zh-hans.gram");
+    p.is_file().then_some(p)
+}
+
+/// 真实数据的生产同款装配（真实词库 + 简拼副索引 + 真实英文词库 +
+/// 万象 gram）；缺件时返回 None，用例自行跳过。
+fn real_bilingual_engine() -> Option<ImeEngine> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let dict = root.join("dict.bin");
+    let abbrev = root.join("abbrev.bin");
+    if !dict.is_file() || !abbrev.is_file() {
+        return None;
+    }
+    let mut engine = match gram_path() {
+        Some(gram) => ImeEngine::new_with_lm(Some(&dict), Some(&gram)).ok()?,
+        None => ImeEngine::new(Some(&dict)).ok()?,
+    };
+    engine.dict = engine.dict.with_abbrev(&abbrev);
+    let graph = root.join("syllable_graph.bin");
+    if graph.is_file() {
+        engine.dict = engine.dict.with_syllable_graph(&graph);
+    }
+    let english = root.join("english.bin");
+    if !english.is_file() {
+        return None;
+    }
+    let en = crate::english::EnglishDict::open(&english).ok()?;
+    Some(engine.with_english(crate::english::EnglishEngine::new(en)))
+}
+
 mod input;
 mod lookup;
 mod beam_lm;

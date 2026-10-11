@@ -18,6 +18,8 @@ data/*.sqlite3
 data/english.bin
 # M2 静态二元数据,同样不进 git。
 data/english_bigram.bin
+# 构建报告(计数/格式描述),build_english_dict.py 生成,与 english.bin 同源。
+data/english.meta.json
 
 # 语言模型（文本或未来的 mmap 二进制格式），由语料训练生成
 data/bigram.txt
@@ -40,6 +42,7 @@ scripts/eval_samples.jsonl
 *.swo
 *~
 .DS_Store
+node_modules/
 # Playwright MCP 的会话产物(截图/页面快照),与仓库无关。
 .playwright-mcp/
 # ---- rime oracle (对照工具) ----
@@ -54,3 +57,6 @@ tools/spike_abbrev/*.bin
 AGENTS.md
 .dsh-worktrees/
 tools/typing_sim/data/
+# 误生成的 pnpm 空壳(无依赖,Rust 仓库没有 JS 工具链),保留本地不入库。
+package.json
+pnpm-lock.yaml

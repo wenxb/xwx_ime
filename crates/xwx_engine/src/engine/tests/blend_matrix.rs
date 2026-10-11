@@ -122,6 +122,46 @@ fn c07_context_can_flip_a_short_input_to_english_without_touching_chinese_order(
 }
 
 #[test]
+fn c07b_completion_only_english_yields_to_readable_chinese_even_after_english() {
+    // ke 在英文词库里只是 keep/key 的**前缀补全**（Completion），不是
+    // 完整词——证明不了「用户在连着打英文」，管不了分档：可 是中文
+    // 音节，中文在前，英文退到第 2 位仍可点（用户实测的 ke 案例）。
+    let engine = engine_with(&[w("keep", "keep", 520), w("key", "key", 540)]);
+    engine.dict.upsert("可", "ke", 900).expect("插入");
+    let out = lookup(&engine, "ke", Some("thank"));
+    assert_eq!(first_lang(&out), "chinese", "补全英文不得顶掉中文音节");
+    assert!(out.get(1).map(|c| c.is_english()) == Some(true), "英文仍在第 2 位: {out:?}");
+}
+
+#[test]
+fn c07c_abbrev_reading_counts_as_readable_chinese() {
+    // 简拼读法判据的对齐器：`yidd` → `yi dian dian`（yi | d | d）读得
+    // 出来；`hello`（辅音连缀）读不出来。**首音节必须打全**：纯声母
+    // 开头的 `zhgr`/`ydd` 不算——那是英文前缀的形状（pyt/app 同款），
+    // 它们没有英文竞争时轮不到本判据。
+    use crate::engine::blend::pinyin_reads_input as reads;
+    assert!(reads(b"yidd", "yi dian dian"));
+    assert!(reads(b"yid", "yi dian dian"), "没打完的尾巴也是读法");
+    assert!(reads(b"zhonggr", "zhong guo ren"), "zhong 打全后 g、r 是简拼");
+    assert!(!reads(b"zhgr", "zhong guo ren"), "纯声母开头不算");
+    assert!(!reads(b"ydd", "yi dian dian"), "纯声母开头不算");
+    assert!(!reads(b"hello", "hei long"));
+    // 端到端（真实词库 + 真实英文词库，缺件跳过）：yiddish 不得顶掉
+    // 一点点；整词输入照旧英文优先——修的是简拼读法漏判，不是压英文。
+    let Some(engine) = crate::engine::tests::real_bilingual_engine() else {
+        return;
+    };
+    let out = engine
+        .lookup_composition("yidd", &LmContext::empty(), &EnglishContext::empty())
+        .expect("查询失败");
+    assert!(!out.first().expect("候选非空").is_english(), "yidd 首选应是中文: {out:?}");
+    let out = engine
+        .lookup_composition("yiddish", &LmContext::empty(), &EnglishContext::empty())
+        .expect("查询失败");
+    assert_eq!(first_lang(&out), "english", "完整英文词仍应排前");
+}
+
+#[test]
 fn c08_english_first_is_a_rule_not_a_word_list() {
     // 同一批词：做成完整词输入时不抢中文；做成超出静态池的长尾输入时
     // 由 good_en/strong_zh 判据决定，而不是「词表里是否有这个词」。

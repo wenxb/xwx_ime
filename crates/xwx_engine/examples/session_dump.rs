@@ -11,12 +11,12 @@
 //!   --data data --lm <gram> --after jintian --input rug,bir,app
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use xwx_engine::{EnglishDict, EnglishEngine, ImeEngine, InputEvent};
 
-fn build(data: &PathBuf, lm: &PathBuf, english: Option<&PathBuf>) -> Result<ImeEngine, Box<dyn std::error::Error>> {
+fn build(data: &Path, lm: &Path, english: Option<&Path>) -> Result<ImeEngine, Box<dyn std::error::Error>> {
     let mut engine = ImeEngine::new_with_lm(Some(&data.join("dict.bin")), Some(lm))?;
     engine.dict = engine.dict.with_abbrev(data.join("abbrev.bin"));
     engine.dict = engine.dict.with_syllable_graph(data.join("syllable_graph.bin"));
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--english")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from);
-    let engine = Arc::new(build(&data, &lm, english.as_ref())?);
+    let engine = Arc::new(build(&data, &lm, english.as_deref())?);
 
     for input in inputs.split(',') {
         // 每个输入都从头来：先打一段中文并提交（造出真实上文），再打目标串。

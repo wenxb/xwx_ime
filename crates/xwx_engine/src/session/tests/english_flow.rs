@@ -257,6 +257,7 @@ fn s09_english_never_enters_the_chinese_coin_buffer() {
 
 // ---------- S12-S13：组合内导航与退格 ----------
 
+
 #[test]
 fn s12_navigation_inside_composition_keeps_the_english_context() {
     let mut s = session_with_english();
@@ -306,6 +307,26 @@ fn s14_page_and_click_use_the_same_cursor_after_paging() {
     let paged = cursor_word(&s);
     assert_ne!(first, paged, "翻页应换到下一页首项");
     assert_eq!(commit_text(&mut s, InputEvent::Space), paged, "空格上屏的就是当前高亮");
+}
+
+// ---------- S15：英文上文不压中文音节 ----------
+
+#[test]
+fn s15_ke_after_english_keeps_chinese_first() {
+    // 用户实测：刚提交过英文（hello），再打 ke——第一个候选是 keep/key
+    // 这种补全英文。ke 是完整中文音节，补全英文证明不了「在打英文」，
+    // 中文必须在前（hello 之所以能让英文靠前，靠的是 Exact 完整词
+    // 证据，见 c07/c07b 的分界）。
+    let mut ws = words();
+    ws.push(W { key: "keep", display: "keep", q: 520 });
+    ws.push(W { key: "key", display: "key", q: 540 });
+    let mut s = session_with_words(ws);
+    s.engine.dict.upsert("可", "ke", 900).expect("插入");
+    type_letters(&mut s, "hello");
+    commit_text(&mut s, InputEvent::Space);
+    type_letters(&mut s, "ke");
+    assert_eq!(cursor_word(&s), "可", "ke 的首选应是中文: {:?}", candidate_words(&s));
+    assert!(s.candidates.get(1).map(|c| c.is_english()) == Some(true), "英文仍在第 2 位");
 }
 
 // ---------- U01/U02/U06/U07 ----------
