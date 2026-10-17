@@ -483,7 +483,7 @@ fn capital_letter_inside_a_recognized_url_extends_the_text() {
     assert_eq!(s.pinyin(), "http://x/A", "大写及其大小写都要保留");
 }
 
-/// 非识别态行为不变:数字仍是数字选词,大写仍结束组合。
+/// 非识别态行为不变:数字仍是数字选词,大写照常进组合(不延长原文)。
 #[test]
 fn digit_select_and_capital_keep_their_normal_meaning_while_composing() {
     let mut s = session_with_dict();
@@ -503,7 +503,7 @@ fn digit_select_and_capital_keep_their_normal_meaning_while_composing() {
     }
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
     assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "nihaoG"),
-        "普通拼音态大写仍结束组合(不延长原文),已敲字母原样上屏: {out:?}"
+        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "nihaoG"),
+        "普通拼音态大写进组合(不延长原文、不直出): {out:?}"
     );
 }

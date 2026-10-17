@@ -37,17 +37,18 @@ rime-ice 词表(dict.yaml) → build_dict.py → dict.sqlite3 → dict_to_bin.py
 （`crates/xwx_engine/src/dict.rs`）启动时 mmap 映射，查询=内存二分，
 零 SQL、零锁、无逐击键磁盘 IO。
 
-### 二进制布局（v1，little-endian）
+### 二进制布局（v2，little-endian）
 
 ```text
 偏移      内容
 0         magic: "XWXIDM1\0"（8 字节）
-8         u32 LE: 版本号（当前 1）
+8         u32 LE: 版本号（当前 2）
 12        u64 LE: 拼音 key 数 P
 20        u64 LE: 词条总数
 28        u64 LE: 拼音索引区偏移（P × 12 字节）
 36        u64 LE: 拼音字符串区偏移
 44        u64 LE: 词条区偏移
+52        u64 LE: 全表词频总和（v2 新增）
 
 拼音索引区（P 条，按拼音字节序排序 → 二分查找）:
   u32 LE 拼音串偏移（相对字符串区）+ u16 LE 长度
@@ -56,6 +57,23 @@ rime-ice 词表(dict.yaml) → build_dict.py → dict.sqlite3 → dict_to_bin.py
 词条区（每拼音一个块）:
   word_len u8 + word UTF-8 + freq u32 LE，块内按 freq 降序
 ```
+
+**v1 → v2 只加了偏移 52 的那 8 字节**，前 52 字节逐字节同布局，因此：
+
+- 读取端 v1/v2 都收（`MmapDict::from_bytes` 按版本选头长 52/60）；
+  v1 没有总频字段，回落到线性扫词条区——**这条扫描正是升 v2 的动机**：
+  为求一个 `u64` 把整段词条区拉进 page cache，实测让 `dict.bin` 常驻从
+  ~30MB 涨到 63MB（进程 RSS 里的那 60MB 主要就是它）；
+- 生成 v2 需要 `dict.sqlite3`；**手头只有 v1 二进制时用迁移脚本就地升级**
+  （内容一字不改，只重算区段偏移与头部）：
+
+```sh
+python3 scripts/dict_migrate_v2.py            # data/dict.bin 原地升级
+python3 scripts/dict_migrate_v2.py in.bin out.bin
+```
+
+迁移后 **不必重建** `abbrev.bin` / `syllable_graph.bin`：它们只依赖词库的
+key 数与内容，两者都没变，同代校验读的也不是文件哈希。
 
 约定：
 
@@ -80,9 +98,13 @@ key 是「拼音各音节首字母串」(`"zhong guo ren"` → `"zgr"`);每个�
 
 ### 二进制布局(v1,little-endian)
 
-与 `dict.bin` v1 **完全同构**:同样的 52 字节头、12 字节索引记录、词条区
-按 freq 降序。差别只有两处:魔数换成 `XWXABR1\0`,词条区每条多带一个
+与 `dict.bin` **v1 前 52 字节同构**:同样的 52 字节头、12 字节索引记录、
+词条区按 freq 降序。差别两处:魔数换成 `XWXABR1\0`,词条区每条多带一个
 「全拼」字段(查出的词要回送打分流程,必须带回全拼)。
+
+> 副索引**没有**跟着主索引升 v2:它不需要全表词频总和(那个值只给候选
+> 归一化用),所以仍是 52 字节头。`abbrev_to_bin.py` 读主索引时只取前 52
+> 字节,因此 v1/v2 的 `dict.bin` 都能生成副索引,产物也不随主索引版本变。
 
 ```text
 偏移      内容

@@ -1,7 +1,11 @@
-//! 排序:候选定序键(`SortKey`/`sort_key`)、覆盖长度映射、未解释字母计数、
-//! 以及副索引候选并入。
+//! 排序:候选定序键(`SortKey`/`sort_key`)、层内证据分级、未解释字母计数
+//! (拆至 [`coverage`])以及副索引候选并入。
 
 use super::*;
+
+mod coverage;
+
+pub(super) use coverage::{tail_only, unexplained_letters, unreachable_tail};
 
 pub(super) fn ordered_candidates<K>(
     map: std::collections::HashMap<K, Candidate>,
@@ -12,7 +16,7 @@ pub(super) fn ordered_candidates<K>(
 }
 
 pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate], entry_tier_exception: bool) {
-    // 排序键 = (u_min 桶, 拼写来源层序, 分数 − 覆盖罚分, 频次降序, ...):
+    // 排序键 = (u_min 桶, 拼写来源层序, 层内证据分级 band, 分数 − 覆盖罚分, 频次降序, ...):
     //
     // **首键「u_min 桶」**:候选终点位置 `pos = cp.len()` 处的「不可
     // 避免未解释字母数」(见 [`unreachable_tail`])——0 ⇔ 输入从
@@ -100,16 +104,18 @@ pub(super) struct PlainKey {
     bucket: usize,
     /// 第二键:拼写来源层序(Exact < Fuzzy < Abbrev)。
     spelling: SpellingKind,
-    /// 第三键:补全层序(`false` = 精确命中,`true` = 尾音节补全)。
+    /// 第三键:**层内证据分级**(见 [`demote_non_dominant_completions`])。
     ///
-    /// 分层而不是扣分:补全(`liji` 的 `li ji(e)`)是「猜用户还没打完」,与精确
-    /// 命中(`li ji`)不是同一件事的证据,不该在同一条分数轴上比大小。实测
-    /// `liji` 在上文「他的」下,「理解」靠 LM 拿 1.46 压过「立即」,而两者词频
-    /// 只差 0.00007——软惩罚挡不住,任何上下文扰动都能翻。
+    /// `0` = 整串读法(词条命中与拼装同列,分数定序),或经支配豁免的
+    /// 鼻音补全;`1` = 尾音节补全;`2` = 其余(声母碎片、非整串前缀词)。
+    /// 打全了拼音的读法恒在补全之前,补全恒在碎片候选之前。
+    band: u8,
+    /// 第四键:补全层序(`false` = 精确命中,`true` = 尾音节补全)。
     ///
-    /// 唯一的出口是**支配例外**,见 [`demote_non_dominant_completions`]。
+    /// 与 `band` 冗余(band 已决定补全位置),保留只为让豁免后的次序
+    /// 调整可见;其打分职责见 [`COMPLETION_PENALTY`]。
     completion: bool,
-    /// 第四键:分数 − 覆盖罚分,降序。
+    /// 第五键:分数 − 覆盖罚分,降序。
     ///
     /// `score` 里混着 LM 项,所以它**不是**补全越级的判据(见
     /// [`demote_non_dominant_completions`])。
@@ -127,6 +133,7 @@ pub(super) fn plain_key(
     PlainKey {
         bucket: k.bucket,
         spelling: k.spelling,
+        band: k.band,
         completion: k.completion,
         score: k.score,
     }
@@ -165,8 +172,18 @@ fn demote_non_dominant_completions(keys: &mut [PlainKey], ranked: &[Candidate], 
     let mut best_lexical = vec![f32::NEG_INFINITY; slots];
     let mut best_score = vec![f32::NEG_INFINITY; slots];
     let letters = |c: &Candidate| c.pinyin.chars().filter(|ch| *ch != ' ').count();
-    for (k, c) in keys.iter().zip(ranked).filter(|(k, _)| !k.completion) {
-        if letters(c) != inp.len() {
+    for (k, c) in keys.iter_mut().zip(ranked) {
+        let n = letters(c);
+        // **层首**:一切**整串读法**(候选拼音恰好覆盖整个输入——词条命中
+        // 与拼装读法同列,后者靠分数/LM 补偿竞争,如 `chuzaina` 的「出在哪」
+        // 对「杵在那」)恒置 band 0——同桶 Exact 层内领先一切补全与碎片
+        // 候选。这是「精确匹配靠后」问题的结构性修复:补全是否让位不再看
+        // 词频差,而看**输入是不是该词的完整拼音**(事实),不是「用户是否
+        // 还没打完」(猜测)。
+        if !k.completion && k.spelling == SpellingKind::Exact && n == inp.len() {
+            k.band = 0;
+        }
+        if k.completion || n != inp.len() {
             continue;
         }
         let slot = k.bucket * LAYERS + k.spelling as usize;
@@ -187,9 +204,51 @@ fn demote_non_dominant_completions(keys: &mut [PlainKey], ranked: &[Candidate], 
         } else {
             (k.score.0, best_score[slot])
         };
-        if mine >= theirs + COMPLETION_DOMINANCE {
+        // **豁免口只对鼻音截断开放**(见 [`nasal_completion`]):n/ng 混淆
+        // 是拼音最典型的打错形态,补全假设可信(`beijin`→北京、`beiji`→
+        // 北京);元音/其他类截断(`xiala`→下来、`jianji`→简介)不是现实的
+        // 打错形态——输入更可能是另一个打完整的词,永不越过整串精确词条
+        // (band 1),只在一切层首之后按分数竞争。
+        if nasal_completion(inp, c) && mine >= theirs + COMPLETION_DOMINANCE {
             k.completion = false;
+            k.band = 0;
+        } else {
+            k.band = 1;
         }
+    }
+}
+
+/// 尾音节补全的**截断类型**:被省略的字母是不是纯鼻音韵尾(n/ng)。
+///
+/// 设 `token` = 候选拼音最后一个音节,`extra` = 拼音字母数 − 输入字母数,
+/// `typed` = 输入末尾 `token.len() − extra` 个字母(被补全音节覆盖的
+/// 已打部分):鼻音类 ⇔ `token == typed+"n" | typed+"ng"`,或 `n→ng`
+/// 互换(`xi→xin`、`xi→xing`、`jin→jing`;`xian→xiang` 这类韵腹+韵尾
+/// 复合形态由 n→ng 分支覆盖)。多出元音/其他字母(`la→lai`、`ji→jie`)
+/// 不算——「漏打一个元音」不是现实的打错形态。
+///
+/// 纯字符串推导,O(1),不触格与 `Candidate` 结构;形状异常(补全字母
+/// 跨出尾音节、非前缀关系)一律按非鼻音处理,安全侧收敛。
+fn nasal_completion(inp: &str, c: &Candidate) -> bool {
+    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
+    let extra = cp.len().saturating_sub(inp.len());
+    if extra == 0 || !cp.starts_with(inp) {
+        return false;
+    }
+    let token = c.pinyin.split(' ').next_back().unwrap_or("");
+    if token.len() <= extra {
+        return false;
+    }
+    let typed = &inp[inp.len() - (token.len() - extra)..];
+    if !token.starts_with(typed) {
+        return false;
+    }
+    match &token[typed.len()..] {
+        // 多出纯鼻音韵尾:xi→xin、xi→xing(漏打 n/ng)。
+        ext if ext == "n" || ext == "ng" => true,
+        // n→ng(jin→jing):只差一个 g,typed 以 n 结尾。
+        "g" if typed.ends_with('n') => true,
+        _ => false,
     }
 }
 
@@ -370,9 +429,17 @@ pub(super) fn sort_key<'a>(
     // 与本问题无关的重排。
     let completion_cost = if completion { COMPLETION_PENALTY } else { 0.0 };
     let layer = effective_layer(c.spelling, c.freq, c.covered, inp.len(), entry_tier_exception);
+    // **层内证据分级**的初值:`demote_non_dominant_completions` 会把
+    // 整串精确真实词条升 0、豁免的鼻音补全升 0,其余保持这里的结果。
+    // Fuzzy/Abbrev 层恒 2(常量,层内次序与旧实现逐字节一致)。
+    let band = match layer {
+        SpellingKind::Exact if completion => 1,
+        _ => 2,
+    };
     SortKey {
         bucket: u_min,
         spelling: layer,
+        band,
         completion,
         score: ScoreDesc(c.score - COVERAGE_PENALTY * u_local - completion_cost),
         freq: std::cmp::Reverse(c.freq),
@@ -389,68 +456,21 @@ pub(super) struct SortKey<'a> {
     bucket: usize,
     /// 第二键:拼写来源层序(Exact < Fuzzy < Abbrev,枚举声明序)。
     spelling: SpellingKind,
-    /// 第三键:补全层序(`false` = 精确命中,`true` = 尾音节补全)。
+    /// 第三键:层内证据分级(0 = 整串读法/豁免的鼻音补全,
+    /// 1 = 尾音节补全,2 = 其余;语义见 [`PlainKey::band`] 与
+    /// [`demote_non_dominant_completions`])。
+    band: u8,
+    /// 第五键:补全层序(`false` = 精确命中,`true` = 尾音节补全)。
+    ///
+    /// 与 band 冗余(band 已决定补全位置),保留记录豁免前的标记。
     completion: bool,
-    /// 第四键:分数 − 覆盖罚分,降序(高分在前,见 [`ScoreDesc`])。
+    /// 第六键:分数 − 覆盖罚分,降序(高分在前,见 [`ScoreDesc`])。
     score: ScoreDesc,
-    /// 第五键:同分时原始词频降序(回退基准)。
+    /// 第七键:同分时原始词频降序(回退基准)。
     freq: std::cmp::Reverse<u64>,
     /// 第六、七键:词与拼音的字典序(确定性收尾)。
     word: &'a str,
     pinyin: &'a str,
-}
-
-/// `umin[pos]` = 输入从 `pos` 起的**不可避免未解释字母数**:
-/// 0 ⇔ 存在一条从 pos 到串尾的精确音节路径(只查音节表,不查词典);
-/// >0 ⇔ pos 落在某个不可精确切分段内,取到「最近一个可达点」的距离。
-///
-/// 后向一次 DP 算出可达性,再正向把不可达位置映射到距离;返回表长
-/// `inp.len() + 1`,索引即字节位置(调用方已保证 `inp` 为 ASCII)。
-pub(super) fn unreachable_tail(inp: &str, bounds: Option<&[usize]>) -> Vec<usize> {
-    let n = inp.len();
-    let mut reach = vec![false; n + 1];
-    reach[n] = true;
-    // 直接查编译期静态音节表(`SYLLABLES` 已按字典序排列,binary_search
-    // O(log 412));不要在这里 `Segmenter::new()`——它每次要把 412 个
-    // 音节 collect 进 HashSet,而本函数每次 `sort_candidates` 调用都
-    // 跑一次(一次查询几十次),实测会把击键延迟放大 7~50 倍
-    // (lookup_bench:womenjintianquxian 1.5ms→10.2ms)。
-    //
-    // `bounds` 是 B2 的 `'` 强制切分点(干净串字节偏移):音节链不得跨越
-    // 它(与 `build_lattice` 同一语义)。长度为 l 的音节 [i, i+l) 若跨过
-    // 某个边界(边界严格落在 (i, i+l) 内部)就跳过该链——`xi'an`(干净串
-    // `xian`,边界 2)的 `xian` 单音节链由此不可达,[xi, an] 才是唯一的
-    // 整串切法。`bounds` 为 `None`(无 `'` 输入)时此分支一次都不进,与
-    // 改动前逐字节一致(判退化的硬约束)。
-    for i in (0..n).rev() {
-        let max_len = (n - i).min(segmenter::MAX_SYLLABLE_LEN);
-        reach[i] = (1..=max_len).any(|l| {
-            if !reach[i + l] {
-                return false;
-            }
-            // 跨过 ⇔ 存在边界严格落在 (i, i+l) 内部（共享判据）。
-            if super::input::crosses_boundary(bounds, i, l) {
-                return false;
-            }
-            // 音节匹配走共享原语(A1):归一化(üe 的 `lue`/`nue`)与合法
-            // 性一起做,和格构建/词典层同一口径。旧实现在这里直接查
-            // `SYLLABLES`,漏了归一化——`lue` 被当成解释不了的字母。
-            segmenter::syllable_at(inp, i, l).is_some()
-        });
-    }
-    (0..=n)
-        .map(|pos| {
-            if reach[pos] {
-                0
-            } else {
-                let mut d = 1;
-                while pos + d <= n && !reach[pos + d] {
-                    d += 1;
-                }
-                d.min(n - pos)
-            }
-        })
-        .collect()
 }
 
 /// `f32` 分数的「降序 + 全序」包装:高分排前;NaN 钳到最末
@@ -476,62 +496,6 @@ impl Ord for ScoreDesc {
                 (false, true) => Ordering::Less,    // self NaN ⇒ self 排更后
                 (false, false) => unreachable!("partial_cmp 只对 NaN 返回 None"),
             })
-    }
-}
-
-/// 候选**未解释的输入字母数**(覆盖度度量;**不再是排序首键**——
-/// 首键已改为 [`unreachable_tail`] 的 u_min 桶,本函数的返回值只在
-/// 罚分项 `u_local = u − u_min` 里参与打分,并供测试引用)。
-///
-/// 语义保留不变(任务书硬约束),变的只是用法:从「排序键」改成
-/// 「罚分因子」。
-///
-/// 设 `cp` = 候选拼音去掉空格后的音节串:
-/// - `cp` 以 `inp` 开头(含相等):候选是整个输入的**补全**(如 `zhon`
-///   时的 `zhong` 系字)——没解释的不是「没覆盖」而是「输入还没打完」,
-///   计 **0**,保持联想靠前;
-/// - `inp` 以 `cp` 开头(真前缀):候选**只覆盖前缀**(如 `zhongguor`
-///   时的 `zhong` 系字),计 `inp.len() - cp.len()`(漏掉多少字母);
-/// - 都不是前缀关系(兜底路径的异常键、个别模糊变体):解释数按
-///   保守下界 0 计(与补全同档)。理由:够不到「候选真前缀于输入」
-///   这条下界时,无法证明候选漏掉了输入的任何字母,零罚最稳;
-///   且这类候选在正常路径不出现(`lattice[0]` 的边必然前缀匹配),
-///   在兜底路径按分数竞争时本就在补全词之后,极少浮到前排。
-/// - 简拼层候选构造上覆盖整串(`lookup_abbrev` / `lookup_mixed` 的
-///   key 由整串切出),恒为 **0**——不走拼音比对,避免「简拼词的
-///   完整拼音与残余声母输入天然不是前缀关系」被误伤(如 `zhongguor`
-///   的「中国人」`cp` = zhongguoren,与 inp 非前缀关系)。
-///
-/// 字节序比较合法:`inp` 与 `cp` 都是 ASCII 拼音串(非 ASCII 输入在
-/// `build_lattice` / `fallback_candidates` 已被挡掉),前缀关系按字节
-/// 判定即按字母判定。
-/// 候选是否**只解释了输入的尾部**：去掉空格的拼音是输入的**真后缀**。
-///
-/// 这类读法来自容错格里「吃掉一段前缀」的弧（`zmgai` → 该，拼音 `gai`）：
-/// 它解释的字母全在输入末尾，前缀一个都没解释。与「只覆盖前缀」（`zmgai`
-/// → 「怎么」）正好相反，两者都不该被当成「覆盖整串」的读法参与同桶竞争。
-pub(super) fn tail_only(inp: &str, c: &Candidate) -> bool {
-    if c.spelling == SpellingKind::Abbrev {
-        return false; // 简拼层覆盖整串（构造保证），不存在「只解释尾部」
-    }
-    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
-    cp.len() < inp.len() && inp.ends_with(cp.as_str())
-}
-
-pub(super) fn unexplained_letters(inp: &str, c: &Candidate) -> usize {
-    if c.spelling == SpellingKind::Abbrev {
-        return 0; // 简拼层构造上覆盖整串
-    }
-    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
-    if cp.starts_with(inp) {
-        0 // 补全:候选拼音比输入更长(或相等),输入还没打完
-    } else if cp.len() < inp.len() && (inp.starts_with(cp.as_str()) || inp.ends_with(cp.as_str()))
-    {
-        // 只覆盖前缀:漏掉 inp[cp.len()..]；只覆盖后缀(zmgai → 该):
-        // 漏掉前缀 inp[..inp.len() - cp.len()]。两种都只是「解释了一段」。
-        inp.len() - cp.len()
-    } else {
-        0 // 非前缀关系:解释数取保守下界 0(见函数级注释)
     }
 }
 

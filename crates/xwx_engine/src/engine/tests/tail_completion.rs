@@ -88,28 +88,30 @@ fn letters(pinyin: &str) -> String {
     pinyin.chars().filter(|c| *c != ' ').collect()
 }
 
-/// 精确命中要**成块**排在补全之前,不只是第一位:打全了 `liji` 的用户不该在
-/// 第一页看到一堆「猜他还没打完」的 `li jie`/`li jiang`/`li jing`。
+/// 整串读法要**成块**排在补全之前:打全了 `liji` 的用户不该在第一页看到
+/// 一堆「猜他还没打完」的 `li jie`/`li jiang`/`li jing`——但补全也不再
+/// 沉到几十名外,它在全部整串读法之后、碎片单字之前按分数竞争。
 ///
 /// 这里连**带上下文**一起钉:旧的数值惩罚(0.25)只在无上文时站得住,一带
 /// 真实 LM 上下文就翻(实测上文「我」时 理解 #1、立即 #2、里脊 掉到第 11)。
 #[test]
-fn exact_matches_precede_completions_as_a_block() {
+fn full_pinyin_readings_precede_completions_as_a_block() {
     let Some(engine) = real_engine() else {
         return;
     };
     for (tail, last_word) in [("", None), ("我", Some("我")), ("今天", Some("今天"))] {
         let ctx = LmContext { tail, last_word };
         let cands = engine.lookup_candidates("liji", &ctx).expect("查询失败");
-        let is_exact = |c: &Candidate| letters(&c.pinyin).len() == 4;
-        let first_completion = cands.iter().position(|c| !is_exact(c));
-        let last_exact = cands.iter().rposition(is_exact);
-        assert_eq!(cands[0].word, "立即", "上文 {tail:?}:首位应是精确命中");
-        if let (Some(fc), Some(le)) = (first_completion, last_exact) {
+        let is_full = |c: &Candidate| letters(&c.pinyin).len() == 4;
+        let is_completion = |c: &Candidate| letters(&c.pinyin).len() > 4;
+        let last_full = cands.iter().rposition(is_full);
+        let first_completion = cands.iter().position(is_completion);
+        assert_eq!(cands[0].word, "立即", "上文 {tail:?}:首位应是整串精确命中");
+        if let (Some(lf), Some(fc)) = (last_full, first_completion) {
             assert!(
-                le < fc,
-                "上文 {tail:?}:精确命中「{}」被补全「{}」插队",
-                cands[le].word,
+                lf < fc,
+                "上文 {tail:?}:整串读法「{}」被补全「{}」插队",
+                cands[lf].word,
                 cands[fc].word
             );
         }

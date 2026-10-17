@@ -141,7 +141,7 @@ U/B 沿用 M1 的有界用户计数增益。Exact 仍在 Completion 前。
 进入 Prediction 时必须同时满足：
 
 - pinyin 为空，confirmed 为空，caret=0。
-- recognized=None，english_mode=false，english_run=false。
+- recognized=None，english_mode=false。
 - 存在可信英文上一词；列表非空，所有项都是英文 NextWord。
 - cursor=0，page 由 cursor/page_size 推导。
 

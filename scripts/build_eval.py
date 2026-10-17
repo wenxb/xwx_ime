@@ -82,6 +82,7 @@ def read_dict(path: str):
     """dict.bin → (entries: list[(pinyin_key, word, freq)], total_freq)。"""
     with open(path, "rb") as f:
         b = f.read()
+    # 只读 v1/v2 共有的前 52 字节（v2 只是在尾部追加了 total_freq）。
     magic, _ver, _pc, _total, _ro, _so, eo = struct.unpack("<8sIQQQQQ", b[:HEADER_LEN])
     assert magic == MAGIC, "不是 dict.bin"
     pos = eo

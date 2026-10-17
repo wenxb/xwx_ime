@@ -16,7 +16,6 @@ impl InputSession {
             committed_tail: String::new(),
             last_word: None,
             english_mode: false,
-            english_run: false,
             english: EnglishRunContext::new(),
             coin_buffer: Vec::new(),
             confirmed: Vec::new(),

@@ -33,8 +33,12 @@ HEADER_LEN = 52        # 8s + I + 5×Q(与 dict.bin v1 同构)
 RECORD_LEN = 12        # u32 str_off + u16 str_len + u32 ent_off + u16 ent_len
 FREQ_MAX = 0xFFFFFFFF  # u32 上限,超出截断(真实词频远达不到)
 
-# 主索引(dict.bin v1)只读解析所需常量,与 crates/xwx_engine/src/dict.rs 一致
+# 主索引(dict.bin)只读解析所需常量,与 crates/xwx_engine/src/dict.rs 一致。
+# 读的是 v1 与 v2 **共有的前 52 字节**(v2 只是在尾部追加了 total_freq),
+# 所以两个版本都能生成副索引。
 DICT_MAGIC = b"XWXIDM1\0"
+DICT_MIN_VERSION = 1
+DICT_MAX_VERSION = 2
 DICT_HEADER_LEN = 52
 DICT_RECORD_LEN = 12
 
@@ -46,7 +50,7 @@ def load_dict(path):
     if blob[:8] != DICT_MAGIC:
         raise SystemExit(f"主索引魔数不匹配,不是 dict.bin: {path}")
     version = struct.unpack_from("<I", blob, 8)[0]
-    if version != 1:
+    if not DICT_MIN_VERSION <= version <= DICT_MAX_VERSION:
         raise SystemExit(f"主索引版本不兼容: {version}")
     pinyin_cnt, _total, records_off, strings_off, entries_off = struct.unpack_from(
         "<QQQQQ", blob, 12

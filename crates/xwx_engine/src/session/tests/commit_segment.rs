@@ -397,8 +397,8 @@ fn committed_tail_is_bounded_on_char_boundary() {
     );
 }
 
-/// 中途大写**原样保留**:未确认的高亮候选不替用户提交,已敲的字母
-/// 整串原样上屏,一个不丢。
+/// 中途大写**进组合**:未确认的高亮候选不替用户提交,已敲的字母留在
+/// 组合里;回车原样上屏,一个不丢。
 #[test]
 fn verbatim_mid_composition_keeps_raw_letters_instead_of_highlighted_candidate() {
     let mut s = session_with_segments();
@@ -413,6 +413,13 @@ fn verbatim_mid_composition_keeps_raw_letters_instead_of_highlighted_candidate()
         .expect("候选里应有「我们」");
     s.cursor = idx;
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "womenjintianG"),
+        "大写应进组合,不替用户提交高亮候选: {out:?}"
+    );
+    assert!(s.is_active(), "组合仍在继续");
+    // 回车 = 原样逃生口:已敲字母整串原样上屏。
+    let out = s.handle(InputEvent::Enter).expect("不应失败");
     match out {
         SessionOutput::Commit(text) => {
             assert_eq!(text, "womenjintianG", "已敲字母原样保留,不替换成高亮候选");
@@ -422,8 +429,8 @@ fn verbatim_mid_composition_keeps_raw_letters_instead_of_highlighted_candidate()
     assert!(!s.is_active(), "组合结束");
 }
 
-/// **明确确认过**的段(空格/点击)不是默认项:中途大写时照常上屏,
-/// 剩余字母原样跟上——「原样保留」不吞用户已选的词。
+/// **明确确认过**的段(空格/点击)不丢:中途大写进组合后,回车原样
+/// 上屏时已确认段照常带上——「原样保留」不吞用户已选的词。
 #[test]
 fn verbatim_mid_composition_still_commits_explicitly_confirmed_segments() {
     let mut s = session_with_segments();
@@ -437,6 +444,11 @@ fn verbatim_mid_composition_still_commits_explicitly_confirmed_segments() {
         .expect("候选里应有「我们」");
     s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "我们jintianG"),
+        "大写应进组合,已确认段照常显示: {out:?}"
+    );
+    let out = s.handle(InputEvent::Enter).expect("不应失败");
     match out {
         SessionOutput::Commit(text) => {
             assert_eq!(text, "我们jintianG", "已确认段照常上屏,剩余字母原样保留");

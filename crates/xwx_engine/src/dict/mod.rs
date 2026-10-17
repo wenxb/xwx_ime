@@ -46,11 +46,17 @@ const MAX_LOOKUP_RESULTS: i64 = 500;
 
 /// dict.bin 二进制词库的魔数（8 字节，含结尾 `\0`）。
 pub const MMAP_MAGIC: &[u8; 8] = b"XWXIDM1\0";
-/// dict.bin 当前格式版本。
-const MMAP_VERSION: u32 = 1;
-/// 头部长：magic(8) + version(4) + pinyin_cnt(8) + total_entries(8)
-///      + records_off(8) + strings_off(8) + entries_off(8) = 52。
-const MMAP_HEADER_LEN: usize = 52;
+/// dict.bin 当前格式版本（v2 在头部尾部补了全表词频总和）。
+const MMAP_VERSION: u32 = 2;
+/// 仍可读取的最老版本：v1 没有 `total_freq` 字段，读取端回落到线性扫描。
+/// 保留是因为数据文件随发布物分发，换二进制不该强制用户同时重建数据。
+const MMAP_MIN_VERSION: u32 = 1;
+/// 头部长：v1 的 52 字节 + total_freq(8) = 60。
+/// 前 52 字节**与 v1 逐字节同布局**（新字段追加在尾部），所以 v1 的读取
+/// 路径在 v2 上仍然定位正确，只有版本号会拒绝——这正是回退分支能复用的原因。
+const MMAP_HEADER_LEN: usize = 60;
+/// v1 头长（回退路径用）。
+const MMAP_HEADER_LEN_V1: usize = 52;
 /// 单条拼音索引：str_off(u32) + str_len(u16) + ent_off(u32) + ent_len(u16) = 12。
 const MMAP_RECORD_LEN: usize = 12;
 
@@ -194,7 +200,11 @@ pub struct MmapDict {
     records_off: usize,
     strings_off: usize,
     entries_off: usize,
-    /// 全表词频总和（懒扫描一次后缓存；`Dictionary::total_freq` 用）。
+    /// 全表词频总和。
+    ///
+    /// v2 数据文件把总和写在头部，构造时就已填好（`OnceLock` 已是初值）；
+    /// v1 数据文件没有这个字段，退回懒扫描一次并缓存（约 32MB 页的线性
+    /// 读，实测把 `dict.bin` 常驻抬高到 63MB——这就是升 v2 的原因）。
     total_freq: OnceLock<u64>,
     /// 简拼副索引(可选;缺省时纯简拼查询优雅退化为空,引擎走精确路径)。
     /// 音节表不随它走(编译期静态表 `segmenter::SYLLABLES`),因此混合简拼

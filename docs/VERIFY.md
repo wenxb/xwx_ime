@@ -136,9 +136,10 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 
 | # | 敲什么 | 应该看到 | 实际 |
 |---|---|---|---|
-| 12 | Shift+G Shift+P Shift+U | `GPU` | |
-| 13 | `nihao` 后 Shift+G | `nihaoG`（原样保留，不替用户选候选；后续字母继续英文直出） | |
-| 14 | CapsLock 开，打 `g` | `G`（不进拼音串） | |
+| 12 | Shift+G Shift+P Shift+U | 预编辑组合 `GPU`，空格一次上屏 `GPU` | |
+| 13 | `nihao` 后 Shift+G | 进组合成 `nihaoG`（不直出，拼音候选保留）；空格 → 一次上屏「你好G」；回车 → 原样 `nihaoG` | |
+| 13.1 | Shift+G 后打 `wo` | 组合 `Gwo` 原样上屏（大写在前无拼音读法）；先空格上屏 `G` 再打 `wo` 出「我」 | |
+| 14 | CapsLock 开，打 `g` | 大写 `G` 进组合，空格上屏 | |
 | 15 | Ctrl+空格切英文，打 `nihao` | 原样 `nihao`，无候选窗 | |
 | 16 | 承上（英文模式）Shift+G | 应用收到大写 `G` | |
 | 17 | 再按 Ctrl+空格切回中文 | 恢复拼音输入 | |

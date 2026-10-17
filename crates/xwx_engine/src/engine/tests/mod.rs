@@ -108,6 +108,7 @@ mod typo_budget;
 mod typo_repeat;
 mod typo_window;
 mod tail_completion;
+mod exact_first;
 mod projection_filler;
 mod recall;
 mod sentence_gate;

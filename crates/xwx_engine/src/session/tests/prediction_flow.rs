@@ -102,7 +102,6 @@ fn n01_selecting_an_english_word_opens_the_prediction_panel() {
     assert!(s.pinyin.is_empty());
     assert!(s.confirmed.is_empty());
     assert!(!s.english_mode);
-    assert!(!s.english_run);
 }
 
 #[test]

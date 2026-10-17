@@ -8,22 +8,22 @@ mod support;
 
 use support::{Harness, keyval, last_commit, last_preedit, shared_fixture};
 
-/// Shift+letter verbatim input must survive the full D-Bus path — with
-/// docs/VERIFY.md row 13's exact shape: `nihao` + Shift+G → `nihaoG`.
+/// Shift+letter must reach the session as a verbatim **uppercase** letter and
+/// join the composition (docs/VERIFY.md row 13): `nihao` + Shift+G keeps the
+/// composition alive as preedit `nihaoG` with **no commit**; Enter commits the
+/// raw string in exactly one `CommitText`.
 ///
-/// `translate_keyval` (`ibus_proto.rs:147-159`) converts Shift+letter into
-/// `InputEvent::Verbatim('G')`, and the session commits the typed letters
-/// **as-is**(不替用户提交高亮候选)and appends the letter. The *whole point*
-/// is that a single `CommitText` carries both, which is only visible on the wire.
+/// `translate_keyval` (`ibus_proto.rs`) converts Shift+letter into
+/// `InputEvent::Verbatim('G')`. The session must neither commit on the
+/// keystroke (旧实现逐字直出,还会把后续输入吞成英文) nor lowercase the
+/// letter into the pinyin buffer.
 ///
 /// Wrong-behaviour witnesses:
-/// - Shift+letter normalised into the pinyin string instead of `Verbatim` →
-///   the composed word is `nihaog` and the commit is a different word → red;
-/// - `Verbatim` committed as two separate signals → the concatenation is still
-///   right, so this test also asserts the *number* of commits (exactly one) to
-///   pin the "one commit carrying raw letters+letter" contract.
+/// - committing on Shift+G → a `CommitText` appears before the user asked
+///   for one → red;
+/// - lowercasing into the pinyin string → preedit `nihaog` → red.
 #[test]
-fn shift_letter_commits_raw_input_then_verbatim() {
+fn shift_letter_enters_the_composition_instead_of_committing() {
     let h = &mut Harness::new("seq-verbatim");
     h.start_engine(shared_fixture());
     h.focus_out().expect("FocusOut");
@@ -39,31 +39,43 @@ fn shift_letter_commits_raw_input_then_verbatim() {
 
     assert!(
         h.key(keyval::ascii('g'), support::M_SHIFT),
-        "Shift+G 必须被消费(Verbatim 上屏)"
+        "Shift+G 必须被消费(进组合)"
     );
+    let sigs = h.settle_default();
+    assert!(
+        support::commits(&sigs).is_empty(),
+        "大写进组合不得直出: {:?}",
+        support::commits(&sigs)
+    );
+    assert_eq!(
+        last_preedit(&sigs).as_deref(),
+        Some("nihaoG"),
+        "大写应进预编辑组合;全部信号: {:?}",
+        support::member_names(&sigs)
+    );
+
+    // 回车 = 原样逃生口:一次 CommitText「nihaoG」,不多不少。
+    h.key(keyval::RETURN, 0);
     let sigs = h.settle_default();
     let cs = support::commits(&sigs);
     assert_eq!(
         cs,
         vec!["nihaoG".to_string()],
-        "Shift+G 必须产生一次 CommitText「nihaoG」——已敲字母原样保留再追加大写字母,\
-         不替换成高亮候选。实测 {cs:?};全部信号: {:?}",
+        "回车应把原样串一次上屏。实测 {cs:?};全部信号: {:?}",
         support::member_names(&sigs)
     );
 }
 
-/// CapsLock with no Shift must also produce a verbatim uppercase letter and
-/// must NOT enter the pinyin string (docs/VERIFY.md row 14).
+/// CapsLock with no Shift must also reach the session as a verbatim uppercase
+/// letter and join the composition (docs/VERIFY.md row 14).
 ///
-/// The must-not half: if CapsLock were ignored, `G` would go into the pinyin
-/// buffer as a lowercase `g`, and the sequence `nihao` + CapsLock+`g` would
-/// compose `nihaog` instead of committing `nihaoG`. Our fixture has no `nihaog`
-/// key, so the preedit assertion is the sharp one: the preedit must be *hidden*
-/// (commit → `hide_ui`), not updated to `nihaog`.
+/// The must-not half: if CapsLock were ignored (or the letter lowercased),
+/// `nihao` + CapsLock+`g` would compose `nihaog` as pinyin. The preedit must
+/// read `nihaoG` — the capital is preserved, the composition stays alive, and
+/// only Enter commits the raw string.
 ///
 /// Wrong-behaviour witness: dropping `IBUS_LOCK_MASK` from
-/// `translate_keyval`'s shift/caps logic makes the preedit `nihaog` and the
-/// commit a pinyin word → red.
+/// `translate_keyval`'s shift/caps logic makes the preedit `nihaog` → red.
 #[test]
 fn capslock_letter_is_verbatim_and_never_enters_the_pinyin_string() {
     let h = &mut Harness::new("seq-capslock");
@@ -76,20 +88,34 @@ fn capslock_letter_is_verbatim_and_never_enters_the_pinyin_string() {
 
     assert!(
         h.key(keyval::ascii('g'), support::M_LOCK),
-        "CapsLock+g 必须被消费(Verbatim 上屏)"
+        "CapsLock+g 必须被消费(进组合)"
     );
     let sigs = h.settle_default();
-    assert_eq!(
-        last_commit(&sigs).as_deref(),
-        Some("nihaoG"),
-        "CapsLock 下 g 必须是 Verbatim 大写,与原样保留的已敲字母一起上屏"
+    assert!(
+        support::commits(&sigs).is_empty(),
+        "CapsLock 大写进组合不得直出: {:?}",
+        support::commits(&sigs)
     );
-    // The must-not: no preedit may ever read "nihaog".
+    // The must-not: no preedit may ever read "nihaog" (lowercased into pinyin).
+    assert_eq!(
+        last_preedit(&sigs).as_deref(),
+        Some("nihaoG"),
+        "CapsLock 下 g 必须以大写进组合,绝不能归一成小写拼音"
+    );
     assert!(
         !sigs
             .iter()
             .any(|s| s.member == "UpdatePreeditText" && s.as_text().as_deref() == Some("nihaog")),
-        "CapsLock 的字母绝不能进拼音串(nihaog 不得出现)"
+        "CapsLock 的字母绝不能归一成小写拼音(nihaog 不得出现)"
+    );
+
+    // 回车:原样串一次上屏,预编辑收起。
+    h.key(keyval::RETURN, 0);
+    let sigs = h.settle_default();
+    assert_eq!(
+        last_commit(&sigs).as_deref(),
+        Some("nihaoG"),
+        "回车应把原样串(含大写)一次上屏"
     );
     assert!(
         support::member_names(&sigs).contains(&"HidePreeditText"),
@@ -169,5 +195,45 @@ fn pinyin_then_punctuation_commits_candidate_and_punctuation_together() {
         cs.len(),
         1,
         "候选与标点必须是同一次上屏,不得拆成两次 CommitText"
+    );
+}
+
+/// 大写之后照常组合:Shift+G 进预编辑,随后打的字母继续进同一个组合
+/// (`Gwo`),绝不能逐字直出成英文(2026-10 用户实测:大写后打 `woshi`,
+/// 应用收到原样字母、候选窗不弹)。旧版会点亮「英文跟随」,把大写之后
+/// 的中文词整段吞掉——这条在完整 D-Bus 路径上钉死修复。
+#[test]
+fn letters_after_a_capital_keep_composing_instead_of_streaming_out() {
+    let h = &mut Harness::new("seq-capital-then-pinyin");
+    h.start_engine(shared_fixture());
+    h.focus_out().expect("FocusOut");
+
+    assert!(
+        h.key(keyval::ascii('g'), support::M_SHIFT),
+        "Shift+G 必须被消费(进组合)"
+    );
+    let sigs = h.settle_default();
+    h.clear_backlog();
+    assert!(
+        support::commits(&sigs).is_empty(),
+        "大写进组合不得直出: {:?}",
+        support::commits(&sigs)
+    );
+
+    h.type_ascii("wo");
+    let sigs = h.settle_default();
+    assert!(
+        support::commits(&sigs).is_empty(),
+        "大写之后的字母必须继续组合,不得直出: {:?}",
+        support::commits(&sigs)
+    );
+    assert_eq!(
+        last_preedit(&sigs).as_deref(),
+        Some("Gwo"),
+        "大写与后续字母应同处一个组合"
+    );
+    assert!(
+        support::last_table(&sigs).is_some(),
+        "组合应弹出候选窗(原样上屏逃生口)"
     );
 }

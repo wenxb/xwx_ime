@@ -112,7 +112,7 @@ pub enum ProtoError {
 ///   `keyval` 本身不携带),对应 librime `ascii_composer` 的
 ///   Shift+字母 / CapsLock 行为:
 ///   - Shift+字母 → [`InputEvent::Verbatim`] 大写(如 `G`),由
-///     会话层直接上屏,不进拼音串(`GPU` 能打出来);
+///     会话层进串组合,不直出(`GPU` 照常可打);
 ///   - CapsLock 开(无 Shift)→ `Verbatim` 大写;
 ///   - **CapsLock + Shift 叠加 → 小写进拼音串**(常规终端/编辑器
 ///     语义:两者都翻转大小写,叠加相互抵消——ibus 在 CapsLock+Shift
@@ -155,7 +155,7 @@ pub fn translate_keyval(keyval: u32, state: u32) -> Option<InputEvent> {
             let caps = state & IBUS_LOCK_MASK != 0;
             let lower = (keyval as u8 as char).to_ascii_lowercase();
             // Shift 与 CapsLock 各翻转一次大小写:恰好一个生效时出
-            // 大写(Verbatim 直接上屏);叠加抵消或都不生效时小写进
+            // 大写(Verbatim 进串组合);叠加抵消或都不生效时小写进
             // 拼音串。
             if shift != caps {
                 Some(InputEvent::Verbatim(lower.to_ascii_uppercase()))

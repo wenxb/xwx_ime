@@ -25,6 +25,12 @@ data/english.meta.json
 data/bigram.txt
 data/bigram.bin
 
+# 万象 .gram（约 400 MB），非本仓产物、上游单独下载：仓库里放一份只为
+# examples 的默认路径（probe.rs 的 `data/wanxiang-lts-zh-hans.gram`）
+# 开箱可用，绝不入库。**别改成硬链接**：data/README.md 记过「训练脚本把
+# 该路径就地覆盖」的事故，硬链接会让一次误跑同时毁掉两份。
+data/*.gram
+
 # 打 deb 时 `just deb` 生成的 component XML（构建产物）；
 # 手写的模板 data/xwx.xml、钩子 data/debian/postinst 保留入库。
 data/debian/xwx.xml
@@ -45,6 +51,10 @@ scripts/eval_samples.jsonl
 node_modules/
 # Playwright MCP 的会话产物(截图/页面快照),与仓库无关。
 .playwright-mcp/
+# 分阶段验证产物(测试日志、评测输出、验收报告、hash 清单),按
+# docs/english-input/05-execution-tests.md 的约定统一落在这里:
+# 可由命令重新生成,不是源码,不入库。
+artifacts/
 # ---- rime oracle (对照工具) ----
 tools/rime_oracle/.rime_user/
 tools/rime_oracle/rime_oracle

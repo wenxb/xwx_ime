@@ -23,7 +23,7 @@
 
 ## 2. S0：建立基线资产
 
-产物建议放 artifacts/english/，生成结果可忽略，不把大型数据报告塞进源码。
+产物放 artifacts/english/（该目录不入库，见 .gitignore），生成结果可重新跑出来，不把大型数据报告塞进源码。
 
 - 记录上述命令及退出码。
 - 记录当前纯中文日常、简拼、编辑语料的 Top-1/Top-9 结果。
@@ -228,7 +228,7 @@ M2 fixture：
 | C03 | pyth→Python：Completion、covered=4、S≈3.80 |
 | C04 | hello：Exact、covered=5、S≈4.50；精确优先于更高频补全 |
 | C05 | 无英文上文 h 不出英文；he 只出精确 he，不展开 hello/help |
-| C06 | 有英文上文 h 可以补全；大写直出路径仍不进新候选 |
+| C06 | 有英文上文 h 可以补全；大写组合路径仍不进新候选 |
 | C07 | an/he/you/can/women 无英文上文时中文首选，有英文上文时允许英文首选 |
 | C08 | hello/python/pyth/docker/docke 按规则 EnglishFirst，不靠单词名单特判 |
 | C09 | xi'an、地址、数字/符号、非 ASCII、超长输入不进入新英文查询 |
@@ -280,7 +280,7 @@ U05 可构造 33 个同长度同前缀词：前 32 个 q=382，目标 q=381。
 | I04 | harness 新增所有路径都指向临时目录，不能回落用户/系统英文词库 |
 | I05 | 子进程 SIGINT 和 SIGTERM 都能保存英文尾部计数，中文保存仍正常 |
 | I06 | Ctrl+空格英文直通无候选、无 CommitText，原按键不进翻译层 |
-| I07 | Shift+H 后 ello 仍直出，真实 modifiers 而非伪造 Char 事件 |
+| I07 | Shift+H 后 ello 进同一组合出 `Hello`，真实 modifiers 而非伪造 Char 事件 |
 | I08 | 空闲 Ctrl+Delete/Tab 等被应用接管时，新英文上下文确实失效 |
 | N01 | thank 后预测 you；hello 后预测 world，生成与展示不学习 |
 | N02 | 无静态行/无用户词对就不显示，不补全局高频假预测 |
@@ -414,7 +414,7 @@ expected_first_language 非空时单独断言，不因为目标在 Top-3 就忽�
 - [ ] 英文用户数据独立、debug 隔离、定时/退出回写和损坏恢复均验证。
 - [ ] 预测场景有 CommitText/LookupTable/按键返回值的真实协议证据。
 - [ ] 没运行真实桌面接管/安装操作，没动真实用户文件，没回滚他人修改。
-- [ ] 记录剩余限制：大写直出不预测、无任意中英串切分、无应用全文上下文。
+- [ ] 记录剩余限制：大写组合不上预测、无任意中英串切分、无应用全文上下文。
 
 交付报告可写 docs/english-input/IMPLEMENTATION_REPORT.md，超过 600 行时按阶段拆分。
 报告必须填实际运行结果；本任务书的目标、样例和预期不能复制成“已通过”的证据。

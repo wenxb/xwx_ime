@@ -161,6 +161,18 @@ impl InputSession {
             let text = self.commit_selection(c);
             return Ok(self.after_selection(SessionOutput::Commit(text)));
         }
+        // **剩余串含大写**:大写不可能是拼音,留在组合里只会和后续输入
+        // 粘在一起(`nihaoG` 之后接着打 wo 会变成 `Gwo`)。与标点分支
+        // 同一形状:候选 + 原样尾巴**一次**上屏——`nihaoG` + 空格直接
+        // 得到「你好G」(librime 语义)。纯拼音的剩余串不走这里,
+        // 分段上屏照旧。
+        let suffix = self.uncovered_suffix(c);
+        if suffix.chars().any(|ch| ch.is_ascii_uppercase()) {
+            let mut text = self.commit_selection(c);
+            self.push_tail(&suffix);
+            text.push_str(&suffix);
+            return Ok(SessionOutput::Commit(text));
+        }
         let prefix: String = self.pinyin[..covered].to_owned();
         self.consume_covered(c);
         if let Err(e) = self.refresh() {
@@ -408,8 +420,6 @@ impl InputSession {
         // M2：焦点清算**不提交**当前高亮的预测，只把它收掉。
         self.clear_prediction();
         self.reset();
-        // 「英文跟随」是一次连续按键序列，换焦点就结束（它不是模式）。
-        self.english_run = false;
         // **模式不在这里复位**：鼠标在输入框里点一下就会触发 FocusOut/Reset，
         // 复位会让「英文打一半、点一下输入框」变成中文——用户实测反馈的正是
         // 这条（原实现为治「顶栏没有中/英指示」而加，指示器做好后就没有必要了）。
@@ -424,8 +434,6 @@ impl InputSession {
     /// - 英文 → 中文：直接切回（英文模式下拼音串必然为空）。
     ///
     /// `reset` 不清除模式：中/英状态跨焦点切换保持，直到再次按 Ctrl+空格。
-    /// 焦点切换只结束「英文跟随」，不改模式（原因见
-    /// [`Self::reset_for_focus_change`] 的注释）。
     pub(super) fn toggle_ascii(&mut self) -> SessionOutput {
         // 模式切换是语言边界:换到英文或换回中文都不再延续上一段英文链。
         self.english.clear();

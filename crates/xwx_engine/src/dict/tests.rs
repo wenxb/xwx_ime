@@ -10,7 +10,10 @@ type TestGroups<'a> = Vec<(&'a [u8], Vec<(&'a str, u32)>)>;
 /// 测试简拼副索引的条目组:(首字母 key, [(词, 全拼, freq)])。
 type TestAbbrevGroups<'a> = Vec<(&'a [u8], Vec<(&'a str, &'a str, u32)>)>;
 
-/// 按 dict.bin v1 布局手工构造一个迷你词库（拼音已按字节序排好）。
+/// 按 dict.bin 布局手工构造一个迷你词库（拼音已按字节序排好）。
+///
+/// `version` 决定头长：v1 是 52 字节（无词频总和），v2 是 60 字节（尾部带
+/// `total_freq`）。两条路径都要能读——v1 是旧数据文件的兼容面。
 fn build_test_bin(version: u32) -> Vec<u8> {
     // (拼音, [(词, freq)])，顺序即拼音字节序：hao < ni < "ni hao"
     let groups: TestGroups = vec![
@@ -22,6 +25,7 @@ fn build_test_bin(version: u32) -> Vec<u8> {
     let mut entries = Vec::new();
     let mut records = Vec::new();
     let mut total = 0u64;
+    let mut freq_sum = 0u64;
     for (py, ws) in &groups {
         let str_off = strings.len() as u32;
         strings.extend_from_slice(py);
@@ -31,6 +35,7 @@ fn build_test_bin(version: u32) -> Vec<u8> {
             entries.push(w.len() as u8);
             entries.extend_from_slice(w.as_bytes());
             entries.extend_from_slice(&f.to_le_bytes());
+            freq_sum += *f as u64;
         }
         records.extend_from_slice(&str_off.to_le_bytes());
         records.extend_from_slice(&(py.len() as u16).to_le_bytes());
@@ -38,7 +43,8 @@ fn build_test_bin(version: u32) -> Vec<u8> {
         records.extend_from_slice(&((entries.len() - ent_start) as u16).to_le_bytes());
         total += ws.len() as u64;
     }
-    let records_off = MMAP_HEADER_LEN as u64;
+    let header_len = if version >= 2 { MMAP_HEADER_LEN } else { MMAP_HEADER_LEN_V1 };
+    let records_off = header_len as u64;
     let strings_off = records_off + (groups.len() as u64) * MMAP_RECORD_LEN as u64;
     let entries_off = strings_off + strings.len() as u64;
 
@@ -50,6 +56,9 @@ fn build_test_bin(version: u32) -> Vec<u8> {
     out.extend_from_slice(&records_off.to_le_bytes());
     out.extend_from_slice(&strings_off.to_le_bytes());
     out.extend_from_slice(&entries_off.to_le_bytes());
+    if version >= 2 {
+        out.extend_from_slice(&freq_sum.to_le_bytes());
+    }
     out.extend_from_slice(&records);
     out.extend_from_slice(&strings);
     out.extend_from_slice(&entries);
@@ -107,6 +116,32 @@ fn mmap_lookup_prefix_range() {
     assert_eq!(words, vec!["你", "妮", "尼", "你好"],
         "前缀 'n' 应覆盖 'ni' 与 'ni hao' 两个拼音，且按拼音序");
     assert!(dict.lookup_prefix("x").expect("查询失败").is_empty(), "无匹配前缀应返回空");
+}
+
+/// v2 头部自带词频总和：打开后就该拿到它，不再线性扫词条区。
+#[test]
+fn v2_header_supplies_total_freq_without_scan() {
+    let path = temp_path("v2_total");
+    fs::write(&path, build_test_bin(2)).expect("写测试词库失败");
+    let dict = MmapDict::open(&path).expect("打开失败");
+    fs::remove_file(&path).ok();
+
+    // 80 + 300 + 200 + 20 + 400，与 build_test_bin 里的词条一致。
+    assert_eq!(dict.total_freq().expect("取词频总和失败"), 1000);
+    // 头部已填好 → OnceLock 已初始化，扫描路径不会被执行。
+    assert!(dict.total_freq.get().is_some(), "v2 不该留待懒扫描");
+}
+
+/// v1 旧文件仍可读：没有词频总和字段时回落到线性扫描。
+#[test]
+fn v1_file_still_loads_and_scans_total_freq() {
+    let path = temp_path("v1_total");
+    fs::write(&path, build_test_bin(1)).expect("写测试词库失败");
+    let dict = MmapDict::open(&path).expect("v1 文件应仍可打开");
+    fs::remove_file(&path).ok();
+
+    assert_eq!(dict.total_freq().expect("取词频总和失败"), 1000);
+    assert_eq!(dict.lookup("ni").expect("查询失败").len(), 3, "v1 数据内容要能正常查");
 }
 
 #[test]
@@ -167,7 +202,7 @@ fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
         records.extend_from_slice(&((entries.len() - ent_start) as u16).to_le_bytes());
         total += ws.len() as u64;
     }
-    let records_off = MMAP_HEADER_LEN as u64;
+    let records_off = ABBREV_HEADER_LEN as u64;
     let strings_off = records_off + (groups.len() as u64) * MMAP_RECORD_LEN as u64;
     let entries_off = strings_off + strings.len() as u64;
     let mut out = Vec::new();

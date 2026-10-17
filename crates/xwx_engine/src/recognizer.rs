@@ -11,8 +11,8 @@
 //!     url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|^[a-z]+[.].+$"
 //! ```
 //!
-//! `uppercase` 一条已被 ascii_composer 的 Shift 覆盖(`Verbatim` 大写
-//! 直接上屏,不进拼音串),这里只做 **email** 与 **url** 两类。
+//! `uppercase` 一条由会话层的大写组合承接(`Verbatim` 大写进串、原样
+//! 上屏),这里只做 **email** 与 **url** 两类。
 //!
 //! ## 为什么不抄正则,用手写匹配
 //!

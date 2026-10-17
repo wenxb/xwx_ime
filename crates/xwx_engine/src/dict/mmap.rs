@@ -9,8 +9,11 @@ use std::path::Path;
 use memmap2::Mmap;
 
 use crate::candidate::Candidate;
+use crate::mmap_advice::advise_random;
 
-use super::{AbbrevIndex, DictError, Dictionary, KeyPrefix, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN, MMAP_MAGIC, MMAP_RECORD_LEN, MMAP_VERSION, MmapDict, MmapRecord, SyllableGraph, read_u16, read_u32, read_u64};
+use super::{AbbrevIndex, DictError, Dictionary, KeyPrefix, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN,
+            MMAP_HEADER_LEN_V1, MMAP_MAGIC, MMAP_MIN_VERSION, MMAP_RECORD_LEN, MMAP_VERSION,
+            MmapDict, MmapRecord, SyllableGraph, read_u16, read_u32, read_u64};
 
 impl MmapDict {
     /// 打开并 mmap 映射一个 dict.bin 词库文件。
@@ -19,21 +22,30 @@ impl MmapDict {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DictError> {
         let file = File::open(path)?;
         let map = unsafe { Mmap::map(&file)? };
+        // 查询全是跨页随机跳(二分),声明后内核不再按 64KB 预读/folio 放大常驻
+        // (实测 2000 次随机页读 57.8MB → 7.6MB);失败不影响正确性,见 `mmap_advice`。
+        advise_random(&map);
         Self::from_bytes(map)
     }
 
     /// 从已映射字节解析头部（独立成函数便于单测构造坏文件）。
     fn from_bytes(map: Mmap) -> Result<Self, DictError> {
         let bytes: &[u8] = &map;
-        if bytes.len() < MMAP_HEADER_LEN {
+        if bytes.len() < MMAP_HEADER_LEN_V1 {
             return Err(DictError::Corrupt("文件过短，不是完整 dict.bin"));
         }
         if bytes.get(0..8) != Some(MMAP_MAGIC.as_slice()) {
             return Err(DictError::Corrupt("魔数不匹配，不是 dict.bin 词库"));
         }
-        if read_u32(bytes, 8)? != MMAP_VERSION {
+        let version = read_u32(bytes, 8)?;
+        if !(MMAP_MIN_VERSION..=MMAP_VERSION).contains(&version) {
             return Err(DictError::Corrupt("dict.bin 版本不兼容"));
         }
+        // v2 多 8 字节头；文件不够长就不该按 v2 解析尾部字段。
+        if version >= 2 && bytes.len() < MMAP_HEADER_LEN {
+            return Err(DictError::Corrupt("文件过短，不是完整 dict.bin(v2 头 60 字节)"));
+        }
+        let header_len = if version >= 2 { MMAP_HEADER_LEN } else { MMAP_HEADER_LEN_V1 };
         // 头部字段先全部读出再构造结构体：`bytes` 借用 `map`，
         // 与字段读取（借用）同一表达式中不能再移动 `map`。
         let pinyin_count = read_u64(bytes, 12)? as usize;
@@ -41,12 +53,19 @@ impl MmapDict {
         let records_off = read_u64(bytes, 28)? as usize;
         let strings_off = read_u64(bytes, 36)? as usize;
         let entries_off = read_u64(bytes, 44)? as usize;
+        // v2:构建期算好的全表词频总和，省掉运行时的整段扫描。
+        // 读成 0 说明头部可疑（生成脚本拒绝写 0），此时**回落到扫描**而不是
+        // 直接采信：采信 0 会让 `log10(总频)` 变成 -inf，整层词频项失效。
+        let total_freq = match version >= 2 {
+            true => Some(read_u64(bytes, 52)?).filter(|&v| v > 0),
+            false => None,
+        };
         // **区段顺序与范围校验（Q4）**：头部只报三个起点，而每次 `record()` /
         // `slice()` 都拿它们做加法。先在这里证明「header ≤ records ≤ strings ≤
         // entries ≤ 文件长」且记录数组落在 strings 区之前，后面的加法才有意义——
         // 否则越界只能靠 `get` 兜底，报错信息也离谱（「偏移 2^60 越界」而不是
         // 「头部损坏」）。
-        if !(MMAP_HEADER_LEN <= records_off
+        if !(header_len <= records_off
             && records_off <= strings_off
             && strings_off <= entries_off
             && entries_off <= bytes.len())
@@ -66,7 +85,7 @@ impl MmapDict {
             records_off,
             strings_off,
             entries_off,
-            total_freq: OnceLock::new(),
+            total_freq: total_freq.map_or_else(OnceLock::new, OnceLock::from),
             abbrev: None,
             graph: None,
         })
@@ -224,7 +243,12 @@ impl MmapDict {
         Ok(out)
     }
 
-    /// 线性扫词条区求词频总和（约 80MB / 186 万条，仅首次调用时执行一次）。
+    /// 线性扫词条区求词频总和（约 32MB 词条区 / 186 万条）。
+    ///
+    /// **只有 v1 数据文件会走到这里**。v2 把这个和写在头部，就没有这一步了：
+    /// 一次启动为求一个 `u64` 把整段词条区拉进 page cache，实测让 `dict.bin`
+    /// 常驻从 ~30MB 抬到 63MB。保留它是为了旧数据文件仍能用（换二进制不必
+    /// 同时重建数据），不是常规路径。
     pub(super) fn scan_total_freq(&self) -> u64 {
         let bytes: &[u8] = &self.map;
         let mut pos = self.entries_off;

@@ -23,6 +23,7 @@ fn corrupt_section_offsets_are_rejected_at_open() {
     hdr.extend_from_slice(&200u64.to_le_bytes()); // records_off（跑到 strings 之后）
     hdr.extend_from_slice(&100u64.to_le_bytes()); // strings_off
     hdr.extend_from_slice(&300u64.to_le_bytes()); // entries_off
+    hdr.extend_from_slice(&0u64.to_le_bytes()); // total_freq（v2 尾部字段）
     hdr.resize(512, 0);
     std::fs::File::create(&path)
         .and_then(|mut f| f.write_all(&hdr))

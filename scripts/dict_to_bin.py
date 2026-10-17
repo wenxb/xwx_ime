@@ -16,8 +16,11 @@ import struct
 import sys
 
 MAGIC = b"XWXIDM1\0"
-VERSION = 1
-HEADER_LEN = 52  # 8s + I + 5×Q
+# v2 在 v1 的 52 字节头尾部追加 `total_freq`(u64)。这一列让引擎启动时不必
+# 把整个词条区扫一遍——实测那次扫描让 dict.bin 的常驻从 ~30MB 涨到 63MB。
+VERSION = 2
+HEADER_FMT = "<8sIQQQQQQ"  # magic + version + n_keys + total + 3 偏移 + total_freq
+HEADER_LEN = 60  # 8 + 4 + 6×8
 RECORD_LEN = 12  # u32 str_off + u16 str_len + u32 ent_off + u16 ent_len
 FREQ_MAX = 0xFFFFFFFF  # u32 上限，超出截断（真实词频远达不到）
 
@@ -28,11 +31,13 @@ def _validate(blob):
     与 `abbrev_to_bin.py` 同一套判据——读取端（Rust）拿到坏文件只会静默降级，
     所以产物必须在**构建这一侧**先自证。
     """
-    magic, version, n_keys, _total, rec_off, str_off, ent_off = struct.unpack_from(
-        "<8sIQQQQQ", blob, 0
+    magic, version, n_keys, _total, rec_off, str_off, ent_off, total_freq = struct.unpack_from(
+        HEADER_FMT, blob, 0
     )
     if magic != MAGIC or version != VERSION:
         raise SystemExit("产物魔数/版本不符")
+    if total_freq == 0:
+        raise SystemExit("total_freq 为 0：词频总和必须非零（引擎按它归一化）")
     if not (HEADER_LEN <= rec_off <= str_off <= ent_off <= len(blob)):
         raise SystemExit(
             f"区段顺序/范围不合法: rec={rec_off} str={str_off} ent={ent_off} len={len(blob)}"
@@ -96,6 +101,7 @@ def main() -> None:
     entries = bytearray()
     records = bytearray()
     total = 0
+    freq_sum = 0  # 全表词频总和（v2 头部字段，引擎按它做 P(词)=freq/总频 归一化）
     for py in pinyins:
         pb = py.encode("utf-8")
         str_off = len(strings)
@@ -107,7 +113,9 @@ def main() -> None:
                 raise SystemExit(f"词条过长（>255 字节）: {word!r}")
             entries.append(len(wb))
             entries.extend(wb)
-            entries.extend(struct.pack("<I", min(freq, FREQ_MAX)))
+            fq = min(freq, FREQ_MAX)
+            entries.extend(struct.pack("<I", fq))
+            freq_sum += fq
         records.extend(struct.pack("<IHIH", str_off, len(pb), ent_off, len(entries) - ent_off))
         total += len(groups[py])
 
@@ -115,15 +123,15 @@ def main() -> None:
     strings_off = records_off + len(records)
     entries_off = strings_off + len(strings)
     header = struct.pack(
-        "<8sIQQQQQ",
+        HEADER_FMT,
         MAGIC, VERSION, len(pinyins), total,
-        records_off, strings_off, entries_off,
+        records_off, strings_off, entries_off, freq_sum,
     )
     assert len(header) == HEADER_LEN, "头部布局与 Rust 端不一致"
 
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     _write_atomically(src, dst, header + records + strings + entries)
-    print(f"已写出: {dst}（{os.path.getsize(dst) / 1024 / 1024:.1f} MB）")
+    print(f"已写出: {dst}（{os.path.getsize(dst) / 1024 / 1024:.1f} MB，总频 {freq_sum}）")
 
 
 if __name__ == "__main__":

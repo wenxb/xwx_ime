@@ -26,12 +26,6 @@ impl InputSession {
                 }
             }
         }
-        // 「英文跟随」只在连续字母里活着：任何别的按键都结束它（空格、标点、
-        // 回车、退格、Esc、模式切换……）。字母本身由下面 Verbatim 分支与
-        // `Char` 分支接住。
-        if !matches!(event, InputEvent::Char(_) | InputEvent::Verbatim(_)) {
-            self.english_run = false;
-        }
         // 英文上文失效判定必须看**事件种类 + 输出**：Noop 才是「这个键
         // 交给应用了」。组合内的编辑（退格/方向键/翻页）返回 Updated，
         // 不算边界——否则打英文单词时按一次左键就把上文抹了。
@@ -78,15 +72,10 @@ impl InputSession {
             // —— 英文模式：字母等按键透传给应用 ——
             // 英文模式下拼音串必为空，方向键/空格/回车等自然落入相应 Noop；
             // 只有字符在这里被挡掉，不进拼音串。
-            InputEvent::Char(c) if self.english_mode && c.is_ascii() => {
+            InputEvent::Char(c) | InputEvent::Verbatim(c)
+                if self.english_mode && c.is_ascii() =>
+            {
                 Ok(SessionOutput::Noop)
-            }
-
-            // —— 英文跟随：大写起头/中途转入的英文单词，后面的字母直接上屏 ——
-            // 见 `english_run` 的文档。与 Verbatim 同一条路：不进候选、
-            // 不学习，逐字交给应用（旧实现里 `H` 之后的 `ello` 会回到拼音）。
-            InputEvent::Char(c) if self.english_run && c.is_ascii_alphabetic() => {
-                Ok(SessionOutput::Commit(self.commit_raw(c.to_string())))
             }
 
             // —— Tab：只在预测态有意义（上面已经拦掉） ——
@@ -128,16 +117,15 @@ impl InputSession {
             }
 
             // —— 字母：进入拼音串 ——
-            InputEvent::Char(c) if c.is_ascii_alphabetic() => {
-                // 在 caret 处插入(不是追加):长串中间打错字母可以
-                // 左移光标补插,不用全删重打。caret 处必为 char 边界
-                // (串内只有单字节 ASCII,caret 由本结构体独占维护)。
-                let c = c.to_ascii_lowercase();
-                self.pinyin.insert(self.caret, c);
-                self.caret += c.len_utf8();
-                self.refresh()?;
-                Ok(SessionOutput::Updated(self.update()))
-            }
+            // 大写(`Verbatim`,Shift+字母 / CapsLock)与普通字母同一条路:
+            // **进串组合,不直出**(正常输入法语义)——预编辑可见、可退格
+            // 修改,由空格/回车/选词统一上屏。大写字母不是拼音,含大写的
+            // 串查不出覆盖整串的中文读法,查询层自动补「原样上屏」逃生口
+            // (`GPU`/`nihaoG`);删掉大写字母,拼音候选立刻恢复。旧实现
+            // 逐字直出、还点亮「英文跟随」把大写之后接着打的中文整段吞成
+            // 英文——都已移除。
+            InputEvent::Char(c) if c.is_ascii_alphabetic() => self.insert_letter(c, false),
+            InputEvent::Verbatim(c) if c.is_ascii_alphabetic() => self.insert_letter(c, true),
             // —— recognizer 入口 1:`@`(邮箱识别) ——
             // `@` 不在标点表、空闲时照旧透传(应用收到原字符);
             // 拼音串非空时进串——若此刻整串命中 email pattern
@@ -315,23 +303,6 @@ impl InputSession {
                     self.push_tail(punct);
                     Ok(append_to_commit(out, punct))
                 }
-            }
-            // —— Verbatim:直接上屏的字符(Shift+字母 / CapsLock,
-            //    见 InputEvent::Verbatim 的文档) ——
-            // 大写字母(起头或组合中途)都是「用户明说要打英文」:已敲的
-            // 内容**原样保留**——已确认段(用户明确选过的)照常上屏,剩余
-            // 拼音串按原始字母上屏,**不替用户提交高亮候选**(高亮是输入法
-            // 的默认项,不是用户的选择),这个字符再原样拼在尾部。大写同时
-            // 点亮「英文跟随」,后续字母继续逐字按英文上屏(`ni`+`P`+
-            // `hone` → `niPhone`);小写 Verbatim(CapsLock+Shift)不带跟随。
-            // 单字母不是词:不进 UserLM 学习,也不动 last_word(与标点一致)。
-            InputEvent::Verbatim(c) => {
-                if c.is_ascii_uppercase() {
-                    self.english_run = true;
-                }
-                let head = self.finish_with_raw(self.pinyin.clone());
-                self.push_tail(c.encode_utf8(&mut [0u8; 4]));
-                Ok(SessionOutput::Commit(format!("{head}{c}")))
             }
             // —— `-`/`=` 翻页(librime `paging_with_minus_equal`,has_menu)——
             // 这两个键**没有全角标点映射**(上面 punctuator 分支够不着),
@@ -529,6 +500,11 @@ impl InputSession {
                     Ok(SessionOutput::Noop)
                 }
             }
+
+            // —— 其余 Verbatim(非字母,线上不会出现)——与普通字符同一
+            // 待遇:透传给应用。线上 `translate_keyval` 只把字母折成
+            // `Verbatim`,这是对单元测试直接投喂的防御。
+            InputEvent::Verbatim(_) => Ok(SessionOutput::Noop),
         }
     }
 }

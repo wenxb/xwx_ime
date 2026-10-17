@@ -7,6 +7,7 @@ use std::path::Path;
 use memmap2::Mmap;
 
 use crate::candidate::Candidate;
+use crate::mmap_advice::advise_random;
 
 use super::{read_u16, read_u32, read_u64, DictError, MmapDict, MmapRecord, ABBREV_HEADER_LEN,
             ABBREV_MAGIC, ABBREV_VERSION, MAX_LOOKUP_RESULTS, MMAP_RECORD_LEN};
@@ -125,6 +126,7 @@ impl AbbrevIndex {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DictError> {
         let file = File::open(path)?;
         let map = unsafe { Mmap::map(&file)? };
+        advise_random(&map);
         let bytes: &[u8] = &map;
         if bytes.len() < ABBREV_HEADER_LEN {
             return Err(DictError::Corrupt("文件过短,不是完整 abbrev.bin"));

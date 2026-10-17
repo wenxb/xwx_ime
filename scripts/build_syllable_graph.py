@@ -34,11 +34,12 @@ RECORD_LEN = 12
 
 def read_keys(path):
     blob = open(path, "rb").read()
+    # 只读 v1/v2 共有的前 52 字节（v2 只是在尾部追加了 total_freq）。
     magic, version, n_keys, _total, rec_off, str_off, ent_off = struct.unpack_from(
         "<8sIQQQQQ", blob, 0
     )
-    if magic != b"XWXIDM1\0" or version != 1:
-        raise SystemExit(f"不是 dict.bin v1（magic={magic!r} version={version}）")
+    if magic != b"XWXIDM1\0" or not 1 <= version <= 2:
+        raise SystemExit(f"不是 dict.bin v1/v2（magic={magic!r} version={version}）")
     keys = []
     for i in range(n_keys):
         so, sl, _eo, _el = struct.unpack_from("<IHIH", blob, rec_off + i * RECORD_LEN)

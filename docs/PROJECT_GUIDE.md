@@ -109,11 +109,22 @@ xwx_ime (bin, src/main.rs)      进程入口：连 D-Bus、注册组件、导出
 ### 2.5 词库：mmap 只读二进制 + 二分，SQLite 只当构建中间格式
 
 `dict/mmap.rs`（主索引）、`dict/abbrev.rs`（简拼副索引）、`dict/syllable_graph.rs`
-（音节转移索引）。三个二进制文件**同构**：52 字节头（魔数/版本/计数/三区偏移）
-+ records 区（定长 12B 记录）+ strings 区 + entries 区。
+（音节转移索引）。两个索引文件**同构**：52 字节头（魔数/版本/计数/三区偏移）
++ records 区（定长 12B 记录）+ strings 区 + entries 区；主索引是 60 字节头
+（尾部多一个全表词频总和，见 `data/README.md`）。
 
 - **为什么 mmap**：启动 O(1) 映射，查询 = 内存上二分 + 切片；零 SQL、零锁、
   无逐击键磁盘 IO；文件只读 → 天然线程安全，不需要 Mutex。
+- **总频必须预计算**：`P(词) = freq / 总频` 的分母过去是启动时线性扫词条区
+  求出来的，为拿一个 `u64` 把整段词条区读进 page cache（实测把 `dict.bin`
+  常驻从 ~30MB 抬到 63MB）。v2 头部直接带这个数，`scan_total_freq` 只剩
+  v1 旧文件的兼容路径。
+- **mmap 一律 `MADV_RANDOM`**（`src/mmap_advice.rs`）：二分与 trie 走子节点
+  都是跨页随机跳，内核默认策略把常驻放大的两个来源（64KB fault-around +
+  64KB large folio）在随机访问下几乎全是浪费。冷页实测：`.gram` 5000 次
+  随机页读 203MB → 107MB，`dict.bin` 2000 次 57.8MB → 7.6MB。
+  **量这一项必须冷页**（先 `POSIX_FADV_DONTNEED`）——页缓存热时两种策略
+  读数一模一样，据此判「madvise 没用」是错的。
 - **构建链**：Rime 词表（雾凇/腾讯词向量）→ `scripts/build_dict.py` → dict.sqlite3
   → `scripts/dict_to_bin.py` → dict.bin；`scripts/abbrev_to_bin.py` 从 dict.bin
   **只读**生成 abbrev.bin。
@@ -272,6 +283,7 @@ README TODO 里写明：**跨候选归一化是唯一未试的方向**。
 |---|---|---|
 | **排序质量**（候选顺序不对） | `engine/rank.rs` 排序键；`DEFAULT_LM_WEIGHT` | 裸 `xian` 问题：空上下文 LM 是常数，跨候选归一化是唯一未试方向 |
 | **查询延迟** | `engine/lattice/build.rs` 配额常量、`MAX_CANDIDATES` | 512→1024 试过并回退（召回 +1.2pp，但 `zh` 从 9.3→12.1ms 顶穿预算）；所有常量改动重跑 bench 且必须 release |
+| **内存占用** | `src/mmap_advice.rs`（访问模式）、`dict_to_bin.py`（头部字段） | 常驻大头是只读 mmap 的文件页（可回收，不是泄漏）：anon 只有 ~15MB。别用「改成 `read()` 进堆」来省——那会让可回收页变成不可回收的 anon |
 | **新增配置项**（现在全是硬编码/环境变量） | TODO 表里的「配置化」：页大小、模糊音按组开关、词库路径 | 目前只有 `XWX_FUZZY` 一个开关；`DEFAULT_FUZZY_ENABLED` 的注释是「默认值怎么定」的方法论范本 |
 | **LM 效果** | `wanxiang/mod.rs` 的换算常数与惩罚 | `log10_corpus_size=9` 占位、句尾哨兵键未实现、惩罚未调参——三件事都在等评测集 |
 | **模糊拼音** | `corrector.rs` 混淆对 + `DEFAULT_FUZZY_ENABLED` | 默认关是实测裁决（长串 6.48x 超预算）；数据一变结论可能翻转，重跑 `fuzzy_bench` |

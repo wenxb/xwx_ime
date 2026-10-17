@@ -194,7 +194,11 @@ gdbus call --session --dest org.freedesktop.IBus --object-path /org/freedesktop/
    中间格式；再运行
    `python3 scripts/dict_to_bin.py ~/.local/share/xwx/dict.sqlite3 ~/.local/share/xwx/dict.bin`
    转成运行时二进制（也可直接用 `XWX_DICT_PATH` 指向自己生成的 dict.bin；
-   详细说明与 luna_pinyin 兜底教程见 `data/README.md` 第四节）；
+   详细说明与 luna_pinyin 兜底教程见 `data/README.md` 第四节）。
+   **手头只有旧 v1 `dict.bin`、没有 `dict.sqlite3` 时**，不用重建：
+   `python3 scripts/dict_migrate_v2.py` 就地升级到 v2（补上头部词频总和）；
+   注意**旧二进制读不了 v2**（会判版本不兼容并退化成空词库），所以升级数据
+   前先装新二进制；
 2. 语言模型：下载**万象 `.gram`** 放到 `~/.local/share/xwx/`
    （引擎自动探测 `wanxiang-lts-zh-hans.gram`），或可选按 `data/README.md`
    第五节用语料训练 `bigram.txt`；
@@ -325,6 +329,7 @@ data/
 scripts/
 ├── build_dict.py          词库构建工具（Rime → dict.sqlite3）
 ├── dict_to_bin.py         dict.sqlite3 → dict.bin(运行时二进制格式)
+├── dict_migrate_v2.py     dict.bin v1 → v2 就地升级(补头部词频总和,不重建)
 └── abbrev_to_bin.py      dict.bin → abbrev.bin(简拼副索引,只读主索引)
 tools/
 ├── rime_oracle/           librime 1.10.0 驱动的差分对拍台

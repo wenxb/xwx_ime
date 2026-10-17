@@ -34,6 +34,25 @@ impl InputSession {
         self.refresh()
     }
 
+    /// 字母进串(组合的常规入口):`Char` 归一小写进拼音;`Verbatim` 是
+    /// 用户明敲的大写(Shift+字母 / CapsLock),按原样进串——**进组合,
+    /// 不直出**。CapsLock+Shift 的抵消在 ibus 层已折成 `Char` 小写
+    /// (见 `translate_keyval`)。
+    pub(super) fn insert_letter(
+        &mut self,
+        c: char,
+        verbatim: bool,
+    ) -> Result<SessionOutput, EngineError> {
+        // 在 caret 处插入(不是追加):长串中间打错字母可以左移光标
+        // 补插,不用全删重打。caret 处必为 char 边界(串内只有单字节
+        // ASCII,caret 由本结构体独占维护)。
+        let c = if verbatim { c } else { c.to_ascii_lowercase() };
+        self.pinyin.insert(self.caret, c);
+        self.caret += c.len_utf8();
+        self.refresh()?;
+        Ok(SessionOutput::Updated(self.update()))
+    }
+
     /// 重新计算候选列表，并把高亮/页码收敛到合法范围。
     ///
     /// TODO: 这里目前是"全量重查"；性能优化方向是增量更新

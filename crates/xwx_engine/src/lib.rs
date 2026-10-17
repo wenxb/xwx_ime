@@ -26,6 +26,7 @@ pub mod corrector;
 pub mod dict;
 pub mod english;
 pub mod lm;
+mod mmap_advice;
 pub mod punctuator;
 pub mod recognizer;
 pub mod segmenter;

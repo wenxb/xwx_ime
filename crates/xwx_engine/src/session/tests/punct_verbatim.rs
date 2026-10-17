@@ -178,69 +178,94 @@ fn digits_still_select_candidates_not_punct() {
 }
 
 #[test]
-fn shift_letter_commits_uppercase_when_idle() {
-    // 中文模式、拼音串为空:Shift+G → 上屏 `G`,不进拼音串。
+fn capital_letter_composes_when_idle() {
+    // 中文模式、拼音串为空:Shift+G → **进组合**(预编辑 `G`、回声候选),
+    // 不直出;空格才上屏——正常输入法语义。
     let mut s = session_with_dict();
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+    match out {
+        SessionOutput::Updated(u) => {
+            assert_eq!(u.preedit, "G", "大写应进组合而不是直出");
+            assert!(
+                u.candidates.iter().any(|c| c.word == "G"),
+                "应有「原样上屏」回声候选: {:?}",
+                u.candidates
+            );
+        }
+        other => panic!("期望 Updated(进组合),实际 {other:?}"),
+    }
+    assert!(s.is_active(), "组合应保持活跃");
+    // 空格上屏:原样 `G`,不是词。
+    let out = s.handle(InputEvent::Space).expect("不应失败");
     assert!(
         matches!(out, SessionOutput::Commit(ref t) if t == "G"),
-        "空闲时 Shift+G 应直接上屏 G: {out:?}"
+        "空格应上屏 G: {out:?}"
     );
-    assert!(!s.is_active(), "上屏后会话应保持空闲");
+    assert!(!s.is_active(), "上屏后会话应复位");
     assert_eq!(s.last_word, None, "单字母不是词,last_word 应为 None");
     assert_eq!(s.committed_tail, "G", "应计入上屏尾部(供后续打分的字符窗口)");
 }
 
 #[test]
 fn shift_letters_spell_gpu_across_commits() {
-    // 连打 Shift+G、Shift+P、Shift+U:每次上屏一个字母,
-    // committed_tail 逐次累积成 GPU(应用文本框里就是 GPU)。
+    // 连打 Shift+G、Shift+P、Shift+U:逐字母进**同一个组合**,
+    // 空格一次上屏 `GPU`(应用文本框里就是 GPU)。
     let mut s = session_with_dict();
     for (ev, expect) in [
         (InputEvent::Verbatim('G'), "G"),
-        (InputEvent::Verbatim('P'), "P"),
-        (InputEvent::Verbatim('U'), "U"),
+        (InputEvent::Verbatim('P'), "GP"),
+        (InputEvent::Verbatim('U'), "GPU"),
     ] {
         let out = s.handle(ev).expect("不应失败");
         assert!(
-            matches!(out, SessionOutput::Commit(ref t) if t == expect),
-            "应上屏 {expect}: {out:?}"
+            matches!(out, SessionOutput::Updated(ref u) if u.preedit == expect),
+            "预编辑应为 {expect}: {out:?}"
         );
     }
-    assert_eq!(s.committed_tail, "GPU", "三次上屏应累积成 GPU");
+    assert!(s.is_active(), "组合期间不得上屏");
+    let out = s.handle(InputEvent::Space).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "GPU"),
+        "空格应一次上屏 GPU: {out:?}"
+    );
+    assert_eq!(s.committed_tail, "GPU", "一次上屏累积成 GPU");
 }
 
 #[test]
-fn shift_letter_mid_composition_commits_raw_input_then_letter() {
-    // 中文模式、拼音串非空(`nihao`):Shift+G **原样保留**已敲的字母
-    // ——高亮候选是输入法的默认项,不替用户提交(旧实现会上屏「你好G」,
-    // 用户没选过的「你好」被强行带出)——得到 `nihaoG`。大写同时点亮
-    // 「英文跟随」,后续字母继续逐字按英文上屏(`ni`+Shift+P+`hone`
-    // → `niPhone` 的关键)。
+fn capital_letter_mid_composition_keeps_the_pinyin_prefix_candidates() {
+    // 中文模式、拼音串非空(`nihao`):Shift+G 进组合,预编辑 `nihaoG`,
+    // **不结束组合、不上屏**——「你好」等前缀候选还在。空格一次上屏
+    // 「你好G」(候选 + 原样尾巴,librime 语义;旧版直出 `nihaoG`、
+    // 中间态则把 `G` 残留在组合里,都会丢字或粘字)。
     let mut s = session_with_dict();
     for c in "nihao".chars() {
         s.handle(InputEvent::Char(c)).expect("不应失败");
     }
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
+    match out {
+        SessionOutput::Updated(u) => {
+            assert_eq!(u.preedit, "nihaoG", "大写应进组合");
+            assert!(
+                u.candidates.iter().any(|c| c.word == "你好"),
+                "拼音前缀候选应保留: {:?}",
+                u.candidates
+            );
+        }
+        other => panic!("期望 Updated(进组合),实际 {other:?}"),
+    }
+    // 空格一次上屏:候选「你好」+ 原样尾巴 `G` = 「你好G」,不留残串。
+    let out = s.handle(InputEvent::Space).expect("不应失败");
     assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "nihaoG"),
-        "`nihao` + Shift+G 应原样上屏「nihaoG」: {out:?}"
+        matches!(out, SessionOutput::Commit(ref t) if t == "你好G"),
+        "空格应一次上屏「你好G」: {out:?}"
     );
     assert!(!s.is_active(), "上屏后会话应复位");
-    assert_eq!(s.last_word, None, "原样串不是词,last_word 应为 None");
-    assert_eq!(s.committed_tail, "nihaoG");
-    // 英文跟随已点亮:后续小写字母逐字上屏,不回拼音串
-    let out = s.handle(InputEvent::Char('m')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "m"),
-        "跟随态下后续字母应逐字上屏: {out:?}"
-    );
 }
 
 #[test]
-fn shift_letter_mid_composition_no_candidate_commits_raw_then_letter() {
-    // 拼音串非空但没有真实候选(空词库,只有回声候选):与 Space
-    // 分支同一兜底语义——上屏原始输入串,再追加大写字母。
+fn capital_letter_with_no_real_candidates_composes_raw() {
+    // 拼音串非空但没有真实候选(空词库,只有回声):大写同样进组合,
+    // 空格原样上屏——与有候选时的差别只是没有中文可选。
     let engine = Arc::new(ImeEngine::new(None).expect("内存引擎创建失败"));
     let mut s = InputSession::new(engine);
     for c in "zgr".chars() {
@@ -248,8 +273,14 @@ fn shift_letter_mid_composition_no_candidate_commits_raw_then_letter() {
     }
     let out = s.handle(InputEvent::Verbatim('R')).expect("不应失败");
     assert!(
+        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "zgrR"),
+        "大写应进组合: {out:?}"
+    );
+    assert!(s.is_active(), "组合应保持活跃");
+    let out = s.handle(InputEvent::Space).expect("不应失败");
+    assert!(
         matches!(out, SessionOutput::Commit(ref t) if t == "zgrR"),
-        "无真实候选时应上屏「原始串 + R」: {out:?}"
+        "空格应原样上屏: {out:?}"
     );
     assert!(!s.is_active());
     assert_eq!(s.last_word, None, "回声/原始串不是词");
@@ -274,7 +305,7 @@ fn lowercase_letter_still_enters_pinyin() {
 
 #[test]
 fn verbatim_does_not_learn() {
-    // 大写字母上屏不是词:不进 UserLM 学习(与标点同一取舍,
+    // 大写组合的原样上屏不是词:不进 UserLM 学习(与标点同一取舍,
     // 对应 librime 标点/原始输入不进 memory)。
     let engine = Arc::new(
         crate::ImeEngine::new(None)
@@ -285,11 +316,16 @@ fn verbatim_does_not_learn() {
     let user = engine.user_lm().expect("引擎应有用户层");
     let before = user.unigram_len();
     let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Commit(ref t) if t == "G"));
+    assert!(matches!(out, SessionOutput::Updated(_)), "大写应进组合");
+    let out = s.handle(InputEvent::Space).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "G"),
+        "空格应原样上屏 G: {out:?}"
+    );
     assert_eq!(
         user.unigram_len(),
         before,
-        "Verbatim 单字母上屏不应产生学习"
+        "大写组合的原样上屏不应产生学习"
     );
 }
 
@@ -357,33 +393,30 @@ fn unmapped_ascii_symbols_still_passthrough() {
     }
 }
 
-/// 大写字母起头的英文单词继续按英文走：`Shift+H` 上屏 `H` 之后，
-/// 后面的 `ello` 逐字上屏，不再回到拼音（旧实现里它们会进拼音串）。
-///
-/// 这是「受控中英混输」的显式控制：非字母事件结束跟随态。
+/// 大写进组合而不是直出:`Shift+H` + `ello` 组合成 `Hello`,空格一次
+/// 上屏——英文单词不用切模式就能打。旧版「英文跟随」逐字直出,会把
+/// 大写之后接着打的中文整段吞成英文(2026-10 实测反馈后移除)。
 #[test]
-fn uppercase_start_keeps_the_rest_of_the_word_in_english() {
+fn english_word_composes_after_a_capital_and_commits_on_space() {
     let mut s = session_with_dict();
     let out = s.handle(InputEvent::Verbatim('H')).expect("不应失败");
     assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "H"),
-        "大写首字母直接上屏: {out:?}"
+        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "H"),
+        "大写首字母应进组合: {out:?}"
     );
 
-    for c in ['e', 'l', 'l', 'o'] {
+    for (c, expect) in [('e', "He"), ('l', "Hel"), ('l', "Hell"), ('o', "Hello")] {
         let out = s.handle(InputEvent::Char(c)).expect("不应失败");
         assert!(
-            matches!(out, SessionOutput::Commit(ref t) if t == &c.to_string()),
-            "{c} 应逐字上屏而不是进拼音: {out:?}"
+            matches!(out, SessionOutput::Updated(ref u) if u.preedit == expect),
+            "{c} 应进组合(预编辑 {expect}): {out:?}"
         );
-        assert!(!s.is_active(), "英文跟随期间不该有拼音组合");
+        assert!(s.is_active(), "组合期间不得上屏");
     }
-
-    // 非字母事件结束跟随：之后的字母重新进拼音串。
-    s.handle(InputEvent::Backspace).expect("不应失败");
-    let out = s.handle(InputEvent::Char('n')).expect("不应失败");
+    let out = s.handle(InputEvent::Space).expect("不应失败");
     assert!(
-        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "n"),
-        "跟随结束后字母应回到拼音: {out:?}"
+        matches!(out, SessionOutput::Commit(ref t) if t == "Hello"),
+        "空格应一次上屏 Hello: {out:?}"
     );
+    assert!(!s.is_active(), "上屏后会话应复位");
 }

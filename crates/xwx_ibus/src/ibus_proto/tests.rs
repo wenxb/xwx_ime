@@ -98,7 +98,7 @@ fn translate_keyval_basics() {
 #[test]
 fn translate_keyval_shift_caps() {
     // Shift+小写 keyval(常见路径:ibus 报小写 keyval + SHIFT_MASK)
-    // → Verbatim 大写,直接上屏,不进拼音串
+    // → Verbatim 大写,进串组合
     assert_eq!(
         translate_keyval(keyval::LOWER_A + 6, IBUS_SHIFT_MASK).unwrap(),
         InputEvent::Verbatim('G'),

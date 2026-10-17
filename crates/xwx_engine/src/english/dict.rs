@@ -8,6 +8,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use crate::mmap_advice::advise_random;
 use super::format::{
     is_english_key, parse_header, read_u16, read_u32, valid_word_text, EnglishError, Header,
     MAX_ZIPF_CENTI, PREFIX_RECORD_LEN, PREFIX_SCORE_STEP, PREFIX_TOP_LIMIT, WORD_RECORD_LEN,
@@ -75,6 +76,7 @@ impl EnglishDict {
         // SAFETY: 与项目既有 mmap 词库同一取舍——文件在映射期内不应被原地截断，
         // 构建端因此用「同目录临时文件 + 原子替换」发布。
         let map = unsafe { Mmap::map(&file)? };
+        advise_random(&map);
         Self::from_backing(Backing::Mapped(map))
     }
 

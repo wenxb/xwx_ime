@@ -67,6 +67,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use crate::mmap_advice::advise_random;
 use crate::lm::{LanguageModel, LmContext, LmError};
 
 /// 上文/词首各取的字符数 = `collocation_max_length - 1`（README：6 → 5）。
@@ -404,6 +405,7 @@ impl WanxiangLM {
     pub fn open(path: &Path) -> Result<Self, LmError> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
+        advise_random(&mmap);
         let header = Header::parse(&mmap)?;
         // **不能只判「非空」**：空只是最没信息的一种坏文件。真正要认的是
         // 「这个格式我们支持」——上游 octagram 的数组布局随版本变，拿不认识的

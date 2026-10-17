@@ -14,6 +14,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use crate::mmap_advice::advise_random;
 use super::{DictError, read_u16, read_u32, read_u64};
 
 const MAGIC: &[u8; 8] = b"XWXSYL1\0";
@@ -54,6 +55,7 @@ impl SyllableGraph {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DictError> {
         let file = File::open(path)?;
         let map = unsafe { Mmap::map(&file)? };
+        advise_random(&map);
         let bytes: &[u8] = &map;
         if bytes.len() < HEADER_LEN {
             return Err(DictError::Corrupt("文件过短，不是完整 syllable_graph.bin"));

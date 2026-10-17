@@ -1,4 +1,0 @@
-./usr/share/doc/xwx-ime/english-bigram-NOTICE.md
-./usr/share/doc/xwx-ime/english-data-NOTICE.md
-./usr/share/xwx/english_bigram.bin
-./usr/share/xwx/english.bin

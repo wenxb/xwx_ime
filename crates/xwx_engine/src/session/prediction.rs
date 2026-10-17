@@ -46,7 +46,6 @@ impl InputSession {
             || self.caret != 0
             || self.recognized.is_some()
             || self.english_mode
-            || self.english_run
         {
             return false;
         }
