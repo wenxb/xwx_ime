@@ -22,8 +22,8 @@ impl MmapDict {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DictError> {
         let file = File::open(path)?;
         let map = unsafe { Mmap::map(&file)? };
-        // 查询全是跨页随机跳(二分),声明后内核不再按 64KB 预读/folio 放大常驻
-        // (实测 2000 次随机页读 57.8MB → 7.6MB);失败不影响正确性,见 `mmap_advice`。
+        // 二分是跨页随机跳,声明后内核不再按 64KB 预读放大常驻(实测随机读
+        // 72MB → 63MB);失败不影响正确性,见 `mmap_advice`。
         advise_random(&map);
         Self::from_bytes(map)
     }

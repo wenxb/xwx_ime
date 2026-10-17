@@ -120,11 +120,13 @@ xwx_ime (bin, src/main.rs)      进程入口：连 D-Bus、注册组件、导出
   常驻从 ~30MB 抬到 63MB）。v2 头部直接带这个数，`scan_total_freq` 只剩
   v1 旧文件的兼容路径。
 - **mmap 一律 `MADV_RANDOM`**（`src/mmap_advice.rs`）：二分与 trie 走子节点
-  都是跨页随机跳，内核默认策略把常驻放大的两个来源（64KB fault-around +
-  64KB large folio）在随机访问下几乎全是浪费。冷页实测：`.gram` 5000 次
-  随机页读 203MB → 107MB，`dict.bin` 2000 次 57.8MB → 7.6MB。
+  都是跨页随机跳，内核默认的 fault-around（一次缺页映射周边 16 页）在这种
+  访问下几乎全是浪费。ext4 冷页实测：`.gram` 2000 次随机页读 102MB → 8.9MB
+  （-91%，大模型点是纯随机点查，收益最大）；`dict.bin` 72MB → 63MB（-13%），
+  且**不在启动路径上**——它的常驻随使用逐步涨（前缀区间扫描会扫整段
+  strings 区），是「用过的页留在缓存」，不是启动成本。
   **量这一项必须冷页**（先 `POSIX_FADV_DONTNEED`）——页缓存热时两种策略
-  读数一模一样，据此判「madvise 没用」是错的。
+  读数一模一样；也别用 `/tmp` 的副本下结论（tmpfs 与 ext4 的 folio 粒度不同）。
 - **构建链**：Rime 词表（雾凇/腾讯词向量）→ `scripts/build_dict.py` → dict.sqlite3
   → `scripts/dict_to_bin.py` → dict.bin；`scripts/abbrev_to_bin.py` 从 dict.bin
   **只读**生成 abbrev.bin。
