@@ -162,6 +162,38 @@ fn c07c_abbrev_reading_counts_as_readable_chinese() {
 }
 
 #[test]
+fn c07d_pure_consonant_abbrev_with_real_words_keeps_chinese_first() {
+    // 纯声母简拼（`shy`/`sms`/`sds`）走不了「首音节打全」的简拼读法，
+    // 于是 E0 只要 Exact 就落到 EnglishFirst、占掉前三个槽位——用户实测
+    // 「打拼音被无效的英文单词挡在前面」。修法：中文整串简拼候选的词频
+    // 先验压过 E0 时，按 Mixed 排（中文回到首位，英文仍在第 2 位）。
+    let Some(engine) = crate::engine::tests::real_bilingual_engine() else {
+        return;
+    };
+    for input in ["shy", "sms", "sds", "ssh", "ssh"] {
+        let out = engine
+            .lookup_composition(input, &LmContext::empty(), &EnglishContext::empty())
+            .expect("查询失败");
+        assert_eq!(
+            first_lang(&out),
+            "chinese",
+            "{input} 的中文简拼词条词频远高于 E0，中文应首选: {out:?}"
+        );
+        assert!(
+            out.iter().any(|c| c.is_english()),
+            "{input} 的英文入口不得消失（只调次序）: {out:?}"
+        );
+    }
+    // 反向：中文端没有整串简拼词条，或中文词频明显更低 ⇒ 英文照旧靠前。
+    for input in ["cof", "doc", "pyt", "app"] {
+        let out = engine
+            .lookup_composition(input, &LmContext::empty(), &EnglishContext::empty())
+            .expect("查询失败");
+        assert_eq!(first_lang(&out), "english", "{input} 应保持英文首选: {out:?}");
+    }
+}
+
+#[test]
 fn c08_english_first_is_a_rule_not_a_word_list() {
     // 同一批词：做成完整词输入时不抢中文；做成超出静态池的长尾输入时
     // 由 good_en/strong_zh 判据决定，而不是「词表里是否有这个词」。

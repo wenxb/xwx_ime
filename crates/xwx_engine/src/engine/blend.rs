@@ -4,7 +4,7 @@
 //! 这里**不调用中文排序器**：中文候选进来什么样，出去还是什么样（只在
 //! 原文兜底与重复消除上动位置）。
 
-use crate::candidate::{Candidate, EnglishMatchKind};
+use crate::candidate::{Candidate, EnglishMatchKind, SpellingKind};
 
 use super::max_candidates;
 
@@ -132,6 +132,91 @@ fn plausible_chinese(zh: &[Candidate], raw_input: &str) -> bool {
     })
 }
 
+/// **规范简拼读法**：`input` 能否按「每个音节取全拼、首字母或 `zh/ch/sh`
+/// 双字母」恰好读出 `pinyin`。
+///
+/// 与 [`pinyin_reads_input`] 的区别是**不允许任意截断**：后者把「音节前缀」
+/// 也算一种读法（`yid`→`yi dian dian`），用在「中文是否可读」没问题；但拿来
+/// 数「有多少条中文词条能读成这串纯声母」时，截断会把 `squ` 读成 `she qu`
+/// 之外的一切，`bly`/`cryp` 也能凑出几百条——那些不是简拼证据。
+///
+/// 逐状态记忆化，代价与输入长度 × 音节数同阶；只在判定一次查询时跑一遍。
+fn canonical_abbrev_reads(input: &[u8], pinyin: &str) -> bool {
+    let syl: Vec<&str> = pinyin.split(' ').filter(|s| !s.is_empty()).collect();
+    if syl.is_empty() {
+        return false;
+    }
+    fn digraph(t: &[u8]) -> bool {
+        t.len() >= 2 && matches!(t[0], b'z' | b'c' | b's') && t[1] == b'h'
+    }
+    fn walk(input: &[u8], syl: &[&str], failed: &mut [bool], stride: usize, i: usize, j: usize) -> bool {
+        if j == syl.len() {
+            return i == input.len(); // 字母必须恰好用完
+        }
+        if i >= input.len() {
+            return false;
+        }
+        if failed[i * stride + j] {
+            return false;
+        }
+        let t = syl[j].as_bytes();
+        if input[i..].starts_with(t) && walk(input, syl, failed, stride, i + t.len(), j + 1) {
+            return true;
+        }
+        if digraph(t) && input.len() - i >= 2 && input[i..i + 2] == t[..2]
+            && walk(input, syl, failed, stride, i + 2, j + 1)
+        {
+            return true;
+        }
+        if input[i] == t[0] && walk(input, syl, failed, stride, i + 1, j + 1) {
+            return true;
+        }
+        failed[i * stride + j] = true;
+        false
+    }
+    let stride = syl.len() + 1;
+    let mut failed = vec![false; (input.len() + 1) * stride];
+    walk(input, &syl, &mut failed, stride, 0, 0)
+}
+
+/// **简拼读数的先验**：整串规范简拼命中的中文词条，其词频先验不弱于英文池。
+///
+/// `pinyin_reads_input` 要求首音节打全，纯声母串（`shy`/`sms`/`sds`/`ssh`）
+/// 因此整类判不出「中文可读」，E0 只要 Exact 就落到 EnglishFirst。可这些串
+/// 恰恰是最常见的简拼打法，中文那边往往有几十上百条真实词条：`shy` 命中 512
+/// 条、最高「使用」504528，而 E0 `shy` 的 zipf 只有 416。
+///
+/// 三条同时成立才算数（缺一条都会把英文整类压掉）：
+/// 1. **规范读法**：[`canonical_abbrev_reads`]，且 `covered` 吃满整个输入
+///    ——只吃掉前缀的分段候选不算；
+/// 2. **真实词条**：`freq > 填充档`——拼装链（freq=0）没有先验可言；
+/// 3. **先验可比**：中文词频的 `log10(freq/总词频)` 不低于英文池里**最强**
+///    那个词的 `zipf/100 - 9`（英文词库按 `p = 10^(z-9)` 建，见
+///    `english/rank.rs`）。比的是池峰值而不是 E0：E0 可能是个很弱的补全词，
+///    而池里同时躺着 `street`(528) 这种高频词——用 E0 会比出「中文更可能」的
+///    假结论（`str` 就是这样被误伤的）。
+///
+/// 第 3 条是分界：`pyt`→跑一趟(4930) 对 Python(378) 差一个量级、`app`→挨批评
+/// (1050) 对 approach(493) 也差，都留英文；`cof` 中文端没有整串词条。
+fn abbrev_prior_beats_en(zh: &[Candidate], input: &str, en_zipf: u16, total_freq: u64) -> bool {
+    if total_freq == 0 || en_zipf == 0 {
+        return false;
+    }
+    let bytes = input.as_bytes();
+    let log10_total = (total_freq as f64).log10();
+    let en_prior = en_zipf as f64 / 100.0 - 9.0;
+    let input_len = input.len();
+    zh.iter().any(|c| {
+        !c.echo
+            && !c.is_english()
+            && c.spelling == SpellingKind::Abbrev
+            && c.covered >= input_len
+            && c.freq > super::filler_freq_tier()
+            && (c.freq as f64).log10() - log10_total >= en_prior
+            && canonical_abbrev_reads(bytes, &c.pinyin)
+    })
+}
+
 /// `good_en`：首要英文候选有足够证据（静态频率够高，或用户学过至少 3 次）。
 pub(crate) fn good_english(e0_zipf: u16, e0_user_unigram: u32) -> bool {
     e0_zipf >= 300 || e0_user_unigram >= 3
@@ -140,13 +225,18 @@ pub(crate) fn good_english(e0_zipf: u16, e0_user_unigram: u32) -> bool {
 /// 按决策表定档（命中即停）。
 ///
 /// `zh` 是中文通道的完整结果，`en` 是英文通道的最终候选（可空）；
-/// `recent_en` = 存在可信英文上文；`good_en` = 首要英文候选有足够证据。
+/// `recent_en` = 存在可信英文上文；`good_en` = 首要英文候选有足够证据；
+/// `en_zipf_max` = 英文池里最强的静态频率（百分之一 Zipf）；`total_freq` = 中文
+/// 词库总词频（先验归一化的分母，0 = 不可用）。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn classify_intent(
     raw_input: &str,
     zh: &[Candidate],
     en: &[Candidate],
     recent_en: bool,
     good_en: bool,
+    en_zipf_max: u16,
+    total_freq: u64,
 ) -> Option<IntentBand> {
     if en.is_empty() {
         return None; // 不混排，原样返回 zh
@@ -175,6 +265,13 @@ pub(crate) fn classify_intent(
         // 读法（全拼前缀 rug→如果、简拼 yidd→一点点），就更可能是在
         // 打中文。「不明确的英文」不要抢前排，退到末位保留入口。
         return Some(IntentBand::ChineseFirst);
+    }
+    // **纯声母简拼**：`shy`/`sms`/`sds` 这类串首音节没打全，上面的判据
+    // 看不见，但它们同样是真·简拼打法，中文那边往往有几百条真实词条。
+    // 中文词条的先验压过 E0 ⇒ 交替混排（中文回到首位，英文退到第 2 位
+    // 仍可点），而不是让英文 Exact 独占前三个槽位。
+    if abbrev_prior_beats_en(zh, raw_input, en_zipf_max, total_freq) {
+        return Some(IntentBand::Mixed);
     }
     // 中文读不出来 ⇒ 用户就是在打英文。
     if good_en {

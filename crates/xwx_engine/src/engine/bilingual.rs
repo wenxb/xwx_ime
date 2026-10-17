@@ -71,9 +71,29 @@ impl ImeEngine {
         let e0_zipf = ranked.first().map(|h| h.zipf_centi).unwrap_or(0);
         let e0_unigram = ranked.first().map(|h| h.user_unigram).unwrap_or(0);
         let recent_en = english_context.previous_word.is_some();
+        // 英文池里**最强**的静态先验（不是 E0 的）：E0 可能是很弱的补全词，
+        // 而池里同时躺着一个高频词——用 E0 比先验会把「明显在打英文」的
+        // 输入误判成中文（实测 `str` 池里有 street 528，E0 却是 str 327）。
+        let en_zipf_max = ranked
+            .hits
+            .iter()
+            .map(|h| h.zipf_centi)
+            .max()
+            .unwrap_or(e0_zipf);
         let en_cands = ranked.candidates(key.len());
         let good_en = good_english(e0_zipf, e0_unigram);
-        let band = match classify_intent(raw_input, &zh, &en_cands, recent_en, good_en) {
+        // 中文词频总和只影响「简拼先验是否压过英文」这一条判据；词库不可用
+        // 时按 0 处理（该判据不成立），不阻断查询。
+        let total_freq = self.dict.total_freq().unwrap_or(0);
+        let band = match classify_intent(
+            raw_input,
+            &zh,
+            &en_cands,
+            recent_en,
+            good_en,
+            en_zipf_max,
+            total_freq,
+        ) {
             Some(b) => b,
             None => return Ok(zh),
         };
