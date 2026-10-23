@@ -110,6 +110,7 @@ impl MmapDict {
         // 「每音节一个字母」建 key，`shh`（时候）在表里对应 `sh`，
         // 只查字面串会漏掉它——实测 `shh` 的候选里根本没有「时候」。
         let mut out: Vec<Candidate> = Vec::new();
+        let mut index = crate::candidate_index::CandidateIndex::default();
         for read in super::abbrev::abbrev_variant_reads(abbrev) {
             // **折叠校验（⑤⑩⑥）**：「去 h」变体声称用户把 zh/ch/sh 当整体声母
             // 敲，对应音节必须真的以该声母开头。不放行它，`sh` 会经折叠变体
@@ -122,15 +123,12 @@ impl MmapDict {
                 {
                     continue;
                 }
-                if let Some(e) = out
-                    .iter_mut()
-                    .find(|e| e.word == c.word && e.pinyin == c.pinyin)
-                {
-                    // 同一词条经不同写法命中：保留词频更高的一条。
-                    if c.freq > e.freq {
-                        *e = c;
+                if let Some(i) = index.find(&out, &c) {
+                    if c.freq > out[i].freq {
+                        out[i] = c;
                     }
                 } else if out.len() < MAX_LOOKUP_RESULTS as usize {
+                    index.insert(out.len(), &c);
                     out.push(c);
                 }
             }
@@ -435,10 +433,9 @@ impl MmapDict {
             out.push(c);
         }
         for ((word, py), freq) in completions {
-            if seen.contains(&(word.clone(), py.clone())) {
+            if !seen.insert((word.clone(), py.clone())) {
                 continue;
             }
-            seen.insert((word.clone(), py.clone()));
             out.push(Candidate::new(word, py, freq));
         }
 
@@ -459,12 +456,7 @@ impl MmapDict {
         // `sh` 第 28 名「谁」的拼音在 `shei`/`shui` 之间跳、`zh` 的简拼层
         // 整段尾序都不同。对拍工具与「同一个词不该在两次重启间换位置」
         // 都要求这里是全序。
-        out.sort_by(|a, b| {
-            b.freq
-                .cmp(&a.freq)
-                .then_with(|| a.word.cmp(&b.word))
-                .then_with(|| a.pinyin.cmp(&b.pinyin))
-        });
+        super::top::sort_mixed_top(&mut out);
         // **按词频截断**(而不是收集期先到先得):上限仍是 MAX_LOOKUP_RESULTS,
         // 但留下的必须是分最高的那批。实测 `meiy`:旧口径 500 条里没有
         // 「没有」(词频 504685,应为第 1),因为它的枚举分支排在靠后位置,

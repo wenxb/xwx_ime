@@ -22,6 +22,7 @@
 
 pub use engine::trace;
 pub mod candidate;
+mod candidate_index;
 pub mod corrector;
 pub mod dict;
 pub mod english;

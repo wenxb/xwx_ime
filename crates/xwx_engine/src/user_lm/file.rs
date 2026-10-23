@@ -340,6 +340,8 @@ impl UserLM {
                 text.push('\n');
             }
         }
+        // 磁盘同步不再持有用户表，避免并发学习为此复制整表。
+        drop(snap);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }

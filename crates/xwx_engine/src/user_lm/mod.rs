@@ -177,6 +177,9 @@ impl UserLmSnapshot {
     /// 调用一次,因此它必须是 O(1) 哈希查找、不加锁(快照 `Arc` 共享)。
     /// 拼接键一次分配、`contains(&str)` 零拷贝(见 `blocklist` 字段注释)。
     pub fn is_blocked(&self, pinyin_key: &str, word: &str) -> bool {
+        if self.tables.blocklist.is_empty() {
+            return false;
+        }
         let mut k = String::with_capacity(pinyin_key.len() + 1 + word.len());
         k.push_str(pinyin_key);
         k.push('\u{1}');
@@ -521,3 +524,5 @@ impl From<Arc<UserTables>> for UserLmSnapshot {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod perf_tests;

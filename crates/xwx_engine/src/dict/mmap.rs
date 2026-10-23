@@ -243,6 +243,27 @@ impl MmapDict {
         Ok(out)
     }
 
+    /// 主库同词同音的首个频率；仍校验整个词块，不因命中提前吞掉坏数据。
+    pub(crate) fn entry_freq(&self, pinyin: &str, word: &str) -> Result<Option<u64>, DictError> {
+        let Some(rec) = self.find(pinyin)? else { return Ok(None) };
+        let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
+        let mut pos = 0;
+        let mut found = None;
+        while pos < block.len() {
+            let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
+            let bytes = block.get(pos + 1..pos + 1 + wl)
+                .ok_or(DictError::Corrupt("词块越界"))?;
+            let freq = read_u32(block, pos + 1 + wl)?;
+            let entry = std::str::from_utf8(bytes)
+                .map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
+            if found.is_none() && entry == word {
+                found = Some(freq as u64);
+            }
+            pos += 1 + wl + 4;
+        }
+        Ok(found)
+    }
+
     /// 线性扫词条区求词频总和（约 32MB 词条区 / 186 万条）。
     ///
     /// **只有 v1 数据文件会走到这里**。v2 把这个和写在头部，就没有这一步了：

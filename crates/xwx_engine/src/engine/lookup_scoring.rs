@@ -7,6 +7,9 @@
 use super::lookup::EntryEvidence;
 use super::*;
 
+mod literal;
+mod sentence;
+
 impl ImeEngine {
     pub(in crate::engine) fn fill_entry_evidence(
         &self,
@@ -17,11 +20,11 @@ impl ImeEngine {
         let DictStore::Mmap(d) = &self.dict else {
             return Ok(());
         };
-        let Some(e) = d.lookup(&c.pinyin)?.into_iter().find(|e| e.word == c.word) else {
+        let Some(freq) = d.entry_freq(&c.pinyin, &c.word)? else {
             return Ok(());
         };
         if c.freq == 0 {
-            c.freq = e.freq;
+            c.freq = freq;
         }
         let Some(ev) = ev else {
             return Ok(());
@@ -29,7 +32,7 @@ impl ImeEngine {
         if ev.total == 0 || c.covered < pinyin.len() {
             return Ok(());
         }
-        let dict_logp = ((e.freq.max(1) as f64).log10() - (ev.total as f64).log10()) as f32;
+        let dict_logp = ((freq.max(1) as f64).log10() - (ev.total as f64).log10()) as f32;
         let lm = self.lm.score_only(&ev.state, &c.word);
         c.score = dict_logp + (lm - self.lm.floor_log10()) * self.lm_weight;
         Ok(())
@@ -44,16 +47,24 @@ impl ImeEngine {
     /// 首页被 500K 档的 [s][h] 二字词(−4.18)整页占住。改分后同读法同分。
     /// `rescored=false`（重算未发生，如非降级范围）维持原「去重跳过」，
     /// 非 降级世界的分数一个都不动。
-    pub(super) fn push_rescored(ranked: &mut Vec<Candidate>, c: Candidate, rescored: bool) {
-        match ranked.iter_mut().find(|e| e.word == c.word && e.pinyin == c.pinyin) {
-            Some(e) => {
+    pub(super) fn push_rescored(
+        ranked: &mut Vec<Candidate>,
+        index: &mut crate::candidate_index::CandidateIndex,
+        c: Candidate,
+        rescored: bool,
+    ) {
+        match index.find(ranked, &c) {
+            Some(i) => {
                 if rescored {
-                    e.score = c.score;
-                    e.covered = c.covered;
-                    e.freq = c.freq;
+                    ranked[i].score = c.score;
+                    ranked[i].covered = c.covered;
+                    ranked[i].freq = c.freq;
                 }
             }
-            None => ranked.push(c),
+            None => {
+                index.insert(ranked.len(), &c);
+                ranked.push(c);
+            }
         }
     }
 
@@ -106,10 +117,11 @@ impl ImeEngine {
         // 首词(位置 0)的 LM 状态由真实上文 ctx 给出,这是精确的
         // (首词的前文就是已上屏文本,不存在近似问题)。
         let initial = self.lm.state_from_context(ctx);
+        let scorer = self.lm.prepare(&initial);
 
         // 同一 (word, pinyin) 可能由多条边给出(不同音节链切到同一拼音
         // key,或模糊展开键与精确键撞车),保留得分最高的一条。
-        let mut best: HashMap<(String, String), Candidate> = HashMap::new();
+        let mut best: HashMap<(&str, &str), Candidate> = HashMap::new();
         for edge in &lattice[0] {
             if edge.gap {
                 continue; // 空词边不是候选(它只是让 beam 跨过一段字母)
@@ -119,7 +131,7 @@ impl ImeEngine {
             // 上屏下恰恰有用(用户可以先上屏这一段,剩下的留给下一轮);
             // 它们在排序里落在自己的 u_min 桶内、按分数靠后,不会挤掉
             // 完整读法。容错格会带来更多这类前缀边,同样按低分排在桶内。
-            let logp = self.lm.score_only(&initial, &edge.word);
+            let logp = scorer.score(&edge.word);
             let dict_logp = if total_freq > 0 {
                 ((edge.freq.max(1) as f64).log10() - log10_total) as f32
             } else {
@@ -165,11 +177,11 @@ impl ImeEngine {
                 matched_len: 0,
                 english: None,
             };
-            let entry = best
-                .entry((cand.word.clone(), cand.pinyin.clone()))
-                .or_insert_with(|| cand.clone());
-            if cand.score > entry.score {
-                *entry = cand;
+            match best.entry((&edge.word, &edge.pinyin)) {
+                std::collections::hash_map::Entry::Vacant(e) => { e.insert(cand); }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    if cand.score > e.get().score { e.insert(cand); }
+                }
             }
         }
 
@@ -219,10 +231,8 @@ impl ImeEngine {
         // 尾部连续 k≥2 个真声母字母(`buyy` 的 `yy`)。
         const INITIAL_LETTERS: &[u8] = b"bpmfdtnlgkhjqxrzcsyw";
         (2..n).any(|k| {
-            !self.segmenter.segment(&pinyin[..n - k]).is_empty()
-                && pinyin[n - k..]
-                    .bytes()
-                    .all(|c| INITIAL_LETTERS.contains(&c))
+            pinyin[n - k..].bytes().all(|c| INITIAL_LETTERS.contains(&c))
+                && !self.segmenter.segment(&pinyin[..n - k]).is_empty()
         })
     }
 

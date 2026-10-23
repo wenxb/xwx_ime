@@ -4,6 +4,7 @@
 use super::*;
 
 mod coverage;
+mod compact;
 
 pub(super) use coverage::{tail_only, unexplained_letters, unreachable_tail};
 
@@ -158,8 +159,8 @@ fn lexical_evidence(c: &Candidate) -> f32 {
 /// 拿到 1.46 的优势压过「立即」,而两者的词频差只有 0.00007。分开之后:词频
 /// 证据(通道)决定谁在哪个层,LM 只决定层内次序。
 ///
-/// 拼装候选(`freq == 0`,如 `nihaobeijin` 的「你好北京」)没有词条词频,只能
-/// 退回 `score` 比——它们比的是「串起来成不成句」,不是单条词条的证据。
+/// 拼装候选没有词条词频。其分数只允许已有 n 的 n→ng 混淆豁免；
+/// 完整开音节不能仅凭整句 LM 被追加 n/ng（`ka` 不应被猜成 `kan`）。
 ///
 /// 对手池只收**拼音字母数与输入相等**的候选:`beijin` 的「被」(f2998064)只解释
 /// 了输入的前三个字母,不是「用户打完了」的同类;拿它的词频当门槛会把北京
@@ -209,7 +210,8 @@ fn demote_non_dominant_completions(keys: &mut [PlainKey], ranked: &[Candidate], 
         // 北京);元音/其他类截断(`xiala`→下来、`jianji`→简介)不是现实的
         // 打错形态——输入更可能是另一个打完整的词,永不越过整串精确词条
         // (band 1),只在一切层首之后按分数竞争。
-        if nasal_completion(inp, c) && mine >= theirs + COMPLETION_DOMINANCE {
+        let can_dominate = evidence.is_finite() || inp.ends_with('n') || !theirs.is_finite();
+        if can_dominate && mine >= theirs + COMPLETION_DOMINANCE && nasal_completion(inp, c) {
             k.completion = false;
             k.band = 0;
         } else {
@@ -230,9 +232,8 @@ fn demote_non_dominant_completions(keys: &mut [PlainKey], ranked: &[Candidate], 
 /// 纯字符串推导,O(1),不触格与 `Candidate` 结构;形状异常(补全字母
 /// 跨出尾音节、非前缀关系)一律按非鼻音处理,安全侧收敛。
 fn nasal_completion(inp: &str, c: &Candidate) -> bool {
-    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
-    let extra = cp.len().saturating_sub(inp.len());
-    if extra == 0 || !cp.starts_with(inp) {
+    let extra = compact::letters(&c.pinyin).count().saturating_sub(inp.len());
+    if extra == 0 || !compact::starts_with(&c.pinyin, inp) {
         return false;
     }
     let token = c.pinyin.split(' ').next_back().unwrap_or("");

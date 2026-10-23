@@ -411,6 +411,7 @@ impl ImeEngine {
             } else {
                 None
             };
+            let mut push_index = crate::candidate_index::CandidateIndex::new(&ranked);
             for mut c in self.best_chain_candidates(
                 pinyin,
                 ctx,
@@ -430,7 +431,7 @@ impl ImeEngine {
                 // 两处同式，`zmg` 回到 45 名、keystrokes 回到 0.877（⑤⑩⑥）。
                 let rescored = ev.is_some() && c.covered >= pinyin.len();
                 self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
-                Self::push_rescored(&mut ranked, c, rescored);
+                Self::push_rescored(&mut ranked, &mut push_index, c, rescored);
             }
             // **词级简拼候选**：在简拼格上跑与精确路**同一个**抽取
             // （位置 0 的边 + 该边终点的最优补全分，见 `lattice_candidates`），
@@ -446,7 +447,7 @@ impl ImeEngine {
                 // 整串长度，故 `fill_entry_evidence` 内部的整串判据必定成立。
                 let rescored = ev.is_some() && c.covered >= pinyin.len();
                 self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
-                Self::push_rescored(&mut ranked, c, rescored);
+                Self::push_rescored(&mut ranked, &mut push_index, c, rescored);
             }
             // —— 阶段 B：简拼纠错（证据闸 + 渐进披露，见 `abbrev_correct.rs`）——
             // 触发闸/分数闸/合并整体在 `try_abbrev_correction`（`inline(never)`

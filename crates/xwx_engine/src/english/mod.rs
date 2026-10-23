@@ -15,6 +15,8 @@ pub mod recall;
 mod synth;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod recall_equivalence_tests;
 
 #[cfg(test)]
 pub(crate) use synth::{

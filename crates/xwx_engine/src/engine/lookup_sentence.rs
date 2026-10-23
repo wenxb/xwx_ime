@@ -1,8 +1,6 @@
 //! 整句候选的追加与置顶。
 //!
-//! 从 `lookup_candidates` 抽出，**不改变任何判据或次序**：调用点仍负责
-//! `reachable` / 长度门槛与「含纠错的格优先」的选择，本模块只做
-//! 「在给定的整句格上取 n-best → 去重入池 → 排序截断 → 置顶」。
+//! 调用点负责可达性与长度门槛；此处取 n-best、补回缺失的字面整句，再排序置顶。
 
 use super::*;
 
@@ -21,15 +19,16 @@ impl ImeEngine {
     ) -> Result<(), EngineError> {
         // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
         let mut sentence_keys: Vec<(String, String, f32)> = Vec::new();
-        for c in
-            self.best_chain_candidates(
-            pinyin,
-            ctx,
-            sentence_lattice,
-            SpellingKind::Exact,
-            ABBREV_PER_WORD_PENALTY,
-        )?
+        let sentences = if sentence_lattice[0].iter().any(|e| e.end == pinyin.len())
+            || !pinyin.as_bytes().last().is_some_and(|b| b"aeiouvngr".contains(b))
         {
+            self.best_chain_candidates(
+                pinyin, ctx, sentence_lattice, SpellingKind::Exact, ABBREV_PER_WORD_PENALTY,
+            )?
+        } else {
+            self.sentence_candidates(pinyin, ctx, sentence_lattice)?
+        };
+        for c in sentences {
             if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
                 sentence_keys.push((c.word.clone(), c.pinyin.clone(), c.score));
                 ranked.push(c);

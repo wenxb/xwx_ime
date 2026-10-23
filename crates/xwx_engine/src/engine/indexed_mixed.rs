@@ -67,6 +67,7 @@ pub(super) fn merge_indexed_mixed(
     // 副索引里那条词条自己的词频（与主索引同源，见 `abbrev_to_bin.py`）。
     let log10_total = (total as f64).log10();
     let state = engine.lm.state_from_context(ctx);
+    let scorer = engine.lm.prepare(&state);
     let floor = engine.lm.floor_log10();
     // 去重:同一个 (词, 拼音) 已在表里就不再进第二份——兜底路/精确路与索引
     // 供给有重叠(如 `defe` 的「德风」来自补全边,而它同时是一条混合读法),
@@ -81,7 +82,7 @@ pub(super) fn merge_indexed_mixed(
             continue;
         }
         let dict_logp = ((c.freq.max(1) as f64).log10() - log10_total) as f32;
-        let lm = engine.lm.score_only(&state, &c.word);
+        let lm = scorer.score(&c.word);
         c.score = dict_logp + (lm - floor) * engine.lm_weight;
         c.spelling = SpellingKind::Abbrev;
         c.covered = pinyin.len();

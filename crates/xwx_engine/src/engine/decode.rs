@@ -115,6 +115,10 @@ impl ImeEngine {
                         touched.push(edge.end);
                         continue;
                     }
+                    let used = arena[node_idx].used_edits + edge.edit_count;
+                    if used > MAX_TYPO_EDITS {
+                        continue;
+                    }
                     let (logp, next_state) = self.lm.score(&arena[node_idx].state, &edge.word);
                     let dict_logp = if total_freq > 0 {
                         // freq 为 0 的词条按 1 兜底（log10(1/T) 仍为有限值）
@@ -122,12 +126,6 @@ impl ImeEngine {
                     } else {
                         0.0
                     };
-                    // 整条路径的容错编辑预算:预算跟着 beam
-                    // 状态走,超预算的分支不再扩展。
-                    let used = arena[node_idx].used_edits + edge.edit_count;
-                    if used > MAX_TYPO_EDITS {
-                        continue;
-                    }
                     let idx = arena.len();
                     arena.push(BeamNode {
                         // 模糊惩罚是同量纲(log10)的加性扣分:精确边 0,
@@ -248,14 +246,14 @@ impl ImeEngine {
         // `'` 在整串解不出时形同不存在。这里用**与格构建逐字相同**的判据
         // (`ImeEngine::key_respects_boundaries`)筛切法:穿界的音节一律不要。
         // `bounds` 为 None 时下面每次判断都恒真,无 `'` 输入逐字节不变。
-        let segmented = (1..=pinyin.len()).rev().find(|&k| {
-            self.segmenter
-                .segment(&pinyin[..k])
-                .iter()
+        let segmented = (1..=pinyin.len()).rev().find_map(|k| {
+            let segments = self.segmenter.segment(&pinyin[..k]);
+            segments.iter()
                 .any(|chain| Self::key_respects_boundaries(&chain.join(" "), bounds))
+                .then_some((k, segments))
         });
-        if let Some(k) = segmented {
-            for seg in self.segmenter.segment(&pinyin[..k]) {
+        if let Some((k, segments)) = segmented {
+            for seg in segments {
                 let joined = seg.join(" ");
                 if !Self::key_respects_boundaries(&joined, bounds) {
                     continue; // 这条切法跨了 `'`:整条丢掉
@@ -337,13 +335,14 @@ impl ImeEngine {
         });
 
         let state = self.lm.state_from_context(ctx);
+        let scorer = self.lm.prepare(&state);
         // 与 decode_beam 同一打分公式：log10(freq/总词频) + lm_weight × logp
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
         let mut ranked: Vec<Candidate> = merged
             .into_iter()
             .map(|mut c| {
-                let lm_score = self.lm.score_only(&state, c.word.as_str());
+                let lm_score = scorer.score(c.word.as_str());
                 let dict_logp = if total_freq > 0 {
                     ((c.freq.max(1) as f64).log10() - log10_total) as f32
                 } else {

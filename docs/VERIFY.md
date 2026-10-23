@@ -1,5 +1,8 @@
 # 实机验证清单
 
+完整尾音排序修复（`haihuika` 等）的范围与自动化验收见
+[`literal_tail_fix.md`](literal_tail_fix.md)；真实桌面协作仍按本清单验证。
+
 > `cargo test` 有 **401** 个测试全绿（295 engine 单测 + 6 ibus 单测 + 9 bin +
 > **55 D-Bus 集成**），但**它仍不是实机可用的证据**。
 >

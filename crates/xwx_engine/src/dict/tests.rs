@@ -562,3 +562,4 @@ fn real_abbrev_index_never_returns_more_characters_than_letters() {
 
 
 mod corrupt;
+mod entry_freq;

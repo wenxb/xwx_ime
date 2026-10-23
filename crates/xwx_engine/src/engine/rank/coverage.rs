@@ -65,8 +65,7 @@ pub(in crate::engine) fn tail_only(inp: &str, c: &Candidate) -> bool {
     if c.spelling == SpellingKind::Abbrev {
         return false; // 简拼层覆盖整串（构造保证），不存在「只解释尾部」
     }
-    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
-    cp.len() < inp.len() && inp.ends_with(cp.as_str())
+    compact::letters(&c.pinyin).count() < inp.len() && compact::is_suffix_of(&c.pinyin, inp)
 }
 
 /// 候选**未解释的输入字母数**(覆盖度度量;不再是排序首键——
@@ -99,14 +98,15 @@ pub(in crate::engine) fn unexplained_letters(inp: &str, c: &Candidate) -> usize 
     if c.spelling == SpellingKind::Abbrev {
         return 0; // 简拼层构造上覆盖整串
     }
-    let cp: String = c.pinyin.chars().filter(|ch| *ch != ' ').collect();
-    if cp.starts_with(inp) {
+    let cp_len = compact::letters(&c.pinyin).count();
+    if compact::starts_with(&c.pinyin, inp) {
         0 // 补全:候选拼音比输入更长(或相等),输入还没打完
-    } else if cp.len() < inp.len() && (inp.starts_with(cp.as_str()) || inp.ends_with(cp.as_str()))
+    } else if cp_len < inp.len()
+        && (compact::is_prefix_of(&c.pinyin, inp) || compact::is_suffix_of(&c.pinyin, inp))
     {
         // 只覆盖前缀:漏掉 inp[cp.len()..]；只覆盖后缀(zmgai → 该):
         // 漏掉前缀 inp[..inp.len() - cp.len()]。两种都只是「解释了一段」。
-        inp.len() - cp.len()
+        inp.len() - cp_len
     } else {
         0 // 非前缀关系:解释数取保守下界 0(见函数级注释)
     }

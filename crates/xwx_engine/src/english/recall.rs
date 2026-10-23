@@ -13,7 +13,7 @@ use crate::user_lm::UserLmSnapshot;
 
 use super::bigram::EnglishBigram;
 use super::context::EnglishContext;
-use super::dict::EnglishDict;
+use super::dict::{EnglishDict, EnglishEntryRef};
 use super::rank::{conditional_base, user_counts, EnglishHit};
 
 /// 单个来源的条数上限（静态前缀 / 用户前缀 / 两种上文列表）。
@@ -55,7 +55,21 @@ pub(crate) fn recall_english(
     // 去重按**目标完整 key**；BTreeMap 让遍历顺序确定（结果与插入顺序无关）。
     let mut merged: BTreeMap<String, EnglishHit> = BTreeMap::new();
 
+    // 懒取上文行：无候选时不新增一次读取/错误路径。
+    let cached_row = std::cell::Cell::new(None);
+    let context_row = || -> Result<Option<super::bigram::BigramRow>, super::EnglishError> {
+        if let Some(row) = cached_row.get() {
+            return Ok(row);
+        }
+        let row = match (static_bigram, ctx.previous_word) {
+            (Some(model), Some(prev)) => model.row(prev)?,
+            _ => None,
+        };
+        cached_row.set(Some(row));
+        Ok(row)
+    };
     let push = |key: &str,
+                    known: Option<EnglishEntryRef<'_>>,
                     merged: &mut BTreeMap<String, EnglishHit>|
      -> Result<(), super::EnglishError> {
         if merged.contains_key(key) {
@@ -64,20 +78,15 @@ pub(crate) fn recall_english(
         if !allow_completion && key != input_key {
             return Ok(()); // 短串门槛对所有来源统一生效
         }
-        let Some(e) = dict.exact(key)? else {
+        let Some(e) = (match known { Some(e) => Some(e), None => dict.exact(key)? }) else {
             return Ok(()); // 升级后已移除的词不凭旧计数复活
         };
         let (uni, bi) = user_counts(snapshot, ctx, e.key);
         // M2：静态条件基础项（该 prev 行存在且收录了这个词对时才算，
         // 不存在时 `conditional_base` 返回 `None`，分数退回 M1 的 z）。
-        let static_base = match (static_bigram, ctx.previous_word) {
-            (Some(model), Some(prev)) => {
-                let row = model.row(prev)?;
-                match row {
-                    Some(r) => conditional_base(e.zipf_centi, count_in(&r, model, e.key), r.observed_total),
-                    None => None,
-                }
-            }
+        let static_base = match (static_bigram, context_row()?) {
+            (Some(model), Some(r)) =>
+                conditional_base(e.zipf_centi, count_in(&r, model, e.key), r.observed_total),
             _ => None,
         };
         merged.insert(
@@ -100,28 +109,29 @@ pub(crate) fn recall_english(
     };
 
     // ① 完整 key 精确查询：不受前缀截断影响。
-    push(input_key, &mut merged)?;
-    // ② 静态前缀 Top-32。
-    for e in dict.prefix_top(input_key)? {
-        push(e.key, &mut merged)?;
-    }
-    // ③ 用户前缀索引：学过的长尾词不会被静态 Top-32 永久挡住。
-    for key in snapshot.english_prefix_top(input_key).iter().take(SOURCE_LIMIT) {
-        push(key, &mut merged)?;
+    push(input_key, None, &mut merged)?;
+    if allow_completion {
+        // 静态来源已持有词条；用户来源仍须确认词库中存在。
+        for e in dict.prefix_top(input_key)? {
+            push(e.key, Some(e), &mut merged)?;
+        }
+        for key in snapshot.english_prefix_top(input_key).iter().take(SOURCE_LIMIT) {
+            push(key, None, &mut merged)?;
+        }
     }
     // ④/⑤ 上文列表（无英文上文时不查，见第 5 节）。
     if let Some(prev) = ctx.previous_word {
         for key in snapshot.english_next_top(prev).iter().take(SOURCE_LIMIT) {
             if key.starts_with(input_key) {
-                push(key, &mut merged)?;
+                push(key, None, &mut merged)?;
             }
         }
         // ⑤ M2 静态上文 Top-32 中匹配当前前缀的词。
         if let Some(model) = static_bigram {
-            if let Some(row) = model.row(prev)? {
+            if let Some(row) = context_row()? {
                 for e in row.iter(model).take(SOURCE_LIMIT) {
                     if e.next.starts_with(input_key) {
-                        push(e.next, &mut merged)?;
+                        push(e.next, None, &mut merged)?;
                     }
                 }
             }

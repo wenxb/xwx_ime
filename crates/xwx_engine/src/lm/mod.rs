@@ -554,5 +554,8 @@ impl LanguageModel for LmStore {
     }
 }
 
+mod prepared;
+#[cfg(test)]
+mod prepared_tests;
 #[cfg(test)]
 mod tests;

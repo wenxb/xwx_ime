@@ -78,16 +78,17 @@ pub(super) fn fold_with_sources(
     let mut out: Vec<(Candidate, RecallSource)> = Vec::with_capacity(cands.len());
     let mut index: HashMap<(String, String), usize> = HashMap::new();
     for (c, src) in cands {
-        match index.get(&(c.word.clone(), c.pinyin.clone())) {
-            Some(&i) => {
+        match index.entry((c.word.clone(), c.pinyin.clone())) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                let i = *e.get();
                 // 同词同音：保留消费范围更大的那条（并列时保留先到的，稳定），
                 // 来源跟着胜出的那条走。
                 if c.covered > out[i].0.covered {
                     out[i] = (c, src);
                 }
             }
-            None => {
-                index.insert((c.word.clone(), c.pinyin.clone()), out.len());
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(out.len());
                 out.push((c, src));
             }
         }
