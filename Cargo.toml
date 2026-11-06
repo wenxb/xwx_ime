@@ -1,7 +1,9 @@
 [workspace]
 members = [
+    "crates/xwx_config",
     "crates/xwx_engine",
     "crates/xwx_ibus",
+    "crates/xwx_setup",
 ]
 resolver = "2"
 
@@ -30,10 +32,12 @@ tokio       = { version = "1", features = ["full"] }
 tracing     = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror   = "1"
+xwx_config  = { path = "crates/xwx_config" }
 xwx_engine  = { path = "crates/xwx_engine" }
 xwx_ibus    = { path = "crates/xwx_ibus" }
 
 [dependencies]
+xwx_config.workspace   = true
 xwx_engine.workspace   = true
 xwx_ibus.workspace     = true
 tokio.workspace        = true
@@ -66,6 +70,10 @@ maintainer-scripts = "data/debian"
 assets = [
     ["data/debian/xwx.xml", "usr/share/ibus/component/xwx.xml", "644"],
     ["target/release/xwx_ime", "usr/libexec/ibus-engine-xwx", "755"],
+    # 首选项面板:GNOME 系统设置按 `ibus-setup-<引擎名>.desktop` 找它,
+    # Exec 必须是绝对路径(系统目录里没有 $PATH 解析)。
+    ["target/release/ibus-setup-xwx", "usr/libexec/ibus-setup-xwx", "755"],
+    ["data/ibus-setup-xwx.desktop", "usr/share/applications/ibus-setup-xwx.desktop", "644"],
     # 词库与简拼副索引随包分发:没有它们,装了包也只退化成内置小词库(Q5「不依赖
     # 在线重建」)。引擎的数据路径已支持系统级目录(见 src/lm_path.rs)。
     ["data/dict.bin", "usr/share/xwx/dict.bin", "644"],

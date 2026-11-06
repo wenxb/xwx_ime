@@ -1,0 +1,10 @@
+[package]
+name    = "xwx_config"
+version.workspace = true
+edition.workspace = true
+description = "XWX 用户配置：读写 ~/.config/xwx/config.toml"
+
+[dependencies]
+serde.workspace      = true
+toml      = "0.8"
+tracing.workspace    = true

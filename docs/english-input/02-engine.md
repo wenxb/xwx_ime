@@ -202,8 +202,10 @@ M2 的条件频率如何替换基础 z 项，见 [预测分册](04-prediction.md
 先把 zh 中非 echo 候选记为 Z。第一英文候选为 E0。
 
 定义 good_en：E0 的 zipf_centi >= 300，或其用户一元计数 >= 3。
-定义 strong_completion：输入长度 >=3、extra <=4、2×输入长度 >= 目标词长度。
 定义 recent_en：会话传入的英文上一词有效，且没有语言/应用操作边界。
+定义 **中文可读**：有 `freq > FILLER_FREQ_TIER` 的真实中文词条，其全拼以输入开头，
+或能按「首音节打全、后续音节取非空前缀」读出输入。`ann → an n → 按钮`、
+`rug → 如果`、`yidd → 一点点` 都属于此类，不依赖用户先选词学习。
 
 定义 **abbrev_prior**（2026-10-17 增，见 8.1）：中文里有**整串规范简拼**命中的
 词条（`spelling == Abbrev`、`covered` 吃满输入、`freq > FILLER_FREQ_TIER`、
@@ -217,18 +219,16 @@ M2 的条件频率如何替换基础 z 项，见 [预测分册](04-prediction.md
 |---|---|
 | 英文列表空 | 不混排，原样返回 zh |
 | Z 为空 | EnglishFirst；真实英文在原文兜底前 |
-| recent_en 且 good_en | EnglishFirst |
-| 无 recent_en，输入长度 <=2 | Mixed，仅精确英文能到这里 |
-| strong_zh 且 E0 为 Exact 且 good_en | Mixed，中文仍首选 |
-| strong_zh | ChineseFirst |
-| abbrev_prior | Mixed，中文回到首选、英文退到第 2 位 |
-| good_en 且 E0 为 Exact | EnglishFirst |
-| good_en 且 strong_completion | EnglishFirst |
-| good_en | Mixed |
-| 其他 | ChineseFirst |
+| recent_en 且 good_en，E0 为 Exact，且 strong_zh | EnglishFirst；保留 you/can 等完整同形词的连续英文输入 |
+| 输入长度 <=2 | Mixed；无英文上文时只有精确英文，有上文时也可补全 |
+| 中文可读 | ChineseFirst；英文上文不能绕过未打完的全拼或混合简拼保护 |
+| abbrev_prior | Mixed；中文简拼保持首选，英文上文同样不能绕过 |
+| good_en | EnglishFirst |
+| 其他 | Mixed |
 
-用户全局计数可以改善英文内部排序，但不能在无英文上文时绕过 strong_zh 抢中文首选。
-recent_en 只影响有实际英文词条/前缀证据的查询；nihao 没有英文召回时仍是中文。
+用户全局计数可以改善英文内部排序，但不能在无英文上文时抢走可读中文的首选。
+英文上文仅为完整全拼与完整英文同形（如 you/can）保留优先权，不能因 ann/ans/shy
+恰好也是完整英文键，就把按钮/按时/使用推到英文之后。nihao 没有英文召回时仍是中文。
 不使用“包含某几个字母”“无法全拼切分”“输入很长”作为单独的英文判据。
 
 ### 8.1 abbrev_prior：纯声母简拼的补位判据

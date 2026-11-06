@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=XWX 首选项
+Name[zh_CN]=XWX 首选项
+Comment=设置 XWX 拼音输入法的默认语言
+Comment[zh_CN]=设置 XWX 拼音输入法的默认语言
+Exec=__XWX_SETUP__
+Icon=preferences-desktop-keyboard
+Terminal=false
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=Settings;

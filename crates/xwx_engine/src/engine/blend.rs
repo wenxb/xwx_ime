@@ -245,12 +245,19 @@ pub(crate) fn classify_intent(
     if !z_nonempty {
         return Some(IntentBand::EnglishFirst); // 输入不可能是拼音
     }
-    // **「英文串进行中」只认完整英文词**：E0 是 Exact 才说明用户在
-    // 连着打英文（thank/you/can——c07 的裁决）；E0 只是前缀补全
-    // （ke→keep、yidd→yiddish）证明不了「在打英文」，管不了分档。
+    // 英文上文只覆盖完整全拼的同形歧义（you/can），不跳过中文前缀或简拼保护。
     if recent_en
         && good_en
         && en.first().and_then(|c| c.english_match_kind()) == Some(EnglishMatchKind::Exact)
+        && zh.iter().any(|c| {
+            !c.echo
+                && c.spelling == SpellingKind::Exact
+                && c.covered >= raw_input.len()
+                && c.freq > super::filler_freq_tier()
+                && c.pinyin.bytes().filter(|&b| b != b' ').eq(
+                    raw_input.bytes().map(|b| b.to_ascii_lowercase()),
+                )
+        })
     {
         return Some(IntentBand::EnglishFirst);
     }

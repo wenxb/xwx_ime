@@ -7,6 +7,28 @@ impl InputSession {
     ///
     /// 出错时返回 `Err`（词典/模型查询失败等），会话状态不变。
     pub fn handle(&mut self, event: InputEvent) -> Result<SessionOutput, EngineError> {
+        if matches!(event, InputEvent::Char('.'))
+            && !self.english_mode
+            && !self.composing()
+            && self.last_digit_at.is_some_and(|at| at.elapsed() <= Duration::from_secs(3))
+        {
+            return Ok(SessionOutput::Commit(self.commit_raw(".".to_string())));
+        }
+        let out = self.handle_event(event)?;
+        // 只记真正交给应用的数字，数字选词不算输入数字。
+        self.last_digit_at = if !self.english_mode
+            && !self.composing()
+            && matches!(out, SessionOutput::Noop | SessionOutput::RefreshAndForward(_))
+            && matches!(event, InputEvent::Select(0..=9) | InputEvent::Char('0'..='9'))
+        {
+            Some(Instant::now())
+        } else {
+            None
+        };
+        Ok(out)
+    }
+
+    fn handle_event(&mut self, event: InputEvent) -> Result<SessionOutput, EngineError> {
         // —— M2 预测态优先（预测分册第 9 节）——
         // 预测处理若给出完整输出就直接返回；否则（Closed）说明面板已关，
         // 同一个事件继续走**一次**普通处理——绝不递归重放事件。
@@ -149,8 +171,9 @@ impl InputSession {
             // 命中某个 url 前缀时,`:` 直接进串——**不**落到标点臂
             // 上屏「mailto:」。`http:` 落键后串就是 url 前缀,下一键
             // (`/`、字母)使「前缀 + 非空后缀」命中,识别成立,
-            // 此后 `//` 等全部走识别态直通臂(`/` 不会被 fullwidth_punct
-            // 映射成顿号——这是本轮修掉的坏结果「http:、、xcom」)。
+            // 此后 `//` 等全部走识别态直通臂(`/` 不会被标点分支
+            // 提前上屏——初版的坏结果是「http:、、xcom」,现在若落进
+            // 标点分支则会变成「http:/」+ 后续字母另起组合)。
             // `:` 不与翻页键位冲突(`,`/`.`/`-`/`=` 才有翻页语义),
             // 唯一让渡:候选窗开着时对 `nihao:` 这类串敲 `:`,出的
             // 是识别态 `http:` 前缀而不是「拼音首选 + `:`」——

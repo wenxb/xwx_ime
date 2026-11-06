@@ -483,6 +483,15 @@ pub enum LmStore {
 }
 
 impl LmStore {
+    /// 内部搭配只取通用字符模型，不把用户学过的片段计成整词证据。
+    pub(crate) fn collocation_model(&self) -> Option<&WanxiangLM> {
+        match self {
+            Self::Bigram(_) => None,
+            Self::Wanxiang(lm) => Some(lm),
+            Self::Mixed(lm) => lm.base.collocation_model(),
+        }
+    }
+
     /// 以文本流加载模型（仅 bigram 变体支持；万象变体请用
     /// [`crate::ImeEngine::new_with_lm`] 或 mmap [`crate::wanxiang::WanxiangLM::open`]）。
     pub fn load(&mut self, reader: impl BufRead) -> Result<(), LmError> {

@@ -19,6 +19,7 @@ bin_dir   := env_var_or_default("XDG_BIN_HOME", home + "/.local/bin")
 data_home := env_var_or_default("XDG_DATA_HOME", home + "/.local/share")
 xwx_data  := data_home + "/xwx"
 sys_comp_dir := "/usr/share/ibus/component"
+app_dir   := "/usr/share/applications"
 
 default:
     @just --list
@@ -85,17 +86,22 @@ xml *args:
 # 每行都以 `@` 开头：不回显命令文本；进度用 ==> [n/6] 步骤行打印，
 # 警告与结尾摘要照旧。sudo 步骤单独提示，密码框出现时有上下文。
 install:
-    @echo "==> [1/6] 编译 release"
-    @cargo build --release --quiet -p xwx_ime
-    @echo "==> [2/6] 安装二进制 → {{bin_dir}}/xwx_ime"
+    @echo "==> [1/7] 编译 release"
+    @cargo build --release --quiet -p xwx_ime -p xwx_setup
+    @echo "==> [2/7] 安装二进制 → {{bin_dir}}/xwx_ime"
     @mkdir -p {{bin_dir}} {{xwx_data}}
     @install -m 755 {{target_dir}}/release/xwx_ime {{bin_dir}}/xwx_ime
-    @echo "==> [3/6] 安装组件 XML → {{sys_comp_dir}}（sudo，可能要求密码）"
-    @sed 's#__XWX_EXEC__#{{bin_dir}}/xwx_ime#g' data/xwx.xml > /tmp/xwx-component.xml
+    @echo "==> [3/7] 安装首选项面板 → {{bin_dir}}/ibus-setup-xwx"
+    @install -m 755 {{target_dir}}/release/ibus-setup-xwx {{bin_dir}}/ibus-setup-xwx
+    @echo "==> [4/7] 安装组件 XML 与桌面入口 → {{sys_comp_dir}}（sudo，可能要求密码）"
+    @sed -e 's#__XWX_EXEC__#{{bin_dir}}/xwx_ime#g' \
+         -e 's#__XWX_SETUP__#{{bin_dir}}/ibus-setup-xwx#g' data/xwx.xml > /tmp/xwx-component.xml
+    @sed 's#__XWX_SETUP__#{{bin_dir}}/ibus-setup-xwx#g' data/ibus-setup-xwx.desktop > /tmp/ibus-setup-xwx.desktop
     @sudo install -d {{sys_comp_dir}}
     @sudo install -m 644 /tmp/xwx-component.xml {{sys_comp_dir}}/xwx.xml
-    @rm -f /tmp/xwx-component.xml
-    @echo "==> [4/6] 词库 / 副索引 / 音节图 / 英文词库 / 语言模型检查"
+    @sudo install -m 644 /tmp/ibus-setup-xwx.desktop {{app_dir}}/ibus-setup-xwx.desktop
+    @rm -f /tmp/xwx-component.xml /tmp/ibus-setup-xwx.desktop
+    @echo "==> [5/7] 词库 / 副索引 / 音节图 / 英文词库 / 语言模型检查"
     # 词库与副索引：缺任何一个只是功能降级，提醒但不算失败。
     @if test -f data/dict.bin; then install -m 644 data/dict.bin {{xwx_data}}/dict.bin; \
     else echo "警告：data/dict.bin 不存在，引擎只剩极小的内置词库。"; fi
@@ -114,20 +120,25 @@ install:
     @if ! ls {{xwx_data}}/*.gram >/dev/null 2>&1 && ! test -f {{xwx_data}}/bigram.txt; then \
         echo "提示：未检测到语言模型，候选排序退化为纯词频（把万象 .gram 放进 {{xwx_data}}/ 即可）。"; \
     fi
-    @echo "==> [5/6] 刷新 ibus-daemon（重扫 component 目录）"
+    @echo "==> [6/7] 刷新并写入 ibus 缓存（重扫 component 目录）"
     # 刷新 daemon：重启会话里的 ibus-daemon，让它重扫 component 目录。
+    @if command -v ibus >/dev/null 2>&1; then ibus write-cache >/dev/null 2>&1 || true; fi
     @if command -v ibus >/dev/null 2>&1; then ibus restart >/dev/null 2>&1 || true; else for pid in $(pgrep -x ibus-daemon); do kill "$pid" 2>/dev/null || true; done; fi
-    @echo "==> [6/6] 完成"
+    @echo "==> [7/7] 完成"
     @echo "已安装  {{bin_dir}}/xwx_ime  $(stat -c%s {{bin_dir}}/xwx_ime) 字节  sha256 $(sha256sum {{bin_dir}}/xwx_ime | cut -c1-12)"
     @echo "组件    {{sys_comp_dir}}/xwx.xml  engine xwx / zh_CN"
+    @echo "面板    {{bin_dir}}/ibus-setup-xwx + {{app_dir}}/ibus-setup-xwx.desktop"
     @echo "词库    {{xwx_data}}/dict.bin + abbrev.bin + syllable_graph.bin"
     @echo "英文    {{xwx_data}}/english.bin（可选；缺省时英文通道自动关闭）"
     @echo "英二元  {{xwx_data}}/english_bigram.bin（可选；缺省时条件排序与零输入预测降级）"
-    @echo "输入源  gsettings set org.gnome.desktop.input-sources sources \"[('xkb','us'),('ibus','xwx')]\""
+    @echo "输入源  gsettings set org.gnome.desktop.input-sources sources \"[('ibus','xwx')]\""
+    @echo "        （单 IBus 源：密码框里 GNOME 才不会隐藏顶栏图标）"
 
 # 打 deb 包
 deb:
-    cargo build --release -p xwx_ime
+    cargo build --release -p xwx_ime -p xwx_setup
     mkdir -p data/debian
-    {{target_dir}}/release/xwx_ime --xml data/debian/xwx.xml --exec /usr/libexec/ibus-engine-xwx
+    {{target_dir}}/release/xwx_ime --xml data/debian/xwx.xml \
+        --exec /usr/libexec/ibus-engine-xwx \
+        --setup /usr/libexec/ibus-setup-xwx
     cargo deb -p xwx_ime --no-strip

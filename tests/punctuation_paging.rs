@@ -15,7 +15,7 @@ use support::scenario::{NI_ORDER, compose_ni};
 ///
 /// | key | window open      | window closed |
 /// |-----|------------------|---------------|
-/// | `.` | **next page**    | 。            |
+/// | `.` | **next page**    | 。；实际输入数字后 3 秒内紧接时为 `.` |
 /// | `,` | **prev page only if page > 0**, else ， | ， |
 /// | `=` | next page        | passthrough   |
 /// | `-` | prev page only if page > 0, else passthrough | passthrough |
@@ -112,4 +112,45 @@ fn comma_and_period_paging_state_machine_matches_librime() {
         !h.key(keyval::ascii('-'), 0),
         "空闲时 '-' 必须透传"
     );
+}
+
+#[test]
+fn period_after_a_typed_digit_stays_ascii_across_key_release() {
+    let h = &mut Harness::new("numeric-period");
+    h.start_engine(shared_fixture());
+    assert!(!h.key(keyval::ascii('1'), 0), "数字应透传给应用");
+    assert!(!h.key(keyval::ascii('1'), support::M_RELEASE));
+    assert!(h.key(keyval::ascii('.'), 0));
+    let sigs = h.settle_default();
+    assert_eq!(last_commit(&sigs).as_deref(), Some("."));
+
+    h.clear_backlog();
+    assert!(h.key(keyval::ascii('.'), 0));
+    let sigs = h.settle_default();
+    assert_eq!(last_commit(&sigs).as_deref(), Some("。"));
+}
+
+#[test]
+fn numeric_period_is_cleared_by_shortcuts_unknown_keys_and_focus_change() {
+    let h = &mut Harness::new("numeric-period-boundaries");
+    h.start_engine(shared_fixture());
+    for (key, state) in [
+        (keyval::ascii('a'), support::M_CONTROL),
+        (0xff50, 0), // Home 不进会话。
+        (keyval::BACKSPACE, 0),
+    ] {
+        h.clear_backlog();
+        assert!(!h.key(keyval::ascii('1'), 0));
+        assert!(!h.key(key, state));
+        assert!(h.key(keyval::ascii('.'), 0));
+        let sigs = h.settle_default();
+        assert_eq!(last_commit(&sigs).as_deref(), Some("。"), "{key:#x}");
+    }
+
+    h.clear_backlog();
+    assert!(!h.key(keyval::ascii('1'), 0));
+    h.focus_out().expect("FocusOut");
+    assert!(h.key(keyval::ascii('.'), 0));
+    let sigs = h.settle_default();
+    assert_eq!(last_commit(&sigs).as_deref(), Some("。"));
 }

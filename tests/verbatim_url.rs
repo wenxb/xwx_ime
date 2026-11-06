@@ -50,8 +50,9 @@ fn type_then_enter(h: &mut Harness, seq: &str) -> (String, Vec<support::Signal>)
 /// docs/HANDOFF.md.
 ///
 /// Wrong-behaviour witnesses (all of them were real):
-/// - `/` falling through to `fullwidth_punct` (`punctuator.rs:61` maps `/` to
-///   、) → the commit becomes `http:、、xcom` or the sequence is broken → red;
+/// - `/` falling into the punctuation arm instead of the recognizer's
+///   pass-through → the prefix is committed early (the sequence breaks into
+///   `http:/` + a later pinyin commit) instead of one verbatim `CommitText`;
 /// - `:` committing `：` instead of entering the URL prefix → red;
 /// - `.` committing `。` instead of passing through → red.
 #[test]

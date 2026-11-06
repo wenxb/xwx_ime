@@ -56,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // `tests/cli.rs` 与 docs/HANDOFF.md 第 ㉕ 条）。
             let mut out_path: Option<&str> = None;
             let mut exec: Option<&str> = None;
+            let mut setup: Option<&str> = None;
             let mut i = 1; // 跳过 `--xml`
             while i < args.len() {
                 match args[i].as_str() {
@@ -63,6 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let v = args.get(i + 1).ok_or("--exec 缺少路径参数")?;
                         if exec.replace(v.as_str()).is_some() {
                             return Err("--exec 重复".into());
+                        }
+                        i += 2;
+                    }
+                    "--setup" => {
+                        let v = args.get(i + 1).ok_or("--setup 缺少路径参数")?;
+                        if setup.replace(v.as_str()).is_some() {
+                            return Err("--setup 重复".into());
                         }
                         i += 2;
                     }
@@ -88,7 +96,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok()
                     .map(|p| p.display().to_string())
             });
-            let xml = ibus_proto::component_xml(exec.as_deref().unwrap_or_default());
+            let xml = ibus_proto::component_xml(
+                exec.as_deref().unwrap_or_default(),
+                setup.unwrap_or_default(),
+            );
             match out_path {
                 Some(path) if path != "-" => {
                     std::fs::write(path, &xml)?;
@@ -104,9 +115,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("用法:");
             println!("  xwx_ime            以 --ibus 模式启动引擎（连接 ibus-daemon）");
             println!("  xwx_ime --ibus     同上，显式指定");
-            println!("  xwx_ime --xml [文件|-] [--exec PATH]  输出 component XML");
+            println!("  xwx_ime --xml [文件|-] [--exec PATH] [--setup PATH]  输出 component XML");
             println!("        （未知参数 / 缺值 / 输出路径重复一律报错并退出）");
             println!("        （默认 stdout；--exec 指定 XML 里的引擎路径,\n         deb 打包时用 /usr/libexec/ibus-engine-xwx）");
+            println!("        （--setup 指定首选项面板路径,ibus-setup 的「首选项」按钮用它）");
             return Ok(());
         }
         _ => {}
@@ -154,6 +166,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(path = %abbrev_path.display(), "简拼副索引未装配(简拼查询退化为空)");
     }
     tracing::info!(path = %dict_path.display(), entries = engine.dict_count(), "词库已就绪");
+
+    // —— 用户配置(首选项面板写入的 config.toml)——
+    // 只有「默认语言」一项,见 `xwx_config::Config`。配置文件缺失或损坏
+    // 一律退回默认值并告警,绝不让输入法起不来。环境变量不参与这一项:
+    // 面板写到文件里的值必须与引擎读到的值一致,否则用户改了没反应。
+    let config_path = xwx_config::config_path();
+    let user_config = xwx_config::Config::load_or_default(&config_path);
+    engine.default_english = matches!(user_config.default_language, xwx_config::Language::En);
+    tracing::info!(
+        path = %config_path.display(),
+        default_language = user_config.default_language.as_str(),
+        "用户配置已加载(默认语言)"
+    );
 
     // —— 模糊拼音(配置开关)——
     // 此前 `fuzzy_enabled` 在生产进程里从未被置 true:能力实现了、
@@ -347,7 +372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let factory = EngineFactory::new(Arc::clone(&engine), conn.clone());
     conn.object_server().at(FACTORY_PATH, factory).await?;
     let first = XwxEngineServer::new(Arc::clone(&engine));
-    conn.object_server().at(ibus_proto::ENGINE_PATH, first).await?;
+    first.register(&conn, ibus_proto::ENGINE_PATH).await?;
 
     // 占用引擎服务名（对象已就绪，从这里起保证「可见即可服务」）
     // **用「可接管」的方式占名**：dev 跑的调试引擎必须能顶掉 daemon 按
@@ -488,10 +513,33 @@ async fn start_ibus_daemon() {
 async fn register_component(conn: &zbus::Connection) -> Result<(), Box<dyn std::error::Error>> {
     let proxy = zbus::Proxy::new(conn, IBUS_SERVICE, IBUS_PATH, IBUS_INTERFACE).await?;
     proxy
-        .call_method("RegisterComponent", &(component_value()?,))
+        .call_method("RegisterComponent", &(component_value(&setup_exec())?,))
         .await?;
     tracing::info!("组件已注册到 ibus-daemon");
     Ok(())
+}
+
+/// 首选项面板路径，进组件描述让 `ibus-setup` 的「首选项」按钮可用。
+///
+/// 优先找与当前二进制同目录的 `ibus-setup-xwx`（`just install` 就装成
+/// 这样），其次按系统安装布局找。都找不到时留空——GNOME 系统设置那条
+/// 路径靠 `.desktop` 文件，不受这里影响。
+fn setup_exec() -> String {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+    {
+        let sibling = dir.join("ibus-setup-xwx");
+        if sibling.is_file() {
+            return sibling.display().to_string();
+        }
+    }
+    for fallback in ["/usr/libexec/ibus-setup-xwx", "/usr/local/libexec/ibus-setup-xwx"] {
+        if std::path::Path::new(fallback).is_file() {
+            return fallback.to_string();
+        }
+    }
+    String::new()
 }
 
 /// 定位 IBus 总线地址：`IBUS_ADDRESS` 环境变量优先，否则问 `ibus address`。

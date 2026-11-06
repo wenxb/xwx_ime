@@ -66,6 +66,8 @@ impl ImeEngine {
             lm_weight: DEFAULT_LM_WEIGHT,
             fuzzy_pairs: COMMON_CONFUSION_PAIRS.to_vec(),
             fuzzy_enabled: DEFAULT_FUZZY_ENABLED,
+            // 裸构造器保持历史行为(从中文起);生产入口按用户配置覆盖。
+            default_english: false,
             // 裸构造器不装英文:查询/学习/按键透传全部保持旧行为,
             // 由生产入口或测试显式 `with_english` 接上。
             english: None,

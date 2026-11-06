@@ -56,9 +56,8 @@ impl EngineFactory {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         if n > 1 {
             let server = XwxEngineServer::new(Arc::clone(&self.engine));
-            self.conn
-                .object_server()
-                .at(path.clone(), server)
+            server
+                .register(&self.conn, path.as_str())
                 .await
                 .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         }

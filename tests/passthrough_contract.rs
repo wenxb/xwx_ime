@@ -168,9 +168,11 @@ fn english_mode_emits_no_preedit_and_no_lookup_table() {
 ///
 /// The complementary direction: `,` **is** in the punctuation table
 /// (`punctuator.rs:44`) and idle commits the full-width `，`, so it must be
-/// consumed. Asserting only the passthrough half would stay green for an engine
-/// that consumed everything; asserting only the consume half would stay green
-/// for an engine that passed everything through.
+/// consumed. Same for `/`, which is consumed but commits the half-width `/`
+/// itself (ideographic comma `、` belongs to `\`). Asserting only the
+/// passthrough half would stay green for an engine that consumed everything;
+/// asserting only the consume half would stay green for an engine that passed
+/// everything through.
 ///
 /// Breakage witness: `session.rs:472` changed from `Noop` to a commit, or
 /// `fullwidth_punct('+')` given an entry, flips `+` to `true`.
@@ -209,6 +211,10 @@ fn idle_symbols_pass_through_but_fullwidth_punctuation_is_consumed() {
         (':', "："),
         ('?', "？"),
         ('!', "！"),
+        // `/` 也在标点表内但上屏它自己:消费该键、提交半角 `/`
+        // (顿号留给 `\`,见 punctuator.rs 模块文档)。
+        ('/', "/"),
+        ('\\', "、"),
     ] {
         h.clear_backlog();
         assert!(

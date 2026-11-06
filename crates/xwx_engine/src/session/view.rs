@@ -5,7 +5,11 @@ use super::*;
 
 impl InputSession {
     /// 新建会话（初始为空闲状态）。
+    ///
+    /// 初始语言取引擎的 `default_english`——这是「默认英文」配置唯一的
+    /// 落点。会话建立之后，模式仍归 Ctrl+空格 管。
     pub fn new(engine: Arc<ImeEngine>) -> Self {
+        let english_mode = engine.default_english;
         Self {
             engine,
             pinyin: String::new(),
@@ -15,7 +19,7 @@ impl InputSession {
             page_size: DEFAULT_PAGE_SIZE,
             committed_tail: String::new(),
             last_word: None,
-            english_mode: false,
+            english_mode,
             english: EnglishRunContext::new(),
             coin_buffer: Vec::new(),
             confirmed: Vec::new(),
@@ -23,6 +27,7 @@ impl InputSession {
             prediction_cursor: 0,
             recognized: None,
             pending_url_dot: None,
+            last_digit_at: None,
         }
     }
 
@@ -100,14 +105,9 @@ impl InputSession {
         &self.english
     }
 
-    /// **英文上下文失效**（IBus 层的钩子入口）。
-    ///
-    /// 只清英文上文与延迟空格状态：不碰中文组合、不清 `committed_tail`、
-    /// 不动 `last_word`、不发任何 UI 信号。用在「按下了但没进会话」的
-    /// 那些事件上（应用快捷键、英文模式直通、无法翻译的按键）——它们
-    /// 在 `process_key_event` 里就 `return false` 了，会话根本看不到
-    /// （会话分册第 2 节最后两行）。
-    pub fn clear_english_context(&mut self) {
+    /// 清除未进入会话的按键所打断的上下文（快捷键、英文直通、未知键）。
+    pub fn clear_passthrough_context(&mut self) {
+        self.last_digit_at = None;
         self.english.clear();
         // 透传路径要把预测面板一起收掉，否则它会僵在屏幕上。
         self.clear_prediction();

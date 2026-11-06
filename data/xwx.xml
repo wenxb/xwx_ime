@@ -25,7 +25,7 @@
       <rank>0</rank>
       <hotkeys></hotkeys>
       <symbol></symbol>
-      <setup></setup>
+      <setup>__XWX_SETUP__</setup>
       <layout_variant></layout_variant>
       <layout_option></layout_option>
       <version>0.1.0</version>

@@ -200,6 +200,35 @@ fn s06_language_switch_never_adds_a_boundary_space() {
     assert_eq!(commit_text(&mut s, InputEvent::Space), "hello", "中文之后不补空格");
 }
 
+#[test]
+fn partial_chinese_readings_stay_first_before_learning_even_after_english() {
+    for (input, word, pinyin) in [("rug", "如果", "ruguo"), ("bir", "比如", "biru")] {
+        for after_english in [false, true] {
+            let mut ws = words();
+            ws.extend([
+                W { key: "rug", display: "rug", q: 400 },
+                W { key: "rugby", display: "rugby", q: 450 },
+                W { key: "rugged", display: "rugged", q: 420 },
+                W { key: "bir", display: "bir", q: 350 },
+                W { key: "bird", display: "bird", q: 450 },
+                W { key: "birth", display: "birth", q: 420 },
+            ]);
+            let mut s = session_with_words(ws);
+            s.engine.dict.upsert(word, pinyin, 900).expect("插入中文词条");
+            if after_english {
+                type_letters(&mut s, "hello");
+                assert_eq!(commit_text(&mut s, InputEvent::Space), "hello");
+            }
+            type_letters(&mut s, input);
+            assert_eq!(english_unigram(&s, input), 0, "不依赖历史选词");
+            assert_eq!(s.candidates[0].word, word, "{input}, after_english={after_english}");
+            assert!(s.candidates.iter().any(|c| c.english_key() == Some(input)));
+            assert_eq!(commit_text(&mut s, InputEvent::Space), word);
+            assert_eq!(s.english_run_context().previous_word(), None);
+        }
+    }
+}
+
 // ---------- S07-S09：不学习与一次记账 ----------
 
 #[test]

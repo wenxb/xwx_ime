@@ -22,6 +22,7 @@ use zbus::interface;
 
 use crate::ibus_proto;
 
+mod dispatch;
 mod ui;
 
 /// Factory 接口已拆到 [`crate::factory`]，这里转出以保持原有导入路径。
@@ -29,17 +30,24 @@ pub use crate::factory::EngineFactory;
 
 /// 引擎服务：一个输入焦点（IBus 上下文）对应一个实例。
 ///
-/// zbus 要求接口类型 `Send + Sync`：`ImeEngine` 经 `Mutex<Connection>`
-/// 变成 `Sync`（见 xwx_engine 的 dict.rs），会话放在 `tokio::sync::Mutex`
-/// 里保证同一实例的按键串行处理。
+/// 会话锁满足 zbus 的 `Send + Sync` 要求；`register` 的有序接口包装
+/// 保证接收顺序，覆盖状态变更、输出信号与方法回复。
 pub struct XwxEngineServer {
     /// **上一次发出去的预编辑文本**（P2 第 3 项）：文本与插入点都没变就不重发
-/// `UpdatePreeditText`（纯光标移动/翻页时）。候选表每次都发（见 `refresh_ui`）。
+    /// `UpdatePreeditText`（纯光标移动/翻页时）。候选表每次都发（见 `refresh_ui`）。
     last_ui: tokio::sync::Mutex<Option<(String, u32)>>,
     /// 输入会话状态机。
     session: tokio::sync::Mutex<InputSession>,
     /// **上一次上报给面板的中/英模式**：模式没变就不重发 `UpdateProperty`。
     last_mode: tokio::sync::Mutex<Option<bool>>,
+    /// 焦点输入框的 `(purpose, hints)`，由 daemon 经 `ContentType` 属性写入。
+    content_type: std::sync::Mutex<(u32, u32)>,
+    /// 踏进密码框后还没清过会话。
+    ///
+    /// 清理要发隐藏信号，而属性 setter 拿不到 `SignalContext`，只能留标记
+    /// 等下一次按键时补。daemon 实测会先发 `FocusOut`（那条路已经清过），
+    /// 所以这是「只写 ContentType 不换焦点」的兜底。
+    password_pending_cleanup: std::sync::atomic::AtomicBool,
 }
 
 impl XwxEngineServer {
@@ -49,7 +57,21 @@ impl XwxEngineServer {
             session: tokio::sync::Mutex::new(InputSession::new(engine)),
             last_ui: tokio::sync::Mutex::new(None),
             last_mode: tokio::sync::Mutex::new(None),
+            content_type: std::sync::Mutex::new((ibus_proto::input_purpose::FREE_FORM, 0)),
+            password_pending_cleanup: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// 当前焦点是否落在密码框里。
+    ///
+    /// 密码框里本输入法**完全让位**：不组词、不弹候选、不改写任何按键。
+    /// 用户看不见自己输的内容，任何「智能」处理都只会让密码变成别的字符。
+    fn in_password_field(&self) -> bool {
+        let (purpose, _) = *self
+            .content_type
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        purpose == ibus_proto::input_purpose::PASSWORD
     }
 
     /// 处理一个按键事件，返回是否被本输入法消费。
@@ -150,17 +172,12 @@ impl XwxEngineServer {
         }
     }
 
-    /// 英文上下文失效（IBus 层钩子）：只清英文上文与延迟空格状态——
-    /// **不碰**中文组合（会话分册第 2 节）。用于那些在进入会话之前就
-    /// `return false` 的事件。
-    ///
-    /// M2 起同时收掉预测面板，并**返回**「刚才是否有面板」：有就让调用方
-    /// 发一次隐藏信号，没有就是纯 no-op（预测分册第 10.3 节）。释放事件
-    /// 由调用方先区分开，不会走到这里。
-    async fn invalidate_english_context(&self) -> bool {
+    /// 清除透传按键打断的英文上下文与数字句点计时，返回是否需隐藏预测面板。
+    /// 释放事件由调用方排除。
+    async fn invalidate_passthrough_context(&self) -> bool {
         let mut session = self.session.lock().await;
         let had_prediction = session.predicting();
-        session.clear_english_context();
+        session.clear_passthrough_context();
         had_prediction
     }
 
@@ -183,19 +200,77 @@ impl XwxEngineServer {
             ui::hide_ui(self, ctxt).await;
         }
     }
+
+    /// 进入密码框时补做清理：丢掉**未上屏**的拼音与候选，收起候选窗。
+    ///
+    /// 只清不提交：`reset()` 丢掉的正是用户还没确认的东西，而在密码框里
+    /// 把它补上屏恰恰是最不该做的事。已在焦点切换时结算的确认段由
+    /// `FocusOut` 负责，这里不重复提交。
+    async fn flush_password_cleanup(&self, ctxt: &zbus::SignalContext<'_>) {
+        if !self
+            .password_pending_cleanup
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let was_active = {
+            let mut session = self.session.lock().await;
+            let active = session.has_visible_ui();
+            session.reset();
+            active
+        };
+        if was_active {
+            ui::hide_ui(self, ctxt).await;
+        }
+    }
 }
 
 /// `org.freedesktop.IBus.Engine` 接口实现。
 ///
 /// 方法名在 D-Bus 上默认按 PascalCase 暴露（`ProcessKeyEvent` 等），
 /// 与 IBus 的 introspection XML 一致。
+// 处理器只发信号，不等待远端方法回复，避免阻塞接收循环形成互等。
 #[interface(name = "org.freedesktop.IBus.Engine")]
 impl XwxEngineServer {
+    /// 焦点输入框的用途与提示位：`(purpose, hints)`。
+    ///
+    /// daemon 在焦点/输入框切换时用 `Properties.Set` 写入（实测密码框是
+    /// `(8, 6144)`，普通框 `(0, 0)`）。IBus 只写不读，但 zbus 不支持
+    /// write-only 属性，所以成对给出 getter，读到的就是最近一次写入的值。
+    ///
+    /// `emits_changed_signal = "false"`：daemon 自己就是写入方，不需要
+    /// `PropertiesChanged` 回声。
+    #[zbus(property(emits_changed_signal = "false"))]
+    async fn content_type(&self) -> (u32, u32) {
+        *self
+            .content_type
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[zbus(property)]
+    async fn set_content_type(&self, value: (u32, u32)) {
+        let was_password = self.in_password_field();
+        *self
+            .content_type
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = value;
+        let is_password = self.in_password_field();
+        // 刚踏进密码框：挂个待清理标记，下一次按键时收掉残留的候选窗。
+        // setter 拿不到 SignalContext，发不了隐藏信号，只能延后。
+        if is_password && !was_password {
+            self.password_pending_cleanup
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+
     /// IBus 引擎主入口：处理一次按键事件。
     ///
     /// 返回 `true` 表示按键被本输入法消费；`false` 时 daemon 会把
     /// 按键透传给应用。
     ///
+    /// - **密码框**（`ContentType` 的 purpose 为 `PASSWORD`）：全部透传，
+    ///   连 Ctrl+空格 也不拦——见 `in_password_field`；
     /// - **Ctrl+空格**：中英文切换（走引擎自己的逻辑，消费该按键，
     ///   不再转发给应用）。带 Ctrl/Alt/Super/Meta 的其它组合键是应用
     ///   快捷键，照常透传；
@@ -210,6 +285,14 @@ impl XwxEngineServer {
         state: u32,
     ) -> bool {
         tracing::trace!(keyval, keycode, state, "收到按键事件");
+
+        // —— 密码框：完全让位 ——
+        // 闸门放在所有分支**之前**：连 Ctrl+空格 也不拦，密码框里用户看不见
+        // 状态，切了模式只会让人困惑；按键原样交给应用。
+        if self.in_password_field() {
+            self.flush_password_cleanup(&ctxt).await;
+            return false;
+        }
 
         // —— Ctrl+空格：切换中英文 ——
         // 放在修饰键透传过滤**之前**：普通 Ctrl 组合键会直接被滤掉，
@@ -290,7 +373,7 @@ impl XwxEngineServer {
                 | ibus_proto::IBUS_META_MASK)
             != 0;
         if is_release || is_modifier_combo {
-            if !is_release && self.invalidate_english_context().await {
+            if !is_release && self.invalidate_passthrough_context().await {
                 ui::hide_ui(self, &ctxt).await;
             }
             return false;
@@ -304,7 +387,7 @@ impl XwxEngineServer {
         let in_english = self.session.lock().await.english_mode();
         if in_english {
             // 直通应用的原始按键同样是英文链的边界（应用自己决定它是什么）。
-            if self.invalidate_english_context().await {
+            if self.invalidate_passthrough_context().await {
                 ui::hide_ui(self, &ctxt).await;
             }
             return false;
@@ -314,7 +397,7 @@ impl XwxEngineServer {
             // 翻译层不认识的按键会原样透传给应用——同样是边界
             // （Shift+Tab 走的就是这条路：它必须原样交给应用，
             // 绝不能折成「接受预测」）。
-            if self.invalidate_english_context().await {
+            if self.invalidate_passthrough_context().await {
                 ui::hide_ui(self, &ctxt).await;
             }
             return false;
@@ -364,10 +447,7 @@ impl XwxEngineServer {
             return;
         }
         let _ = state; // NORMAL 属性恒为 0，只作占位（见本方法的文档）
-        let want_english = !self.session.lock().await.english_mode();
-        if self.session.lock().await.english_mode() == want_english {
-            return;
-        }
+        // 接收循环已保序，不需要在取反之后再次检查同一状态。
         self.handle_key(&ctxt, InputEvent::ToggleAscii).await;
         self.sync_mode_property(&ctxt).await;
     }

@@ -10,10 +10,11 @@
 > 跑真实 `xwx_ime --ibus` 进程 + 私有 `dbus-daemon`，已自动化下面清单里的
 > **一部分**（英文模式透传、`CommitText`/`UpdatePreeditText`/
 > `UpdateLookupTable` 信号内容与字段顺序、`FocusOut`、候选点击、翻页、
-> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性、总线往返延迟、分配计数）。14 个文件（每个文件一组场景，原来是 5 个）：
+> Ctrl+Delete、可编辑缓冲的逐字符序列、隔离性、总线往返延迟、分配计数）。15 个文件（每个文件一组场景，原来是 5 个）：
 > `verbatim_url`(7)、`wire_abbrev`(5)、`mods_keys`(4)、`prefix_commit`(1)、
 > `paging`(7)、`blocklist_delete`(2)、`focus_lifecycle`(4)、`punctuation_paging`(1)、
-> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)、`wire_perf`(1)、`alloc_count`(1)。
+> `passthrough_contract`(7)、`signal_payloads`(7)、`hermeticity`(5)、`cli`(3)、`wire_perf`(1)、`alloc_count`(1)、
+> `content_type`(6)。
 >
 > **回归基线**（codex 审查 Q1）：`tests/baselines/regression_v2.txt` 是
 > `examples/regression_probe.rs --format v2` 的输出（2515 行），旁边
@@ -39,6 +40,8 @@
 > - 真实 daemon 的激活时序（走 `CreateEngine`，而非预导出实例）
 > - GNOME Shell candidate popup 的**实际渲染**（我们只发信号，不画窗）
 > - 跨应用时 `FocusOut` 的真实到达时机
+> - 输入框用途（`ContentType`）的真实下发：密码框 `(8, 6144)` 只有 daemon 会写，
+>   集成测试里是我们自己模拟的
 > - 与系统输入源切换（`Super+空格`）、fcitx5 抢总线名的交互
 >
 > 有时间时照这份清单敲一遍即可，**不需要一次做完**——每条都是独立的。
@@ -122,6 +125,8 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 | 5 | 空闲时打 `.` `?` `!` `;` `:` | 「。？！；：」全角 | |
 | 6 | `nihao,`（拼音后直接打逗号） | 「你好，」——先上屏候选再跟标点 | |
 | 7 | 空闲时打 `+` `#` `%` `@` | 原样半角（这些没有全角映射，应透传） | |
+| 7a | 中文模式打 `/`（`Shift` 左边那个键） | 半角 `/`，**不是顿号 `、`** | |
+| 7b | 中文模式打 `\` | 「、」顿号 | |
 
 ### 翻页（⚠ 最容易出问题）
 
@@ -194,6 +199,20 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 | 36 | `www` 单独打（后面不接点） | 出「万维网」等拼音候选——**这是对的** | |
 | 37 | `example.com` | 走拼音路径（裸域名有意不识别） | |
 
+### 密码框（`ContentType`）
+
+| # | 敲什么 | 应该看到 | 实际 |
+|---|---|---|---|
+| 38 | 先打 `ni`（候选窗开着），再点进密码框 | 候选窗立刻收起，**没有「你」被上屏** | |
+| 39 | 在密码框里打 `nihao` 空格 | 应用收到字面 `nihao `，**不出候选、不上屏汉字** | |
+| 40 | 在密码框里按 Ctrl+空格 | 什么都不发生（不切中英） | |
+| 41 | 离开密码框，打 `ni` | 候选窗正常出现（密码状态必须能退出） | |
+| 42 | 输入源只留 `[('ibus','xwx')]`，点进密码框 | 顶栏输入源图标**不消失** | |
+
+> 第 42 条是 GNOME Shell 的设计行为，不是本引擎能控制的：源列表里只要还有
+> 非 IBus 源（比如 `xkb:us`），Shell 就会在密码框里禁用 IBus 并隐藏图标。
+> 详见 README「为什么只留一个 IBus 源」。第 38~41 条在任何源配置下都成立。
+
 ---
 
 ## 2. 最可能出问题的四条
@@ -206,6 +225,7 @@ just dev        # debug 版，前台运行，Ctrl+C 退出
 | **27** | 跨进程。靠 IBus 的 `FocusOut` 触发，单测摸不到 |
 | **33** | 端到端序列。初版实现下真的产出过 `http:、、xcom` |
 | **16** | 英文模式在 ibus 层直接 `return false` 透传，单测覆盖不到 |
+| **39** | 密码框透传：daemon 经 `ContentType` 属性下发用途，只有真机上这条属性才会到 |
 
 ---
 
@@ -467,3 +487,45 @@ E0 只要 Exact 就是 EnglishFirst，英文独占前三个槽位。这批输入
 碎片（`sms`/`sds`/`ccs`/`cbs`/`cds`/`sbs`/`ssd`…）。剩下的 305 个英文首位
 都是先验真占优的输入（`squ`/`whe`/`sti`/`sys`/`str`/`bre`/`sch`/`pyt`/
 `app`/`cof`/`tod`/`doc`）。
+
+## 中英分档：英文上文不覆盖中文前缀与简拼（2026-10-28）
+
+复现：真实词库、空学习模型，提交 `hello` 后再输入 `ann`，旧规则首屏前三项是
+`ann / annual / anna`，按钮在第 4 位；选择过中文后英文上文清空，下一次又恢复中文，
+因此不能靠重复选词或预热解决。
+
+修法（`engine/blend.rs`）：`recent_en && good_en && E0 == Exact` 的抢先分支额外要求
+有可靠的完整全拼同形中文词条。`you / can` 继续按连续英文处理；未打完的全拼、
+混合简拼与高频纯声母简拼仍走原有中文保护，不增加单词名单、不改中文内部排序。
+
+验证：
+
+- `cargo test --workspace --offline`：620 passed、2 ignored；Clippy 全目标 `-D warnings` 通过。
+- 新增内存会话回归：`rug / bir` 在未学习和刚提交英文两种状态下均为中文首选，
+  空格提交中文且不补英文前导空格；真实词库回归覆盖 `ann / ans / yidd / shy / sms / sds / ssh`。
+- 真实 `InputSession` 逐键探针：`hello → ann` 的前三项恢复为按钮、安宁、安娜，
+  `ans / yidd / shy / sms / sds` 也恢复中文首选，英文候选仍可选择。
+- 私有 D-Bus 启动实际引擎并加载真实中英词库、万象 gram 和英文二元表：
+  首次输入与提交英文后输入 `ann / ans / yidd / shy / sms / sds`，候选表和空格上屏均通过；
+  `hello → you / can / world / python / app` 仍首选英文、提交时恰好一个前导空格。
+  该临时烟测已移除；未替换桌面正在运行的输入法，未改用户学习数据。
+
+## 输入积压恢复保序（2026-10-28）
+
+根因是 zbus 并发派发方法：请求积压后，任务到达会话锁的次序不一定是总线
+接收次序。只加互斥锁或降低单键耗时不能保证顺序。修复将 Engine 方法和
+Properties（包括密码框 `ContentType`）都放回接收循环逐个完成，覆盖预导出
+实例与 Factory 新建实例。实现与等价性能数据见
+[`typing_perf_optimizations.md`](typing_perf_optimizations.md#2026-10-28积压保序与格构建分配优化)。
+
+自动化验收：
+
+- `cargo build --offline --bin xwx_ime` 后运行全工作区测试：623 passed、2 ignored；
+  Clippy 全目标 `-D warnings` 通过。
+- `tests/queued_input.rs` 的 3 项回归暂停私有引擎、发送积压消息、再恢复，验证
+  每步预编辑、上屏、回复，以及 `Reset` / `FocusOut` / `Disable` / 密码框边界。
+- 最终 release 私有总线烟测加载真实中英数据，长串逐键顺序与原文上屏通过；
+  Factory 两个实例均验证 `nihao` → “你好”、状态边界和密码字符透传。
+
+这证明引擎内积压不再导致乱序，不等于真实桌面应用协作验收。未替换或重启当前
+桌面输入法；安装后仍应按本清单验证高负载下实际输入框与候选窗。

@@ -151,10 +151,13 @@ fn c07c_abbrev_reading_counts_as_readable_chinese() {
     let Some(engine) = crate::engine::tests::real_bilingual_engine() else {
         return;
     };
-    let out = engine
-        .lookup_composition("yidd", &LmContext::empty(), &EnglishContext::empty())
-        .expect("查询失败");
-    assert!(!out.first().expect("候选非空").is_english(), "yidd 首选应是中文: {out:?}");
+    for (input, word) in [("ann", "按钮"), ("ans", "按时"), ("yidd", "一点点")] {
+        for prev in [None, Some("hello")] {
+            let out = lookup(&engine, input, prev);
+            assert_eq!(out[0].word, word, "{input}, prev={prev:?}");
+            assert!(out.iter().any(|c| c.is_english()), "英文入口保留: {input}");
+        }
+    }
     let out = engine
         .lookup_composition("yiddish", &LmContext::empty(), &EnglishContext::empty())
         .expect("查询失败");
@@ -170,19 +173,16 @@ fn c07d_pure_consonant_abbrev_with_real_words_keeps_chinese_first() {
     let Some(engine) = crate::engine::tests::real_bilingual_engine() else {
         return;
     };
-    for input in ["shy", "sms", "sds", "ssh", "ssh"] {
-        let out = engine
-            .lookup_composition(input, &LmContext::empty(), &EnglishContext::empty())
-            .expect("查询失败");
-        assert_eq!(
-            first_lang(&out),
-            "chinese",
-            "{input} 的中文简拼词条词频远高于 E0，中文应首选: {out:?}"
-        );
-        assert!(
-            out.iter().any(|c| c.is_english()),
-            "{input} 的英文入口不得消失（只调次序）: {out:?}"
-        );
+    for input in ["shy", "sms", "sds", "ssh"] {
+        for prev in [None, Some("hello")] {
+            let out = lookup(&engine, input, prev);
+            assert_eq!(
+                first_lang(&out),
+                "chinese",
+                "{input}, prev={prev:?}: 高频中文简拼应首选: {out:?}"
+            );
+            assert!(out.iter().any(|c| c.is_english()), "英文入口保留: {input}");
+        }
     }
     // 反向：中文端没有整串简拼词条，或中文词频明显更低 ⇒ 英文照旧靠前。
     for input in ["cof", "doc", "pyt", "app"] {

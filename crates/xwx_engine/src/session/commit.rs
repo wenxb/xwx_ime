@@ -388,6 +388,7 @@ impl InputSession {
         // 「被翻页吃掉的那个点」是**当前串**的属性,串都没了就作废
         // 。
         self.pending_url_dot = None;
+        self.last_digit_at = None;
         // M2：组合结束就回到普通空闲态。**不**在这里开预测——
         // 标点、回车、原文逃逸都经过本方法，它们都不是「明确选词入口」。
         self.clear_prediction();

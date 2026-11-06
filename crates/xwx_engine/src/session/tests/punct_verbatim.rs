@@ -17,6 +17,37 @@ fn punct_commits_fullwidth_when_idle() {
 }
 
 #[test]
+fn slash_commits_ascii_slash_not_ideographic_comma() {
+    // `Shift` 左边那个键(`/`)在中文模式出半角斜杠,顿号留给 `\`。
+    // 空闲与组合中两个状态都钉一遍:空闲时上屏 `/`;组合中按标点语义
+    // 先提交高亮候选再跟 `/`(`nihao/` → 「你好/」)。
+    let mut s = session_with_dict();
+    let out = s.handle(InputEvent::Char('/')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "/"),
+        "空闲时 `/` 应上屏半角斜杠: {out:?}"
+    );
+
+    let mut s = session_with_dict();
+    for c in "nihao".chars() {
+        s.handle(InputEvent::Char(c)).expect("不应失败");
+    }
+    let out = s.handle(InputEvent::Char('/')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "你好/"),
+        "`nihao/` 应上屏「你好/」: {out:?}"
+    );
+
+    // 顿号仍由 `\` 产出,不能因为斜杠改动而丢掉。
+    let mut s = session_with_dict();
+    let out = s.handle(InputEvent::Char('\\')).expect("不应失败");
+    assert!(
+        matches!(out, SessionOutput::Commit(ref t) if t == "\u{3001}"),
+        "空闲时 `\\` 应上屏顿号: {out:?}"
+    );
+}
+
+#[test]
 fn punct_commits_highlighted_candidate_then_fullwidth() {
     // 中文模式、拼音串非空(`nihao`):`,` 先按空格语义上屏高亮候选
     // (首选整词「你好」,与 commit_immediately_commits_global_index 同一词典),
@@ -70,7 +101,8 @@ fn punct_with_no_real_candidate_commits_raw_then_fullwidth() {
 #[test]
 fn punct_table_driven_session_level() {
     // 会话层面把整张标点表跑一遍(映射本身在 punctuator.rs 单测,
-    // 这里断言「中文模式空闲时,每个标点键都上屏对应全角文本」)。
+    // 这里断言「中文模式空闲时,每个标点键都上屏对应文本」——
+    // `/` 是表内唯一的半角例外,见 punctuator.rs 模块文档)。
     let cases: &[(char, &str)] = &[
         (',', "\u{FF0C}"),
         ('.', "\u{3002}"),
@@ -87,7 +119,7 @@ fn punct_table_driven_session_level() {
         ('$', "\u{FFE5}"),
         ('_', "\u{2014}\u{2014}"),
         ('^', "\u{2026}\u{2026}"),
-        ('/', "\u{3001}"),
+        ('/', "/"),
         ('"', "\u{201C}"),
         ('[', "\u{300C}"),
         (']', "\u{300D}"),
@@ -419,4 +451,43 @@ fn english_word_composes_after_a_capital_and_commits_on_space() {
         "空格应一次上屏 Hello: {out:?}"
     );
     assert!(!s.is_active(), "上屏后会话应复位");
+}
+
+#[test]
+fn numeric_period_stays_ascii_within_three_seconds_then_expires() {
+    let mut s = session_with_dict();
+    assert!(matches!(s.handle(InputEvent::Select(1)).unwrap(), SessionOutput::Noop));
+    s.last_digit_at = Some(Instant::now() - Duration::from_millis(2500));
+    let out = s.handle(InputEvent::Char('.')).unwrap();
+    assert!(matches!(&out, SessionOutput::Commit(text) if text == "."));
+
+    s.handle(InputEvent::Select(1)).unwrap();
+    s.last_digit_at = Some(Instant::now() - Duration::from_millis(3100));
+    let out = s.handle(InputEvent::Char('.')).unwrap();
+    assert!(matches!(&out, SessionOutput::Commit(text) if text == "。"));
+}
+
+#[test]
+fn numeric_selection_does_not_enable_ascii_period() {
+    let mut s = session_with_dict();
+    type_str(&mut s, "nihao");
+    let out = s.handle(InputEvent::Select(1)).unwrap();
+    assert!(matches!(&out, SessionOutput::Commit(text) if text == "你好"));
+    let out = s.handle(InputEvent::Char('.')).unwrap();
+    assert!(matches!(&out, SessionOutput::Commit(text) if text == "。"));
+}
+
+#[test]
+fn numeric_period_requires_an_adjacent_digit_and_renews_on_each_digit() {
+    let mut s = session_with_dict();
+    s.handle(InputEvent::Char('1')).unwrap();
+    s.last_digit_at = Some(Instant::now() - Duration::from_secs(4));
+    s.handle(InputEvent::Char('0')).unwrap();
+    let out = s.handle(InputEvent::Char('.')).unwrap();
+    assert!(matches!(&out, SessionOutput::Commit(text) if text == "."));
+
+    s.handle(InputEvent::Select(3)).unwrap();
+    s.handle(InputEvent::Space).unwrap();
+    let out = s.handle(InputEvent::Char('.')).unwrap();
+    assert!(matches!(&out, SessionOutput::Commit(text) if text == "。"));
 }

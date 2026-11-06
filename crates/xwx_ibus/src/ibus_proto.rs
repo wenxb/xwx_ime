@@ -68,6 +68,14 @@ pub const IBUS_SUPER_MASK: u32 = 1 << 26;
 pub const IBUS_HYPER_MASK: u32 = 1 << 27;
 pub const IBUS_META_MASK: u32 = 1 << 28;
 
+/// IBus 输入框用途（`IBusInputPurpose`），daemon 经 `ContentType` 属性下发。
+pub mod input_purpose {
+    /// 普通文本框。
+    pub const FREE_FORM: u32 = 0;
+    /// 密码框。输入法必须完全让位：用户看不见内容，任何改写都是灾难。
+    pub const PASSWORD: u32 = 8;
+}
+
 /// 本输入法用到的 IBus 键值（ibuskeysyms.h）。
 pub mod keyval {
     /// 空格（0x20）。
@@ -372,7 +380,7 @@ struct EngineDescFields<'a> {
 /// 以类型串开头。因此先把结构体序列化成 D-Bus 值字节，手工拼上
 /// variant 头（`[len u8][签名][nul]`，对齐到 8），再反序列化成
 /// 拥有所有权的 [`OwnedValue`]。
-fn engine_desc_value() -> Result<OwnedValue, ProtoError> {
+fn engine_desc_value(setup_exec: &str) -> Result<OwnedValue, ProtoError> {
     let fields = EngineDescFields {
         type_name: "IBusEngineDesc",
         props: empty_props(),
@@ -387,7 +395,8 @@ fn engine_desc_value() -> Result<OwnedValue, ProtoError> {
         rank: 0,
         hotkeys: "",
         symbol: "",
-        setup: "",
+        // 空串会让 ibus-setup 的「首选项」按钮变灰;填了路径它才可点。
+        setup: setup_exec,
         layout_variant: "",
         layout_option: "",
         version: env!("CARGO_PKG_VERSION"),
@@ -416,8 +425,10 @@ fn engine_desc_value() -> Result<OwnedValue, ProtoError> {
 /// 字段顺序（ibus 1.5.29）：name, description, version, license,
 /// author, homepage, exec, textdomain, observed_paths(av), engines(av)。
 /// 其中 name 同时是引擎进程要占用的 D-Bus 服务名。
-pub fn component_value() -> Result<Value<'static>, ProtoError> {
-    let engines = vec![Value::from(engine_desc_value()?)];
+///
+/// `setup_exec` 是首选项面板路径，进引擎描述的 `<setup>` 字段。
+pub fn component_value(setup_exec: &str) -> Result<Value<'static>, ProtoError> {
+    let engines = vec![Value::from(engine_desc_value(setup_exec)?)];
     Ok(Value::from(Structure::from((
         "IBusComponent",
         empty_props(),
@@ -441,11 +452,20 @@ pub fn component_value() -> Result<Value<'static>, ProtoError> {
 /// [`ENGINE_NAME`]（daemon 拿它调 `Factory.CreateEngine`）。
 /// `exec` 传入引擎可执行文件的绝对路径（由调用方注入，确保 daemon
 /// 拉起的进程与当前二进制一致）。
-pub fn component_xml(exec: &str) -> String {
+///
+/// `setup` 是首选项面板的可执行文件路径。它进 `<setup>` 字段，让
+/// `ibus-setup` 的「首选项」按钮能拉起面板；GNOME 系统设置走的是另一条
+/// 约定（按引擎名找 `ibus-setup-xwx.desktop`），两条都要通。
+pub fn component_xml(exec: &str, setup: &str) -> String {
     let exec = if exec.is_empty() {
         "xwx_ime --ibus".to_string()
     } else {
         format!("{exec} --ibus")
+    };
+    let setup = if setup.is_empty() {
+        "ibus-setup-xwx".to_string()
+    } else {
+        setup.to_string()
     };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -471,7 +491,7 @@ pub fn component_xml(exec: &str) -> String {
       <rank>0</rank>
       <hotkeys></hotkeys>
       <symbol></symbol>
-      <setup></setup>
+      <setup>{setup}</setup>
       <layout_variant></layout_variant>
       <layout_option></layout_option>
       <version>{version}</version>
@@ -484,6 +504,7 @@ pub fn component_xml(exec: &str) -> String {
         service = ENGINE_SERVICE,
         engine = ENGINE_NAME,
         version = env!("CARGO_PKG_VERSION"),
+        setup = setup,
     )
 }
 

@@ -26,6 +26,11 @@ pub struct ImeEngine {
     pub fuzzy_pairs: Vec<ConfusionPair>,
     /// 是否启用模糊拼音。
     pub fuzzy_enabled: bool,
+    /// 新会话的初始语言（`true` = 直接进英文模式）。
+    ///
+    /// 只决定**会话创建那一刻**的模式：之后仍归 Ctrl+空格 管，焦点切换
+    /// 也不复位（见 `reset_for_focus_change`）。
+    pub default_english: bool,
     /// 可选英文组件（`None` = 英文关闭：查询、学习、按键透传全部保持旧行为）。
     ///
     /// 裸构造器（[`ImeEngine::new`] / `new_with_lm`）**不**装配它——生产入口

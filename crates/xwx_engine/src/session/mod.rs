@@ -12,6 +12,7 @@
 //! 本模块刻意不依赖任何框架（DBus/GTK 都不沾），方便单测与复用。
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::punctuator::fullwidth_punct;
 use crate::{Candidate, EngineError, ImeEngine, LmContext};
@@ -312,6 +313,8 @@ pub struct InputSession {
     last_word: Option<String>,
     /// 英文模式（中英切换）：开启时除 Shift 外的按键直接透传给应用。
     english_mode: bool,
+    /// 最近一次透传数字的时刻，仅供紧随其后的句点使用。
+    last_digit_at: Option<Instant>,
     /// 「用户真的敲过一个点、但它被翻页语义吃掉了」的位置（= 串长）。
     ///
     /// `www` 后敲 `.` 时,候选窗开着 → `.` 走翻页、不进串;下一个字母

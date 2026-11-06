@@ -55,6 +55,14 @@ impl Harness {
         for sub in ["cfg", "xdg", "run", "home", "services"] {
             std::fs::create_dir_all(root.join(sub)).expect("mkdir harness subdir");
         }
+        // 默认写一份 `zh` 配置：绝大多数测试测的是「中文候选窗/翻页/删除」，
+        // 不是「默认语言」。引擎的出厂默认是 `en`，不固定下来的话，
+        // 敲字母会被透传、候选窗根本不出现，测试失败原因和被测行为无关。
+        // 测默认语言本身的用例走 `start_engine_without_config()`。
+        let cfg_dir = root.join("home/.config/xwx");
+        std::fs::create_dir_all(&cfg_dir).expect("mkdir config dir");
+        std::fs::write(cfg_dir.join("config.toml"), "default_language = \"zh\"\n")
+            .expect("写测试配置");
         assert!(
             !label.is_empty(),
             "label 用于 engine.log 命名，不应为空"
@@ -148,6 +156,15 @@ impl Harness {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// 删掉 `new()` 预置的 `zh` 配置，用于测「没有配置文件」时的行为。
+    ///
+    /// 只该在 `start_engine*` 之前调用——引擎只在启动时读配置。
+    pub fn without_config(self) -> Self {
+        let cfg = self.root.join("home/.config/xwx/config.toml");
+        let _ = std::fs::remove_file(&cfg);
+        self
+    }
+
     /// Like [`Harness::start_engine`] but with the abbreviation side index
     /// deliberately absent: `XWX_ABBREV_PATH` points at a non-existent file,
     /// which is the production state when the 69 MB `abbrev.bin` was never
@@ -214,6 +231,10 @@ impl Harness {
             .env("XDG_DATA_HOME", self.root.join("xdg"))
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
             .env("HOME", self.root.join("home"))
+            // 用户配置(`$XDG_CONFIG_HOME/xwx/config.toml`)决定初始语言模式。
+            // 不重定向的话测试会读开发机上的真实配置:`default_language`
+            // 一变,「默认从中文起」的断言就在别人机器上静默翻转。
+            .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
             // 英文通道的**默认关闭**:只重定向 HOME/XDG 还不够,系统目录
             // `/usr/share/xwx/english.bin` 仍可能被读到(装了 deb 的机器上
             // 一定存在),那会让「英文相关断言」在别人机器上悄悄变红/变绿。
@@ -362,6 +383,34 @@ impl Harness {
                     self.engine_pid, state, tail.join("\n")
                 ))
             }
+        }
+    }
+
+    /// `Properties.Set("org.freedesktop.IBus.Engine", "ContentType", (uu))`。
+    ///
+    /// daemon 就是这样把输入框用途下发给引擎的（实测密码框 `(8, 6144)`、
+    /// 普通框 `(0, 0)`）。[`Harness::call`] 只能打 Engine 接口的方法，
+    /// 所以单开一条；属性值必须包在 variant 里，线上签名是 `(ssv)`。
+    pub fn set_content_type(&self, purpose: u32, hints: u32) -> Result<(), String> {
+        let conn = self.control.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let value = zvariant::Value::from((purpose, hints));
+            let r = conn
+                .call_method(
+                    Some(ENGINE_SERVICE),
+                    ENGINE_PATH,
+                    Some("org.freedesktop.DBus.Properties"),
+                    "Set",
+                    &(ENGINE_IFACE, "ContentType", value),
+                )
+                .map(|_| ())
+                .map_err(|e| format!("Properties.Set 失败: {e}"));
+            let _ = tx.send(r);
+        });
+        match rx.recv_timeout(CALL_TIMEOUT) {
+            Ok(r) => r,
+            Err(_) => Err("Properties.Set 超时".into()),
         }
     }
 }

@@ -5,6 +5,7 @@ use super::*;
 
 mod coverage;
 mod compact;
+mod collocation;
 
 pub(super) use coverage::{tail_only, unexplained_letters, unreachable_tail};
 
@@ -17,6 +18,19 @@ pub(super) fn ordered_candidates<K>(
 }
 
 pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate], entry_tier_exception: bool) {
+    sort_candidates_impl(inp, ranked, entry_tier_exception, None);
+}
+
+pub(super) fn sort_abbrev_candidates(inp: &str, ranked: &mut [Candidate], lm: &LmStore) {
+    sort_candidates_impl(inp, ranked, true, lm.collocation_model());
+}
+
+fn sort_candidates_impl(
+    inp: &str,
+    ranked: &mut [Candidate],
+    entry_tier_exception: bool,
+    collocations: Option<&WanxiangLM>,
+) {
     // 排序键 = (u_min 桶, 拼写来源层序, 层内证据分级 band, 分数 − 覆盖罚分, 频次降序, ...):
     //
     // **首键「u_min 桶」**:候选终点位置 `pos = cp.len()` 处的「不可
@@ -76,6 +90,9 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate], entry_tier_ex
                 .then_with(|| a.pinyin.cmp(&b.pinyin))
         })
     });
+    if let Some(lm) = collocations {
+        collocation::break_ties(inp, ranked, &keys, &mut order, lm);
+    }
     // 就地应用置换:目标是 `ranked[i] = 旧 ranked[order[i]]`。把置换分解成
     // 环,在每个环里沿 `order` 反向搬(每步 swap 一个元素),零克隆。
     let mut placed = vec![false; ranked.len()];

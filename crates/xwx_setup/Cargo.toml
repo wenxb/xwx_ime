@@ -1,0 +1,19 @@
+[package]
+name    = "xwx_setup"
+version.workspace = true
+edition.workspace = true
+description = "XWX 首选项面板（GTK4 / libadwaita）"
+
+[[bin]]
+name = "ibus-setup-xwx"
+path = "src/main.rs"
+
+[dependencies]
+xwx_config.workspace = true
+tracing.workspace    = true
+tracing-subscriber.workspace = true
+
+# GTK 依赖只挂在这个 crate 上：引擎本体仍是零系统库。
+# 需要 libgtk-4-dev / libadwaita-1-dev 才能编译本 crate。
+gtk      = { package = "gtk4", version = "0.11", features = ["v4_10"] }
+adw      = { package = "libadwaita", version = "0.9", features = ["v1_5"] }

@@ -4,6 +4,7 @@
 use super::*;
 
 mod build;
+mod chain;
 
 impl ImeEngine {
     /// 把候选的拼音 key 按**词库条目**切成词串，取「Σ log10 词频」最大的切法；

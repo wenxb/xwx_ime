@@ -8,6 +8,20 @@ pub(crate) struct PreparedContext {
 }
 
 impl WanxiangLM {
+    /// 取内部各切分点的最强搭配增益，不按字数累加；借用词面，不构造 LM 状态。
+    pub(crate) fn internal_collocation_score(&self, word: &str) -> f32 {
+        let window = window_chars(&self.config);
+        let floor = self.floor_log10();
+        word.char_indices()
+            .skip(1)
+            .map(|(split, _)| {
+                let left = &word[..split];
+                let start = left.char_indices().rev().nth(window - 1).map_or(0, |(i, _)| i);
+                self.score_word(&left[start..], &word[split..]) - floor
+            })
+            .fold(0.0, f32::max)
+    }
+
     /// 核心查询：`ctx_tail`（≤5 字）为上文、`word` 为候选词，返回 log10 分。
     ///
     /// 对齐 octagram.cc `Query()` 的滑动窗：k 自 `ctx_tail` 字数递减到 1，

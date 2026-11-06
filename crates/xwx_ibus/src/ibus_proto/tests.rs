@@ -50,8 +50,10 @@ fn gvariant_signatures_match_ibus_1529() {
     ));
     assert_eq!(table.full_signature().as_str(), "(sa{sv}uubbiavav)");
 
-    let desc = Structure::try_from(engine_desc_value().expect("引擎描述构造失败"))
-        .expect("应为结构体");
+    let desc = Structure::try_from(
+        engine_desc_value("/usr/libexec/ibus-setup-xwx").expect("引擎描述构造失败"),
+    )
+    .expect("应为结构体");
     assert_eq!(desc.full_signature().as_str(), "(sa{sv}ssssssssussssssss)");
 
     let engines = vec![Value::from(desc)];
@@ -179,5 +181,25 @@ fn text_builder_roundtrip_to_owned() {
     assert_eq!(
         fields[2].downcast_ref::<&str>().expect("应为字符串"),
         "你好"
+    );
+}
+
+/// `ContentType` 的 purpose 取值必须与 `IBusInputPurpose` 一致。
+///
+/// daemon 用 `Properties.Set("...", "ContentType", (uu))` 下发，实测密码框
+/// 是 `(8, 6144)`。这里钉住 8——写错一个数字，密码框里的按键就会继续进
+/// 中文引擎，而所有单元测试仍然全绿（它们根本不走这条属性）。
+#[test]
+fn input_purpose_password_matches_ibus_enum() {
+    assert_eq!(
+        input_purpose::PASSWORD,
+        8,
+        "IBusInputPurpose.PASSWORD 必须是 8（python gi 实测 + ibus 头文件）"
+    );
+    assert_eq!(input_purpose::FREE_FORM, 0, "FREE_FORM 必须是 0");
+    assert_ne!(
+        input_purpose::PASSWORD,
+        input_purpose::FREE_FORM,
+        "两者相等会让 in_password_field 恒真或恒假"
     );
 }

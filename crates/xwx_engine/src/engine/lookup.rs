@@ -463,7 +463,7 @@ impl ImeEngine {
             )?;
             {
                 {
-                    sort_candidates(pinyin, &mut ranked, true);
+                    super::rank::sort_abbrev_candidates(pinyin, &mut ranked, &self.lm);
                     ranked.truncate(MAX_CANDIDATES);
                     // **整串块置顶**(上游同构,不是调参):libime 的 n-best
                     // 整句候选占候选表 index 0..n-1,librime 的整句候选在它

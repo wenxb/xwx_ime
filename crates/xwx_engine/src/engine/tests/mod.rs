@@ -120,3 +120,4 @@ mod bilingual;
 mod blend_matrix;
 mod blocklist;
 mod perf_equivalence;
+mod collocation;
