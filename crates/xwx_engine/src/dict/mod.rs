@@ -29,7 +29,7 @@ mod sqlite;
 mod syllable_graph;
 // 末尾半音节补全的门槛:**唯一来源**在 `mixed`(那里有「为什么是 2」的依据),
 // 引擎侧的补全弧要用同一条判据,所以在这里转出去。
-pub(crate) use mixed::MIN_PARTIAL_TAIL;
+pub(crate) use mixed::{DEFAULT_SYLLABLE_BUCKETS, MIN_PARTIAL_TAIL};
 pub use abbrev::AbbrevIndex;
 pub use sqlite::SqliteDict;
 pub use syllable_graph::{GraphNode, NO_ENTRY, SyllableGraph};
@@ -63,8 +63,10 @@ const MMAP_RECORD_LEN: usize = 12;
 
 /// abbrev.bin 简拼副索引的魔数(8 字节,含结尾 `\0`)。
 pub const ABBREV_MAGIC: &[u8; 8] = b"XWXABR1\0";
-/// abbrev.bin 当前格式版本(v1,与主索引同构)。
-const ABBREV_VERSION: u32 = 1;
+/// abbrev.bin 支持的最低版本（v1 词条区存原始全拼，v2 存音节分桶下标）。
+const ABBREV_MIN_VERSION: u32 = 1;
+/// abbrev.bin 当前格式版本。
+const ABBREV_VERSION: u32 = 2;
 /// abbrev.bin 头部长:magic(8) + version(4) + 5×u64(40) = 52(与主索引同构)。
 const ABBREV_HEADER_LEN: usize = 52;
 
@@ -106,6 +108,11 @@ pub enum KeyPrefix {
 pub trait Dictionary: Send + Sync {
     /// 精确查词：`pinyin` 可以是单音节（`"ni"`）或多音节短语（`"ni hao"`）。
     fn lookup(&self, pinyin: &str) -> Result<Vec<Candidate>, DictError>;
+
+    /// 按已知主索引记录号直接读词条（`syllable_graph` 命中 `exact` 节点时跳过二分）。
+    fn lookup_at(&self, pinyin: &str, _record_idx: usize) -> Result<Vec<Candidate>, DictError> {
+        self.lookup(pinyin)
+    }
 
     /// 主索引里以 `pinyin` 为前缀的 key 存在性（简拼弧剪枝用）。
     ///
@@ -284,6 +291,13 @@ impl Dictionary for DictStore {
         match self {
             Self::Sqlite(d) => d.lookup(pinyin),
             Self::Mmap(d) => d.lookup(pinyin),
+        }
+    }
+
+    fn lookup_at(&self, pinyin: &str, record_idx: usize) -> Result<Vec<Candidate>, DictError> {
+        match self {
+            Self::Sqlite(d) => d.lookup(pinyin),
+            Self::Mmap(d) => d.lookup_at(pinyin, record_idx),
         }
     }
 

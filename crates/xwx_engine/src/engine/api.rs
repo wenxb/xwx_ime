@@ -127,6 +127,7 @@ impl ImeEngine {
             tracing::warn!(error = %e, "启动期词频总量计算失败(词频项会退回不归一化)");
         }
         crate::segmenter::prepare_typo_table();
+        let _ = &*crate::dict::DEFAULT_SYLLABLE_BUCKETS;
     }
 
     /// 启动预热:把「进程内第一次走到某个查询形状」的一次性成本挪到空闲时。
@@ -152,7 +153,7 @@ impl ImeEngine {
             let _ = self.lookup_candidates(probe, &ctx);
         }
         let mut session = self.create_session();
-        for ch in "womenjintianqubeixian".chars() {
+        for ch in "nihao".chars() {
             let _ = session.handle(InputEvent::Char(ch));
         }
     }

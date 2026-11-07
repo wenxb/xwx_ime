@@ -9,7 +9,6 @@ use std::path::Path;
 use memmap2::Mmap;
 
 use crate::candidate::Candidate;
-use crate::mmap_advice::advise_random;
 
 use super::{AbbrevIndex, DictError, Dictionary, KeyPrefix, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN,
             MMAP_HEADER_LEN_V1, MMAP_MAGIC, MMAP_MIN_VERSION, MMAP_RECORD_LEN, MMAP_VERSION,
@@ -22,9 +21,6 @@ impl MmapDict {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DictError> {
         let file = File::open(path)?;
         let map = unsafe { Mmap::map(&file)? };
-        // 二分是跨页随机跳,声明后内核不再按 64KB 预读放大常驻(实测随机读
-        // 72MB → 63MB);失败不影响正确性,见 `mmap_advice`。
-        advise_random(&map);
         Self::from_bytes(map)
     }
 
@@ -179,6 +175,12 @@ impl MmapDict {
 
     /// 精确查找：返回拼音 key 对应的索引记录；不存在返回 `None`。
     pub(super) fn find(&self, pinyin: &str) -> Result<Option<MmapRecord>, DictError> {
+        if let Some(g) = &self.graph {
+            return match g.walk_key(pinyin)? {
+                Some(node) => Ok(Some(self.record(node.entry_off as usize)?)),
+                None => Ok(None),
+            };
+        }
         let key = pinyin.as_bytes();
         let (mut lo, mut hi) = (0usize, self.pinyin_count);
         while lo < hi {
@@ -309,6 +311,15 @@ impl Dictionary for MmapDict {
         };
         let mut out = Vec::new();
         // ent_off 是相对词区的偏移，需加区基址
+        for (word, freq) in self.parse_entries(self.entries_off + rec.ent_off, rec.ent_len)? {
+            out.push(Candidate::new(word, pinyin, freq));
+        }
+        Ok(out)
+    }
+
+    fn lookup_at(&self, pinyin: &str, record_idx: usize) -> Result<Vec<Candidate>, DictError> {
+        let rec = self.record(record_idx)?;
+        let mut out = Vec::new();
         for (word, freq) in self.parse_entries(self.entries_off + rec.ent_off, rec.ent_len)? {
             out.push(Candidate::new(word, pinyin, freq));
         }

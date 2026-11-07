@@ -14,14 +14,16 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
-use crate::mmap_advice::advise_random;
 use super::{DictError, read_u16, read_u32, read_u64};
 
 const MAGIC: &[u8; 8] = b"XWXSYL1\0";
-const VERSION: u32 = 1;
+const MIN_VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER_LEN: usize = 60;
-const NODE_LEN: usize = 16;
-const EDGE_LEN: usize = 6;
+const NODE_LEN_V1: usize = 16;
+const EDGE_LEN_V1: usize = 6;
+const NODE_LEN_V2: usize = 8;
+const EDGE_LEN_V2: usize = 4;
 /// 词条区间的空标记(非完整词条的节点)。
 pub const NO_ENTRY: u32 = u32::MAX;
 /// 音节名条数上限：正常 412 条。损坏文件不该让我们按它去分配巨大向量。
@@ -43,6 +45,7 @@ pub struct GraphNode {
 #[derive(Debug)]
 pub struct SyllableGraph {
     map: Mmap,
+    version: u32,
     node_count: usize,
     keys: u64,
     node_off: usize,
@@ -55,7 +58,6 @@ impl SyllableGraph {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DictError> {
         let file = File::open(path)?;
         let map = unsafe { Mmap::map(&file)? };
-        advise_random(&map);
         let bytes: &[u8] = &map;
         if bytes.len() < HEADER_LEN {
             return Err(DictError::Corrupt("文件过短，不是完整 syllable_graph.bin"));
@@ -63,9 +65,11 @@ impl SyllableGraph {
         if bytes.get(0..8) != Some(MAGIC.as_slice()) {
             return Err(DictError::Corrupt("魔数不匹配，不是音节级索引"));
         }
-        if read_u32(bytes, 8)? != VERSION {
+        let version = read_u32(bytes, 8)?;
+        if !(MIN_VERSION..=VERSION).contains(&version) {
             return Err(DictError::Corrupt("音节级索引版本不兼容"));
         }
+        let node_len = if version >= 2 { NODE_LEN_V2 } else { NODE_LEN_V1 };
         let node_count = read_u64(bytes, 12)? as usize;
         let syllable_count = read_u64(bytes, 20)?;
         let node_off = read_u64(bytes, 28)? as usize;
@@ -80,7 +84,7 @@ impl SyllableGraph {
             return Err(DictError::Corrupt("区段顺序/范围不合法: node/edge/syllable 起点必须递增且落在文件内"));
         }
         let node_bytes = node_count
-            .checked_mul(NODE_LEN)
+            .checked_mul(node_len)
             .ok_or_else(|| DictError::Corrupt("节点数溢出"))?;
         if node_off + node_bytes > edge_off {
             return Err(DictError::Corrupt("节点数组越界: 节点数 × 记录长度超出边表区"));
@@ -105,6 +109,7 @@ impl SyllableGraph {
             .collect();
         Ok(Self {
             map,
+            version,
             node_count,
             keys,
             node_off,
@@ -129,18 +134,32 @@ impl SyllableGraph {
 
     /// 第 `idx` 个节点(0 号是根)。
     pub fn node(&self, idx: u32) -> Result<GraphNode, DictError> {
+        let node_len = if self.version >= 2 { NODE_LEN_V2 } else { NODE_LEN_V1 };
         let base = self
             .node_off
-            .checked_add(idx as usize * NODE_LEN)
+            .checked_add(idx as usize * node_len)
             .ok_or(DictError::Corrupt("节点偏移溢出"))?;
-        let b = self.bytes(base, NODE_LEN)?;
-        Ok(GraphNode {
-            children_off: read_u32(b, 0)?,
-            children_len: read_u16(b, 4)?,
-            exact: b[6] & 1 != 0,
-            entry_off: read_u32(b, 8)?,
-            entry_len: read_u16(b, 12)?,
-        })
+        let b = self.bytes(base, node_len)?;
+        if self.version >= 2 {
+            let packed = read_u32(b, 0)?;
+            let entry_off = read_u32(b, 4)?;
+            let exact = entry_off != NO_ENTRY;
+            Ok(GraphNode {
+                children_off: packed >> 10,
+                children_len: (packed & 0x3FF) as u16,
+                exact,
+                entry_off,
+                entry_len: u16::from(exact),
+            })
+        } else {
+            Ok(GraphNode {
+                children_off: read_u32(b, 0)?,
+                children_len: read_u16(b, 4)?,
+                exact: b[6] & 1 != 0,
+                entry_off: read_u32(b, 8)?,
+                entry_len: read_u16(b, 12)?,
+            })
+        }
     }
 
     /// 子音节查表：子表按音节名升序，二分即可。
@@ -195,13 +214,35 @@ impl SyllableGraph {
         Ok(Some(cur))
     }
 
+    /// 按空格分隔的全拼键走完整条链，命中完整词条时返回该节点。
+    pub fn walk_key(&self, pinyin: &str) -> Result<Option<GraphNode>, DictError> {
+        if pinyin.is_empty() {
+            return Ok(None);
+        }
+        let mut cur = 0u32;
+        for s in pinyin.split(' ') {
+            match self.child(cur, s)? {
+                Some(c) => cur = c,
+                None => return Ok(None),
+            }
+        }
+        let node = self.node(cur)?;
+        Ok(node.exact.then_some(node))
+    }
+
     fn edge(&self, off: u32, i: u16) -> Result<(u16, u32), DictError> {
+        let edge_len = if self.version >= 2 { EDGE_LEN_V2 } else { EDGE_LEN_V1 };
         let base = self
             .edge_off
-            .checked_add((off as usize + i as usize) * EDGE_LEN)
+            .checked_add((off as usize + i as usize) * edge_len)
             .ok_or(DictError::Corrupt("边偏移溢出"))?;
-        let b = self.bytes(base, EDGE_LEN)?;
-        Ok((read_u16(b, 0)?, read_u32(b, 2)?))
+        let b = self.bytes(base, edge_len)?;
+        if self.version >= 2 {
+            let packed = read_u32(b, 0)?;
+            Ok(((packed >> 23) as u16, packed & 0x7F_FFFF))
+        } else {
+            Ok((read_u16(b, 0)?, read_u32(b, 2)?))
+        }
     }
 
     fn bytes(&self, off: usize, len: usize) -> Result<&[u8], DictError> {

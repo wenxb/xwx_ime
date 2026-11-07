@@ -346,7 +346,7 @@ impl ImeEngine {
         pool: &mut Vec<Candidate>,
     ) -> Result<(), EngineError> {
         let lattice = super::trace::timed("建纠正格", || {
-            self.build_abbrev_lattice(variant, None, user_entries, false)
+            self.build_abbrev_lattice(variant, None, user_entries, false, None)
         })?;
         for mut c in self.best_chain_candidates(
             variant,

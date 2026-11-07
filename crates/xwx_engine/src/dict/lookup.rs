@@ -1,8 +1,9 @@
 //! 查询入口:简拼副索引、交错简拼(混合简拼)、全拼路的统一收口。
 //! 三个入口都做「收集池 → 排序 → 截断」,质量决策一律在排序之后。
 
-use super::mixed::{is_full_pinyin, partial_tail_readings, segment_input, MixedDfs, EMPTY_FIRST,
-                   MAX_MIXED_COLLECT, MAX_MIXED_DFS_STEPS, MAX_PREFIX_READINGS,
+use super::mixed::{build_syllable_buckets, is_full_pinyin, max_literal_start,
+                   partial_tail_readings, segment_input, MixedDfs, DEFAULT_SYLLABLE_BUCKETS,
+                   EMPTY_FIRST, MAX_MIXED_COLLECT, MAX_MIXED_DFS_STEPS, MAX_PREFIX_READINGS,
                    MIN_PARTIAL_TAIL};
 use super::abbrev::syllables_carry_digraphs;
 use super::{Candidate, DictError, KeyPrefix, MmapDict, MAX_LOOKUP_RESULTS};
@@ -203,29 +204,31 @@ impl MmapDict {
     /// 零扫描;**不依赖副索引存在**——本查询只走主索引,
     /// `MmapDict::open()` 未装配 abbrev.bin 时照常工作。
     pub fn lookup_mixed(&self, input: &str) -> Result<Vec<Candidate>, DictError> {
+        self.lookup_mixed_inner(input, true)
+    }
+
+    /// 与 [`Self::lookup_mixed`] 相同，但跳过只覆盖真前缀的第 (4) 步收集
+    /// （供简拼格整串边构建调用，避免 8,000 步无效主索引扫描）。
+    pub fn lookup_mixed_whole(&self, input: &str) -> Result<Vec<Candidate>, DictError> {
+        self.lookup_mixed_inner(input, false)
+    }
+
+    fn lookup_mixed_inner(
+        &self,
+        input: &str,
+        collect_prefixes: bool,
+    ) -> Result<Vec<Candidate>, DictError> {
         let table = self.syllable_table();
         if table.is_empty() || input.is_empty() || !input.is_ascii() {
             return Ok(Vec::new());
         }
-        // 按长度降序:字面音节分支贪心最长优先(与旧 segment_input 一致)。
-        // **按首字母分桶**(纯性能优化,输出逐字节不变):
-        // `syllable_matches` 要求 `rest[..syl.len()] == syl`(或 üe 归一后相等),
-        // 首字节不同的音节**永远不可能匹配**,而它现在每个节点都要把整张
-        // 音节表(~410 条)试一遍。分桶后每个节点只试同首字母的那十几条,
-        // 匹配成功的**顺序**(长度降序)与原来完全一致 ⇒ 收集顺序、
-        // `MAX_MIXED_COLLECT` 截断点、结果全都逐字节不变。
-        let mut by_len: Vec<&'static str> = table.to_vec();
-        by_len.sort_by_key(|s| std::cmp::Reverse(s.len()));
-        let by_first: [Vec<&'static str>; 26] = {
-            let mut b: [Vec<&'static str>; 26] = std::array::from_fn(|_| Vec::new());
-            for s in &by_len {
-                if let Some(i) = s.as_bytes().first().and_then(|c| c.checked_sub(b'a')) {
-                    if (i as usize) < 26 {
-                        b[i as usize].push(s);
-                    }
-                }
-            }
-            b
+        let owned_buckets;
+        let (by_len, by_first) = if std::ptr::eq(table, crate::segmenter::SYLLABLES) {
+            let (l, f) = &*DEFAULT_SYLLABLE_BUCKETS;
+            (l.as_slice(), f)
+        } else {
+            owned_buckets = build_syllable_buckets(table);
+            (owned_buckets.0.as_slice(), &owned_buckets.1)
         };
 
         let mut best: std::collections::HashMap<(String, String), u64> =
@@ -248,25 +251,24 @@ impl MmapDict {
                 }
             }
         } else {
+            let max_lit = max_literal_start(input.as_bytes(), by_first, by_len);
             let mut dfs = MixedDfs {
                 dict: self,
                 input: input.as_bytes(),
-                by_first: &by_first,
-                by_all: &by_len,
+                by_first,
+                by_all: by_len,
                 out: &mut best,
                 budget: MAX_MIXED_DFS_STEPS,
                 threshold: 0,
                 threshold_at: 0,
-                prefix_readings: Some(&mut prefix_readings),
+                prefix_readings: if collect_prefixes {
+                    Some(&mut prefix_readings)
+                } else {
+                    None
+                },
+                max_literal_pos: max_lit.unwrap_or(0),
             };
-            // (0) **可穷尽的约束匹配先跑**（阶段 2A）：`z + tai lan` 这种形态
-            // 直接按「缩写音节的每个可能展开 × 尾巴的完整音节键」精确查词。
-            // 它必须**先于** DFS：通用 DFS 会把整条步数预算烧在首字母的
-            // 各条子树上（阶段 0 实测零收集），而这里的规模只有几十次查键。
             if let Some((k, rest_key)) = super::mixed::initial_plus_literal_tail(input, table) {
-                // 预扫用**独立预算**：它是「固定规模、可穷尽」的枚举，不该挤占
-                // DFS 的步数预算——否则会把本来能解出的其它形态挤掉（实测会改变
-                // `nhao`、`womenjintian...` 这类语料输入的候选）。
                 let dfs_budget = dfs.budget;
                 let mut key = String::with_capacity(k + 1 + rest_key.len());
                 for syl in crate::segmenter::abbrev_syllables(&input[..k]) {
@@ -274,12 +276,13 @@ impl MmapDict {
                     key.push_str(syl);
                     key.push(' ');
                     key.push_str(&rest_key);
-                    // 完整音节序列 ⇒ `collect` 走「只收与它完全相等的 key」那条。
                     dfs.collect(key.as_bytes(), false)?;
                 }
                 dfs.budget = dfs_budget;
             }
-            dfs.dfs(0, &[], false, false)?;
+            if max_lit.is_some() {
+                dfs.dfs(0, &[], false, false)?;
+            }
         }
 
         // (3) **末尾半音节补充召回(T2,2026-10-02)**:把输入切成
@@ -318,6 +321,7 @@ impl MmapDict {
                 threshold: partial_threshold,
                 threshold_at: 0,
                 prefix_readings: None,
+                max_literal_pos: 0,
             };
             // 门槛先设成「池子里现有最差的一条」:半音节区间动辄几千条
             // (`xian` 的 `xiang*`、`sh` 的 `sh*`),而**比现有最差还差**的
@@ -390,6 +394,7 @@ impl MmapDict {
                     threshold: 0,
                     threshold_at: 0,
                     prefix_readings: None,
+                    max_literal_pos: 0,
                 };
                 // `mid_syllable = true`:读法末尾是残缺音节(`...jin t`),
                 // 该前缀下的 key 都在这一位继续;`collect` 的「一字一字母」

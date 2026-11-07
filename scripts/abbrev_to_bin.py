@@ -28,7 +28,7 @@ import struct
 import sys
 
 MAGIC = b"XWXABR1\0"   # 副索引魔数(与主索引 XWXIDM1 区分)
-VERSION = 1            # v1:与主索引同构的 52 字节头
+VERSION = 2            # v2:52B 头 + 26 桶音节表 + 1B/音节下标词条区
 HEADER_LEN = 52        # 8s + I + 5×Q(与 dict.bin v1 同构)
 RECORD_LEN = 12        # u32 str_off + u16 str_len + u32 ent_off + u16 ent_len
 FREQ_MAX = 0xFFFFFFFF  # u32 上限,超出截断(真实词频远达不到)
@@ -144,9 +144,25 @@ def main() -> None:
     print(f"唯一首字母 key 数: {len(keys)}  关联数: {n_assoc} "
           f"(词条的 {n_assoc / n_entries:.2f}x)")
 
-    # 三个区:records(首字母索引)→ strings(首字母串)→ entries(词条)。
-    # 词条区每条:word_len u8 + word + pinyin_len u8 + pinyin + freq u32 LE,
-    # 块内按 freq 降序(与主索引「组内降序」语义一致)。
+    # 按首字母建 26 个音节桶(每桶 ≤37 项,1 字节下标寻址,省掉 30.6MB 原始全拼串)。
+    by_init = [set() for _ in range(26)]
+    for pinyin, _ in groups:
+        for syl in pinyin.split(" "):
+            if syl:
+                by_init[ord(syl[0]) - ord("a")].add(syl)
+    buckets = [sorted(s) for s in by_init]
+    syl_id = [{s: i for i, s in enumerate(b)} for b in buckets]
+    syl_table = bytearray()
+    for b in buckets:
+        if len(b) > 255:
+            raise SystemExit(f"单字母音节桶超 255: {len(b)}")
+        syl_table.append(len(b))
+        for s in b:
+            sb = s.encode("ascii")
+            syl_table.append(len(sb))
+            syl_table.extend(sb)
+
+    # 词条区 v2: word_len u8 + word + syl_ids [u8; len(ik)] + freq u32 LE(按 freq 降序)。
     strings = bytearray()
     entries = bytearray()
     records = bytearray()
@@ -156,20 +172,19 @@ def main() -> None:
         ent_off = len(entries)
         for word, pinyin, freq in sorted(abbrev[ik], key=lambda x: -x[2]):
             wb = word.encode("utf-8")
-            pb = pinyin.encode("utf-8")
-            if len(wb) > 255 or len(pb) > 255:
-                raise SystemExit(f"词条/拼音过长(>255 字节): {word!r} {pinyin!r}")
+            if len(wb) > 255:
+                raise SystemExit(f"词条过长(>255 字节): {word!r}")
             entries.append(len(wb))
             entries.extend(wb)
-            entries.append(len(pb))
-            entries.extend(pb)
+            for syl in pinyin.split(" "):
+                if syl:
+                    entries.append(syl_id[ord(syl[0]) - ord("a")][syl])
             entries.extend(struct.pack("<I", min(freq, FREQ_MAX)))
         records.extend(struct.pack("<IHIH", str_off, len(ik), ent_off, len(entries) - ent_off))
 
-    records_off = HEADER_LEN
+    records_off = HEADER_LEN + len(syl_table)
     strings_off = records_off + len(records)
     entries_off = strings_off + len(strings)
-
     header = struct.pack(
         "<8sIQQQQQ",
         MAGIC, VERSION, len(keys), n_assoc,
@@ -178,7 +193,7 @@ def main() -> None:
     assert len(header) == HEADER_LEN, "头部布局与 Rust 端不一致"
 
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    _write_atomically(src, dst, header + records + strings + entries)
+    _write_atomically(src, dst, header + syl_table + records + strings + entries)
     size = os.path.getsize(dst)
     main_size = os.path.getsize(src)
     print(f"已写出: {dst}({size / 1024 / 1024:.1f} MB,为主索引的 {size / main_size:.2f}x)")

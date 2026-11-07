@@ -243,18 +243,21 @@ impl ImeEngine {
                 // 链在索引里的节点：一次内存子表二分（子表 ≤412 项）就答完
                 // 「这条链还有没有更长的词条」，替掉旧路径那条跨页 mmap 二分
                 // （实测 1.2 万次 ≈10.5ms，是简拼格几乎全部成本）。
-                let child_node = match (graph, node) {
-                    (Some(g), Some(n)) => g.child(n, syl)?,
-                    _ => None,
+                let (child_node, child_info) = match (graph, node) {
+                    (Some(g), Some(n)) => match g.child(n, syl)? {
+                        Some(c) => (Some(c), Some(g.node(c)?)),
+                        None => (None, None),
+                    },
+                    _ => (None, None),
                 };
                 let prefix_state = if arc_abbrev {
                     match graph {
-                        Some(g) => match (node, child_node) {
+                        Some(_) => match (node, child_info) {
                             // 链本身已不是任何词条的 key 前缀 ⇒ 它的任何延长也不是，
                             // 整棵子树剪掉。旧路径在这里同样得到 `None`，只是要先付
                             // 一次主索引二分才发现。
                             (None, _) | (Some(_), None) => crate::dict::KeyPrefix::None,
-                            (Some(_), Some(c)) if g.node(c)?.exact => crate::dict::KeyPrefix::Exact,
+                            (Some(_), Some(info)) if info.exact => crate::dict::KeyPrefix::Exact,
                             (Some(_), Some(_)) => crate::dict::KeyPrefix::Prefix,
                         },
                         None => self.dict.key_prefix_state(joined)?,
@@ -295,7 +298,17 @@ impl ImeEngine {
                         .chain((!self.fuzzy_enabled).then_some((joined, 0.0)));
                     for (key, fuzzy_penalty) in keys {
                         if !cache.contains_key(key) {
-                            cache.insert(key.to_owned(), self.dict.lookup(key)?);
+                            let cands = if fuzzy_penalty == 0.0 && graph.is_some() {
+                                match child_info {
+                                    Some(info) if info.exact => {
+                                        self.dict.lookup_at(key, info.entry_off as usize)?
+                                    }
+                                    _ => Vec::new(),
+                                }
+                            } else {
+                                self.dict.lookup(key)?
+                            };
+                            cache.insert(key.to_owned(), cands);
                         }
                         // 缓存候选直接借用，只复制最终格边持有的词与拼音。
                         for c in &cache[key] {

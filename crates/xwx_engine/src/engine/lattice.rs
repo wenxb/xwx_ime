@@ -325,29 +325,19 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
         let _ = ctx;
         let initial = self.lm.initial_state();
 
-        // 每条边自身的分数与剩余预算无关 ⇒ 先算一遍(每边一次 `score_only`),
-        // 再按预算递推;否则预算这一维会把 LM 调用次数乘以 (预算 + 1)。
-        // 空词边没有词频项、没有 LM 转移,只有它自己的编辑惩罚。
-        let edge_scores: Vec<Vec<f32>> = lattice
+        // 每条边自身的分数与剩余预算无关 ⇒ 按需算一次并缓存到 `edge_scores`
+        // (不可达的死边不调 LM;位置 0 的结果仅用于 `.is_finite()` 可达性
+        // 与预算单调性检查,真实首边打分在 `lattice_candidates_scored` 中用
+        // 真实 `ctx` 计算)。
+        let mut edge_scores: Vec<Vec<f32>> = lattice
             .iter()
-            .map(|bucket| {
-                bucket
-                    .iter()
-                    .map(|edge| {
-                        if edge.gap {
-                            -edge.typo_penalty
-                        } else {
-                            let logp = self.lm.score_only(&initial, &edge.word);
-                            let dict_logp = if total_freq > 0 {
-                                ((edge.freq.max(1) as f64).log10() - log10_total) as f32
-                            } else {
-                                0.0
-                            };
-                            dict_logp + logp * self.lm_weight - edge.fuzzy_penalty
-                                - edge.typo_penalty
-                        }
-                    })
-                    .collect()
+            .enumerate()
+            .map(|(pos, bucket)| {
+                if pos == 0 {
+                    Vec::new()
+                } else {
+                    vec![f32::NAN; bucket.len()]
+                }
             })
             .collect();
 
@@ -378,7 +368,31 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
                     if !rest.is_finite() {
                         continue; // 该边到不了串尾,不构成完整补全
                     }
-                    let score = edge_scores[pos][slot] + rest;
+                    let edge_score = if pos == 0 {
+                        if edge.gap { -edge.typo_penalty } else { 0.0 }
+                    } else {
+                        let cached = edge_scores[pos][slot];
+                        if !cached.is_nan() {
+                            cached
+                        } else {
+                            let s = if edge.gap {
+                                -edge.typo_penalty
+                            } else {
+                                let logp = self.lm.score_only(&initial, &edge.word);
+                                let dict_logp = if total_freq > 0 {
+                                    ((edge.freq.max(1) as f64).log10() - log10_total) as f32
+                                } else {
+                                    0.0
+                                };
+                                dict_logp + logp * self.lm_weight
+                                    - edge.fuzzy_penalty
+                                    - edge.typo_penalty
+                            };
+                            edge_scores[pos][slot] = s;
+                            s
+                        }
+                    };
+                    let score = edge_score + rest;
                     if score > best {
                         best = score;
                     }

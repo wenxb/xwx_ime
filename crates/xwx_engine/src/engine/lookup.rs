@@ -12,6 +12,8 @@ pub(in crate::engine) struct EntryEvidence {
     pub(in crate::engine) total: u64,
     /// 上文 LM 状态（首词的前文就是已上屏文本，无近似）。
     pub(in crate::engine) state: LmState,
+    /// 预编译的万象上文窗口节点，供整批整串候选复用。
+    pub(in crate::engine) context: Option<crate::wanxiang::PreparedContext>,
 }
 
 impl ImeEngine {
@@ -207,8 +209,15 @@ impl ImeEngine {
         let lattice_supplies_mixed = !reachable
             && (super::rank::pure_abbrev_input(pinyin, true)
                 || super::rank::leading_abbrev_input(&self.segmenter, pinyin, true));
+        let mut abbrev_patterns: Option<Vec<Candidate>> = None;
         if !exactly_reachable && !spells_whole && !lattice_supplies_mixed {
-            super::indexed_mixed::merge_indexed_mixed(self, pinyin, ctx, &mut ranked)?;
+            super::indexed_mixed::merge_indexed_mixed(
+                self,
+                pinyin,
+                ctx,
+                &mut ranked,
+                &mut abbrev_patterns,
+            )?;
         }
         // **旧通道已删（第 8 步，⑤⑩⑯）**：这里曾是「简拼层合并 + 配额 +
         // 终排截断」。合并没了，但可达输入的终排/截断原来由 merge_layer
@@ -397,7 +406,13 @@ impl ImeEngine {
             let third_abbrev = !pure_abbrev && !leading_abbrev;
             let grid_scope = demote_scope || third_abbrev;
             let abbrev_lattice = super::trace::timed("建简拼格", || {
-                self.build_abbrev_lattice(pinyin, bounds, user_snapshot.as_ref(), grid_scope)
+                self.build_abbrev_lattice(
+                    pinyin,
+                    bounds,
+                    user_snapshot.as_ref(),
+                    grid_scope,
+                    abbrev_patterns,
+                )
             })?;
             // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
             // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），所以整串

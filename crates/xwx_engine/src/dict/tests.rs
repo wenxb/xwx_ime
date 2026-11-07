@@ -180,6 +180,28 @@ fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
             ("这个人", "zhe ge ren", 167480),
         ]),
     ];
+    let mut buckets: [Vec<&str>; 26] = std::array::from_fn(|_| Vec::new());
+    let mut syl_table = Vec::new();
+    if version >= 2 {
+        for (_, ws) in &groups {
+            for &(_, py, _) in ws {
+                for syl in py.split(' ') {
+                    let b = &mut buckets[(syl.as_bytes()[0] - b'a') as usize];
+                    if !b.contains(&syl) {
+                        b.push(syl);
+                        b.sort_unstable();
+                    }
+                }
+            }
+        }
+        for b in &buckets {
+            syl_table.push(b.len() as u8);
+            for s in b {
+                syl_table.push(s.len() as u8);
+                syl_table.extend_from_slice(s.as_bytes());
+            }
+        }
+    }
     let mut strings = Vec::new();
     let mut entries = Vec::new();
     let mut records = Vec::new();
@@ -192,8 +214,16 @@ fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
         for (w, py, f) in ws {
             entries.push(w.len() as u8);
             entries.extend_from_slice(w.as_bytes());
-            entries.push(py.len() as u8);
-            entries.extend_from_slice(py.as_bytes());
+            if version >= 2 {
+                for syl in py.split(' ') {
+                    let b = &buckets[(syl.as_bytes()[0] - b'a') as usize];
+                    let idx = b.iter().position(|&x| x == syl).unwrap() as u8;
+                    entries.push(idx);
+                }
+            } else {
+                entries.push(py.len() as u8);
+                entries.extend_from_slice(py.as_bytes());
+            }
             entries.extend_from_slice(&f.to_le_bytes());
         }
         records.extend_from_slice(&str_off.to_le_bytes());
@@ -202,7 +232,7 @@ fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
         records.extend_from_slice(&((entries.len() - ent_start) as u16).to_le_bytes());
         total += ws.len() as u64;
     }
-    let records_off = ABBREV_HEADER_LEN as u64;
+    let records_off = (ABBREV_HEADER_LEN + syl_table.len()) as u64;
     let strings_off = records_off + (groups.len() as u64) * MMAP_RECORD_LEN as u64;
     let entries_off = strings_off + strings.len() as u64;
     let mut out = Vec::new();
@@ -213,6 +243,7 @@ fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
     out.extend_from_slice(&records_off.to_le_bytes());
     out.extend_from_slice(&strings_off.to_le_bytes());
     out.extend_from_slice(&entries_off.to_le_bytes());
+    out.extend_from_slice(&syl_table);
     out.extend_from_slice(&records);
     out.extend_from_slice(&strings);
     out.extend_from_slice(&entries);
@@ -221,19 +252,18 @@ fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
 
 #[test]
 fn abbrev_index_lookup_pure() {
-    let path = temp_path("abbrev_pure");
-    fs::write(&path, build_test_abbrev_bin(ABBREV_VERSION)).expect("写副索引失败");
-    let idx = AbbrevIndex::open(&path).expect("打开副索引失败");
-    fs::remove_file(&path).ok();
-
-    let res = idx.lookup_prefix("zgr").expect("简拼查询失败");
-    assert!(res.iter().any(|c| c.word == "中国人" && c.pinyin == "zhong guo ren"),
-        "zgr 应返回带全拼的中国人: {res:?}");
-    // 组内按 freq 降序
-    assert_eq!(res[0].word, "中国人");
-    let bjdx = idx.lookup_prefix("bjdx").expect("简拼查询失败");
-    assert!(bjdx.iter().any(|c| c.word == "北京大学" && c.pinyin == "bei jing da xue"));
-    assert!(idx.lookup_prefix("q").expect("查询失败").is_empty(), "无匹配应返回空");
+    for version in [1, ABBREV_VERSION] {
+        let path = temp_path("abbrev_pure");
+        fs::write(&path, build_test_abbrev_bin(version)).expect("写副索引失败");
+        let idx = AbbrevIndex::open(&path).expect("打开副索引失败");
+        fs::remove_file(&path).ok();
+        let res = idx.lookup_prefix("zgr").expect("简拼查询失败");
+        assert!(res.iter().any(|c| c.word == "中国人" && c.pinyin == "zhong guo ren"));
+        assert_eq!(res[0].word, "中国人");
+        let bjdx = idx.lookup_prefix("bjdx").expect("简拼查询失败");
+        assert!(bjdx.iter().any(|c| c.word == "北京大学" && c.pinyin == "bei jing da xue"));
+        assert!(idx.lookup_prefix("q").expect("查询失败").is_empty());
+    }
 }
 
 #[test]

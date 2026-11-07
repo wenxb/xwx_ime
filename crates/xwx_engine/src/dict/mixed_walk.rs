@@ -208,10 +208,13 @@ impl Walk<'_> {
         hi: usize,
     ) -> Result<(), DictError> {
         let room = MAX_WALK_RESULTS - self.out.len();
-        for (word, pinyin, freq) in self.idx.exact_entries(lo, hi, prefix.len(), room)? {
-            if !cons_ok(&pinyin, cons) {
-                continue;
-            }
+        for (word, pinyin, freq) in self.idx.exact_entries(
+            lo,
+            hi,
+            prefix.len(),
+            room,
+            |k, syl| cons.get(k).is_some_and(|&c| syl_matches_cons(syl, c)),
+        )? {
             match self.seen.get(&(word.clone(), pinyin.clone())) {
                 Some(&i) => {
                     if freq > self.out[i].freq {
@@ -228,33 +231,29 @@ impl Walk<'_> {
     }
 }
 
-/// 逐位校验词条拼音是否满足片段序列给出的约束；音节数必须相等。
+fn syl_matches_cons(syl: &str, c: Cons) -> bool {
+    match c {
+        Cons::Init => true,
+        Cons::Digraph(letter) => {
+            let b = syl.as_bytes();
+            b.len() >= 2 && b[0] == letter && b[1] == b'h'
+        }
+        Cons::Full(want) => {
+            crate::segmenter::canonical_syllable(syl)
+                == crate::segmenter::canonical_syllable(want)
+        }
+    }
+}
+
+#[cfg(test)]
 fn cons_ok(pinyin: &str, cons: &[Cons]) -> bool {
     let mut n = 0usize;
     for syl in pinyin.split(' ') {
-        let Some(c) = cons.get(n) else {
+        let Some(&c) = cons.get(n) else {
             return false;
         };
         n += 1;
-        let ok = match *c {
-            // 键的首字母就是这一位的首字母，无需再验。
-            Cons::Init => true,
-            Cons::Digraph(letter) => {
-                let b = syl.as_bytes();
-                b.len() >= 2 && b[0] == letter && b[1] == b'h'
-            }
-            Cons::Full(want) => {
-                // **精确相等**（不是 `syllable_matches` 的前缀匹配——那条口径
-                // 是「拿音节去比输入剩余串」，`zhan` 会匹配上 `zhang`）。
-                // üe 的两套写法由全项目唯一的归一函数抹平。
-                let (a, b) = (
-                    crate::segmenter::canonical_syllable(syl),
-                    crate::segmenter::canonical_syllable(want),
-                );
-                a == b
-            }
-        };
-        if !ok {
+        if !syl_matches_cons(syl, c) {
             return false;
         }
     }

@@ -12,9 +12,8 @@
 布局（小端，见 data/README.md「一点六、音节级词典转移索引 syllable_graph.bin」）：
     header 60B: 8s magic | I version | Q n_nodes | Q n_syllables
                 | Q node_off | Q edge_off | Q syl_off | Q n_keys
-    node 16B:   I children_off | H children_len | B flags(b0=完整词条) | B pad
-                | I ent_off | H ent_len | H pad
-    edge  6B:   H syllable_id | I child_node
+    node  8B (v2): I ((children_off << 10) | children_len) | I ent_off (非完整词条为 0xFFFFFFFF)
+    edge  4B (v2): I ((syllable_id << 23) | child_node)
     syl  变长:  H len | bytes name   （412 条，按名字升序，id 即下标）
 
 子表按 syllable_id 升序（id 定义成名字升序），所以读取端二分即可。
@@ -25,10 +24,10 @@ import struct
 import sys
 
 MAGIC = b"XWXSYL1\0"
-VERSION = 1
+VERSION = 2
 HEADER_LEN = 60
-NODE_LEN = 16
-EDGE_LEN = 6
+NODE_LEN = 8
+EDGE_LEN = 4
 RECORD_LEN = 12
 
 
@@ -84,8 +83,10 @@ def build(keys):
 def serialize(nodes, keys):
     names = sorted({syl for n in nodes for syl, _ in n["children"]})
     sid = {name: i for i, name in enumerate(names)}
-    if len(names) > 0xFFFF:
-        raise SystemExit(f"音节表 {len(names)} 条超过 u16 编号上限")
+    if len(names) >= (1 << 9):
+        raise SystemExit(f"音节表 {len(names)} 条超过 9-bit 编号上限")
+    if len(nodes) >= (1 << 23):
+        raise SystemExit(f"节点数 {len(nodes)} 超过 23-bit 编号上限")
 
     # 边按 (syllable_id, child) 升序落盘，读取端可二分
     edges = []
@@ -112,18 +113,15 @@ def serialize(nodes, keys):
         len(keys),
     )
     for n in nodes:
+        if n["off"] >= (1 << 22) or n["len"] >= (1 << 10):
+            raise SystemExit(f"子表偏移/长度超出 v2 位宽: off={n['off']} len={n['len']}")
         out += struct.pack(
-            "<IHBB IHH",
-            n["off"],
-            min(n["len"], 0xFFFF),
-            1 if n["exact"] else 0,
-            0,
+            "<II",
+            (n["off"] << 10) | n["len"],
             n["ent"] if n["exact"] else 0xFFFFFFFF,
-            n["ent_len"] if n["exact"] else 0,
-            0,
         )
     for s, child in edges:
-        out += struct.pack("<HI", s, child)
+        out += struct.pack("<I", (s << 23) | child)
     out += syl_bytes
     return bytes(out), names, sid, edges, syl_off + len(syl_bytes)
 
@@ -141,16 +139,16 @@ def validate(blob, keys, names, sid):
         raise SystemExit(f"头部记录数 {n_keys} 与实际 {len(keys)} 不符")
 
     def node(idx):
-        off, clen, flags, _pad, ent_off, ent_len, _ = struct.unpack_from(
-            "<IHBB IHH", blob, node_off + idx * NODE_LEN
-        )
-        return off, clen, flags, ent_off, ent_len
+        packed, ent_off = struct.unpack_from("<II", blob, node_off + idx * NODE_LEN)
+        exact = ent_off != 0xFFFFFFFF
+        return packed >> 10, packed & 0x3FF, int(exact), ent_off, int(exact)
 
     def child_of(idx, name):
         off, clen, *_ = node(idx)
         want = sid[name]
         for i in range(clen):
-            s, c = struct.unpack_from("<HI", blob, edge_off + (off + i) * EDGE_LEN)
+            packed = struct.unpack_from("<I", blob, edge_off + (off + i) * EDGE_LEN)[0]
+            s, c = packed >> 23, packed & 0x7FFFFF
             if s == want:
                 return c
         return None

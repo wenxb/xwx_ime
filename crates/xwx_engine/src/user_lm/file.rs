@@ -359,7 +359,6 @@ impl UserLM {
                 .mode(0o600)
                 .open(&tmp)?;
             f.write_all(text.as_bytes())?;
-            f.sync_data().ok(); // 尽力而为:数据页落盘失败不致命
             drop(f);
             std::fs::rename(&tmp, path)?;
             Ok(())

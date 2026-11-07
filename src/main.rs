@@ -407,13 +407,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             _ = flush_tick.tick() => {
-                // **任意非零增量都保存**(30s 一次):[`FLUSH_LEARN_THRESHOLD`]
-                // 只是额外触发,不是「不到 64 次就不存」——旧实现那样会让不足
-                // 阈值的尾巴在退出时被 `flush` 的 `dirty == 0` 早退跳过。
-                let zh_dirty = engine.user_lm().is_some_and(|u| u.dirty_count() > 0);
+                let zh_dirty = engine.user_lm().is_some_and(|u| u.needs_flush());
                 let en_dirty = engine
                     .english()
-                    .is_some_and(|e| e.user().dirty_count() > 0);
+                    .is_some_and(|e| e.user().needs_flush());
                 if zh_dirty || en_dirty {
                     flush_user_lm(&engine).await;
                     tracing::info!(zh = zh_dirty, en = en_dirty, "用户语言模型定时回写完成");
@@ -437,7 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 用户模型落盘放到**阻塞线程**上:序列化 + `sync_data` 是同步 IO,
+/// 用户模型落盘放到**阻塞线程**上:全表序列化与文件写入是同步 IO,
 /// 直接在 tokio 运行时里跑会卡住定时器与信号处理。
 ///
 /// 中英两个模型**分别** flush:一个失败不能阻止另一个(英文写不进去时

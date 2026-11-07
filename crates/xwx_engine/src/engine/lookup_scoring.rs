@@ -20,6 +20,9 @@ impl ImeEngine {
         let DictStore::Mmap(d) = &self.dict else {
             return Ok(());
         };
+        if c.freq != 0 && ev.is_none_or(|e| e.total == 0 || c.covered < pinyin.len()) {
+            return Ok(());
+        }
         let Some(freq) = d.entry_freq(&c.pinyin, &c.word)? else {
             return Ok(());
         };
@@ -33,7 +36,9 @@ impl ImeEngine {
             return Ok(());
         }
         let dict_logp = ((freq.max(1) as f64).log10() - (ev.total as f64).log10()) as f32;
-        let lm = self.lm.score_only(&ev.state, &c.word);
+        let lm = self
+            .lm
+            .score_with_context(&ev.state, ev.context.as_ref(), &c.word);
         c.score = dict_logp + (lm - self.lm.floor_log10()) * self.lm_weight;
         Ok(())
     }
@@ -73,9 +78,12 @@ impl ImeEngine {
     /// 按查询算一次而不是按候选算：整串条目边一批可达数百条，每条各构造一次
     /// LM 状态是纯浪费（实测把 `full:weishenme` 的 p95 抬高约 0.9ms）。
     pub(in crate::engine) fn entry_evidence(&self, ctx: &LmContext) -> Result<EntryEvidence, EngineError> {
+        let state = self.lm.state_from_context(ctx);
+        let context = self.lm.prepare_context(&state);
         Ok(EntryEvidence {
             total: self.dict.total_freq()?,
-            state: self.lm.state_from_context(ctx),
+            context,
+            state,
         })
     }
 

@@ -7,39 +7,11 @@ use super::{DictError, MmapDict, MAX_LOOKUP_RESULTS};
 /// 只服务于 [`MmapDict::lookup_mixed_full_pinyin`](改动前的原实现)。
 pub(super) const MAX_SEGMENTATIONS: usize = 8;
 
-/// 交错简拼 DFS 单次查询的**索引探测步数**上限(见 [`MmapDict::lookup_mixed`])。
-///
-/// 口径:一次二分迭代、一次记录读取各记 1 步。DFS 的每一项代价最终都落在
-/// 「在主索引上定位或读取一条记录」上,用同一种步数计量才能把「多分支枚举」
-/// 与「单次二分」放在同一把尺子上——这是本常量唯一的作用,**不是时间**,
-/// 因为时间随机器变、步数不随。
-///
-/// 取值依据(`tools/spike_abbrev/walk.py` 原型在真实 `data/dict.bin`
-/// 186 万 key 上实测的二分次数):
-/// - 真实交错输入远低于此:`feicde` 248、`zguo` 570、`nhao` 962、
-///   `beijdx` 1493、`shouzm` 1923、`zgren` 2085;
-/// - 病态输入才会逼近:`zzzz` 2831、`zhzhzhzh` 6922;
-/// - 20_000 步给真实输入留约 10 倍余量,同时把任意病态输入的最坏情况
-///   钳成常数(与 `MAX_CHAINS_PER_START` / `SYLLABLE_ENUM_QUOTA` 同一种
-///   「硬上限保证最坏情况有界」的思路)。
-///
-/// 预算耗尽时**保留已经收下的候选**(部分结果优于空结果),不报错。
+/// 交错简拼 DFS 单次查询的索引探测步数上限（二分迭代与记录读取各记 1 步）。
+/// 预算耗尽时保留已收候选，不报错。
 pub(super) const MAX_MIXED_DFS_STEPS: usize = 20_000;
 
-/// 混合简拼的**探索上界**:收集池到这个条数就停止继续探索。
-///
-/// 取 [`MAX_LOOKUP_RESULTS`] 的 8 倍(4000),是实测标定的折中:
-/// - 早了不行——在 500(最终名额)就停时,截断按**探索顺序**发生,实测
-///   `meiy` 把词频最高的「没有」(504685,本该第 1)丢了,列表第 1 名
-///   「每一个」只有 500354;
-/// - 晚了也不行——完全不设上界时 DFS 会跑满 [`MAX_MIXED_DFS_STEPS`]
-///   预算,`zhongg` 单次查询 0.343ms → **4.13ms**(5ms 门槛);
-/// - 4000 配上「整 key 跳过」后,`zhongg` 2.8ms、`meiy` 1.3ms,
-///   而 26 个抽样输入的候选条数**全部不变**(只有 `meiy`/`zhongg`/`nih`
-///   这类「一个音节位下有几百个 key」的输入内容变好)。
-///
-/// 真正的质量决策仍然只在**[排序之后]**做(按词频取前
-/// [`MAX_LOOKUP_RESULTS`] 条),这里只是「看多少」的上界。
+/// 混合简拼探索上界（`MAX_LOOKUP_RESULTS * 8`），真正截断在排序之后。
 pub(super) const MAX_MIXED_COLLECT: usize = MAX_LOOKUP_RESULTS as usize * 8;
 
 /// 途中「停在残缺音节上」的读法最多记这么多条(见 [`MixedDfs::prefix_readings`])。
@@ -231,6 +203,9 @@ pub(super) struct MixedDfs<'a> {
     /// 混拼候选来源(见 [`MmapDict::lookup_mixed`] 的前缀收集);整串被覆盖时
     /// 它们没有用武之地,故由调用方决定要不要付这份记账成本。
     pub(super) prefix_readings: Option<&'a mut Vec<(Vec<u8>, usize)>>,
+    /// 输入中最后一次能匹配到字面音节的字节起点；`!used_literal` 时超过该位置
+    /// 的首字母分支不可能再产生字面音节，直接剪枝。
+    pub(super) max_literal_pos: usize,
 }
 
 /// 把 `part` 接到空格分隔的前缀 `prefix` 之后(空前缀不加前导空格)。
@@ -242,6 +217,43 @@ fn joined(prefix: &[u8], part: &[u8]) -> Vec<u8> {
     }
     v.extend_from_slice(part);
     v
+}
+
+pub(super) fn build_syllable_buckets(
+    table: &[&'static str],
+) -> (Vec<&'static str>, [Vec<&'static str>; 26]) {
+    let mut by_len: Vec<&'static str> = table.to_vec();
+    by_len.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    let mut by_first: [Vec<&'static str>; 26] = std::array::from_fn(|_| Vec::new());
+    for &s in &by_len {
+        if let Some(i) = s.as_bytes().first().and_then(|c| c.checked_sub(b'a')) {
+            if (i as usize) < 26 {
+                by_first[i as usize].push(s);
+            }
+        }
+    }
+    (by_len, by_first)
+}
+
+pub(crate) static DEFAULT_SYLLABLE_BUCKETS: std::sync::LazyLock<(
+    Vec<&'static str>,
+    [Vec<&'static str>; 26],
+)> = std::sync::LazyLock::new(|| build_syllable_buckets(crate::segmenter::SYLLABLES));
+
+/// 返回输入中最后一个能匹配字面音节的起点；`None` 表示整串没有任何位置能匹配字面音节。
+pub(super) fn max_literal_start(
+    input: &[u8],
+    by_first: &[Vec<&'static str>; 26],
+    by_all: &[&'static str],
+) -> Option<usize> {
+    (0..input.len()).rev().find(|&p| {
+        let rest = &input[p..];
+        let bucket: &[&'static str] = match rest.first().and_then(|c| c.checked_sub(b'a')) {
+            Some(i) if (i as usize) < 26 => &by_first[i as usize],
+            _ => by_all,
+        };
+        bucket.iter().any(|s| syllable_matches(s, rest))
+    })
 }
 
 impl MixedDfs<'_> {
@@ -450,6 +462,9 @@ impl MixedDfs<'_> {
             ncand = 2;
         }
         for c in cands.into_iter().take(ncand) {
+            if !used_literal && pos + c.len() > self.max_literal_pos {
+                continue;
+            }
             let base = joined(prefix, c);
             if pos + c.len() == input.len() {
                 // 末位首字母:音节残缺,按前缀收更长的词(声母语义)。

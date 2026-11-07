@@ -36,6 +36,7 @@ pub(super) fn merge_indexed_mixed(
     pinyin: &str,
     ctx: &LmContext<'_>,
     ranked: &mut Vec<Candidate>,
+    cached_patterns: &mut Option<Vec<Candidate>>,
 ) -> Result<bool, EngineError> {
     let DictStore::Mmap(d) = &engine.dict else {
         return Ok(false);
@@ -44,6 +45,8 @@ pub(super) fn merge_indexed_mixed(
         return Ok(false);
     }
     let indexed = d.lookup_abbrev_patterns(pinyin)?;
+    *cached_patterns = Some(indexed);
+    let indexed = cached_patterns.as_ref().expect("刚存入");
     // **填充档（freq ≤ `FILLER_FREQ_TIER`）也并入**——但它们在**容错层的分数闸**
     // 里不算「覆盖整串」的证据（见 `lookup.rs` 的 `covering_best`）。两头都对：
     // - 词条本身进名单：`jiejyonggong` → 解决用工、`zaoshenjhua` → 造神计划
@@ -77,10 +80,11 @@ pub(super) fn merge_indexed_mixed(
         .map(|c| (c.word.clone(), c.pinyin.clone()))
         .collect();
     let mut merged = false;
-    for mut c in indexed {
-        if !seen.insert((c.word.clone(), c.pinyin.clone())) {
+    for src in indexed {
+        if !seen.insert((src.word.clone(), src.pinyin.clone())) {
             continue;
         }
+        let mut c = src.clone();
         let dict_logp = ((c.freq.max(1) as f64).log10() - log10_total) as f32;
         let lm = scorer.score(&c.word);
         c.score = dict_logp + (lm - floor) * engine.lm_weight;

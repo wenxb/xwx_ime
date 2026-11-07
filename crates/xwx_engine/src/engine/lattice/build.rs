@@ -103,6 +103,7 @@ impl ImeEngine {
         bounds: Option<&[usize]>,
         user_entries: Option<&crate::user_lm::UserLmSnapshot>,
         demote_scope: bool,
+        abbrev_patterns: Option<Vec<Candidate>>,
     ) -> Result<Vec<Vec<LatticeEdge>>, EngineError> {
         let mut lattice =
             self.build_lattice_flags(pinyin, bounds, false, true, None, user_entries)?;
@@ -152,9 +153,12 @@ impl ImeEngine {
             // ② `lookup_abbrev`（纯简拼 + 折叠变体，前缀匹配 + 500 早停）；
             // ③ `lookup_mixed`（交错 DFS + 末尾半音节补全）——预算式探索，
             //    只负责 ① 表达不了的形态（`zho`→中国 这类末尾半音节）。
-            let mut whole: Vec<Candidate> = d.lookup_abbrev_patterns(pinyin)?;
+            let mut whole: Vec<Candidate> = match abbrev_patterns {
+                Some(cached) => cached,
+                None => d.lookup_abbrev_patterns(pinyin)?,
+            };
             whole.extend(d.lookup_abbrev(pinyin)?);
-            whole.extend(d.lookup_mixed(pinyin)?);
+            whole.extend(d.lookup_mixed_whole(pinyin)?);
             // 去重从「逐条线性扫 `lattice[0]`」改成哈希集合：索引驱动那条供给
             // 一次可带回上千条（2 字母键的词条数 p99≈900），线性扫是 O(n²)。
             let mut seen_whole: std::collections::HashSet<String> = lattice[0]
