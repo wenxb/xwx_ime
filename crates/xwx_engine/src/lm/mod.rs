@@ -314,6 +314,8 @@ impl LanguageModel for BigramLM {
 /// 4 个数量级;而计数与语料规模无关(由
 /// `mixed_boost_independent_of_corpus_size` 钉住)。
 pub const USER_COUNT_GAIN_R: f32 = 1000.0;
+/// 有词级上文但二元计数为 0 时的一元增益折减系数（防无关旧词冲垮整句上下文）。
+const USER_UNPAIRED_UNI_SCALE: f32 = 0.25;
 
 /// 单个计数项的加分(0 次 = 不加分,曲线在 0 处连续)。
 ///
@@ -401,6 +403,17 @@ impl MixedLM {
     pub fn user(&self) -> &UserLM {
         &self.user
     }
+    pub(super) fn user_boost(&self, state: &MixedState, word: &str) -> f32 {
+        let (c_uni, c_bi) = self
+            .user
+            .counts_with(&state.snap, state.user_prev.as_deref(), word);
+        let uni = if state.user_prev.is_some() && c_bi == 0 {
+            count_gain(c_uni) * USER_UNPAIRED_UNI_SCALE
+        } else {
+            count_gain(c_uni)
+        };
+        uni + count_gain(c_bi)
+    }
 }
 
 impl LanguageModel for MixedLM {
@@ -423,10 +436,7 @@ impl LanguageModel for MixedLM {
         // 个人化 = 计数增益的**加法项**,不碰通用层的量纲:
         // 一元计数(这个词被上屏几次)+ 二元计数(它跟在上一词后又几次)。
         // 两个计数各自过 `count_gain`,0 次时加 0(逐位回退通用层)。
-        let (c_uni, c_bi) = self
-            .user
-            .counts_with(&state.snap, state.user_prev.as_deref(), word);
-        let boost = count_gain(c_uni) + count_gain(c_bi);
+        let boost = self.user_boost(state, word);
         (
             base_logp + boost,
             MixedState {
@@ -442,11 +452,7 @@ impl LanguageModel for MixedLM {
     /// 结合律,换个括号就不再逐位相同了。
     fn score_only(&self, state: &MixedState, word: &str) -> f32 {
         let base_logp = self.base.score_only(&state.base, word);
-        let (c_uni, c_bi) = self
-            .user
-            .counts_with(&state.snap, state.user_prev.as_deref(), word);
-        let boost = count_gain(c_uni) + count_gain(c_bi);
-        base_logp + boost
+        base_logp + self.user_boost(state, word)
     }
 }
 

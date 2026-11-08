@@ -42,9 +42,7 @@ impl LmStore {
             },
             (LmStore::Mixed(lm), LmState::Mixed(s)) => {
                 let base_logp = lm.base.score_with_context(&s.base, context, word);
-                let (uni, bi) = lm.user.counts_with(&s.snap, s.user_prev.as_deref(), word);
-                let boost = count_gain(uni) + count_gain(bi);
-                base_logp + boost
+                base_logp + lm.user_boost(s, word)
             }
             _ => self.score_only(state, word),
         }

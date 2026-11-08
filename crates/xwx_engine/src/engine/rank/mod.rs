@@ -21,6 +21,15 @@ pub(super) fn sort_candidates(inp: &str, ranked: &mut [Candidate], entry_tier_ex
     sort_candidates_impl(inp, ranked, entry_tier_exception, None);
 }
 
+pub(super) fn sort_candidates_with_lm(
+    inp: &str,
+    ranked: &mut [Candidate],
+    entry_tier_exception: bool,
+    lm: &LmStore,
+) {
+    sort_candidates_impl(inp, ranked, entry_tier_exception, lm.collocation_model());
+}
+
 pub(super) fn sort_abbrev_candidates(inp: &str, ranked: &mut [Candidate], lm: &LmStore) {
     sort_candidates_impl(inp, ranked, true, lm.collocation_model());
 }

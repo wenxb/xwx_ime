@@ -457,7 +457,7 @@ impl AbbrevIndex {
         let mut out = Vec::new();
         let mut scanned = 0usize;
         for i in lo..hi.min(self.key_count) {
-            if scanned >= limit {
+            if out.len() >= limit || (key_len != 2 && scanned >= limit) {
                 break;
             }
             let rec = self.record(i)?;
@@ -470,7 +470,7 @@ impl AbbrevIndex {
             }
             let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
             let mut pos = 0usize;
-            while pos < block.len() && scanned < limit {
+            while pos < block.len() && out.len() < limit {
                 scanned += 1;
                 let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
                 let word_bytes = block
@@ -481,6 +481,9 @@ impl AbbrevIndex {
                         .get(pos + 1 + wl..pos + 1 + wl + key_len)
                         .ok_or(DictError::Corrupt("词块越界"))?;
                     let freq = read_u32(block, pos + 1 + wl + key_len)? as u64;
+                    if scanned > limit && (key_len != 2 || freq <= 100) {
+                        break;
+                    }
                     pos += 1 + wl + key_len + 4;
                     let mut matched = true;
                     for k in 0..key_len {

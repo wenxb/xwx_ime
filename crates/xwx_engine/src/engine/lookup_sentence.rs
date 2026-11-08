@@ -34,7 +34,7 @@ impl ImeEngine {
                 ranked.push(c);
             }
         }
-        sort_candidates(pinyin, ranked, false);
+        super::rank::sort_candidates_with_lm(pinyin, ranked, false, &self.lm);
         ranked.truncate(MAX_CANDIDATES);
         // **整句进流内首位，但只在没有「可靠整串词条」时**：覆盖整串的词条
         // 若全是源数据最低档（`FILLER_FREQ_TIER`）就说明这一串在词库里没有
@@ -63,6 +63,20 @@ impl ImeEngine {
         let top_is_filler_entry = ranked.first().is_some_and(|c| {
             c.covered >= pinyin.len() && c.freq > 0 && c.freq <= FILLER_FREQ_TIER
         });
+        let top_syls = ranked
+            .first()
+            .map_or(0, |top| top.pinyin.split(' ').count());
+        let top_starts_with_filler = ranked.first().is_some_and(|top| {
+            top.covered >= pinyin.len()
+                && top.freq == 0
+                && sentence_lattice[0].iter().any(|e| {
+                    e.end < pinyin.len()
+                        && e.freq > 0
+                        && e.freq <= FILLER_FREQ_TIER
+                        && e.word.chars().count() >= 2
+                        && top.word.starts_with(&e.word)
+                })
+        });
         let target = if top_is_filler_entry {
             // 按 **(词, 音, 分)** 三元组认「本段刚产出的那条」：同文本同拼音
             // 的词条（如最低档的「你好时节」）与整句拼出的组合会撞 key，
@@ -73,14 +87,24 @@ impl ImeEngine {
                     *w == c.word && *p == c.pinyin && (*s - c.score).abs() < f32::EPSILON
                 })
             })
+        } else if top_starts_with_filler {
+            ranked.iter().enumerate().skip(1).find_map(|(i, c)| {
+                (c.pinyin.split(' ').count() == top_syls
+                    && sentence_keys.iter().any(|(w, p, s)| {
+                        *w == c.word && *p == c.pinyin && (*s - c.score).abs() < f32::EPSILON
+                    }))
+                .then_some(i)
+            })
         } else {
-            ranked.iter().position(|c| c.covered >= pinyin.len())
+            ranked
+                .iter()
+                .position(|c| c.covered >= pinyin.len() && c.spelling != SpellingKind::Abbrev)
         };
         if let Some(idx) = target {
             // 首位**不是**填充档词条时保持原行为（无条件换位）；只有
             // 「首位是填充档」这一支才需要按词串口径重新判断谁更该在首位。
             let wins = idx != 0
-                && (!top_is_filler_entry
+                && (!(top_is_filler_entry || top_starts_with_filler)
                     || ranked.get(idx).zip(ranked.first()).is_some_and(|(cand, top)| {
                     // **两边都按词串口径比**（同一口径才可比）：填充档词条
                     // 常常是「真短语但词频缺失」（早点休息 freq=100、我马上到

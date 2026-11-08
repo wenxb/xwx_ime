@@ -37,6 +37,7 @@ pub(super) fn merge_indexed_mixed(
     ctx: &LmContext<'_>,
     ranked: &mut Vec<Candidate>,
     cached_patterns: &mut Option<Vec<Candidate>>,
+    only_evidence: bool,
 ) -> Result<bool, EngineError> {
     let DictStore::Mmap(d) = &engine.dict else {
         return Ok(false);
@@ -81,6 +82,12 @@ pub(super) fn merge_indexed_mixed(
         .collect();
     let mut merged = false;
     for src in indexed {
+        if only_evidence
+            && (src.freq <= FILLER_FREQ_TIER
+                || src.pinyin.bytes().filter(|&b| b != b' ').count() <= pinyin.len())
+        {
+            continue;
+        }
         if !seen.insert((src.word.clone(), src.pinyin.clone())) {
             continue;
         }

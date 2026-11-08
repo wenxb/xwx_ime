@@ -163,3 +163,23 @@ fn reachable_inputs_are_untouched() {
         assert_eq!(r, Some(0), "{input} 首位应是「{want}」: {:?}", top(&engine, input, 5));
     }
 }
+
+#[test]
+fn mixed_chain_and_false_positive_full_pinyin_recall_high_evidence_targets() {
+    let Some(engine) = real_engine() else {
+        return;
+    };
+    assert_eq!(
+        rank_of(&engine, "jintqbj", "今天请病假"),
+        Some(0),
+        "jintqbj 首位应是「今天请病假」: {:?}",
+        top(&engine, "jintqbj", 5)
+    );
+    for (input, want) in [("jingcankao", "仅供参考"), ("eshouche", "二手车")] {
+        assert!(
+            rank_of(&engine, input, want).is_some(),
+            "{input} 应召回高证据混拼词「{want}」: {:?}",
+            top(&engine, input, 10)
+        );
+    }
+}

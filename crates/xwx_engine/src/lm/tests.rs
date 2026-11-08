@@ -499,3 +499,23 @@ fn score_only_matches_score_bit_for_bit() {
         }
     }
 }
+
+#[test]
+fn mixed_unpaired_unigram_boost_is_damped_under_mismatched_context() {
+    let mut base = BigramLM::new();
+    base.add_unigram("今天", 100);
+    base.add_unigram("斯巴克", 100);
+    let user = UserLM::in_memory();
+    user.learn(None, "斯巴克");
+    let store = LmStore::Mixed(MixedLM::new(LmStore::Bigram(base), user));
+    let (standalone, _) = store.score(&store.initial_state(), "斯巴克");
+    let ctx = store.state_from_context(&LmContext {
+        tail: "今天",
+        last_word: Some("今天"),
+    });
+    let (unpaired, _) = store.score(&ctx, "斯巴克");
+    assert!(
+        unpaired < standalone,
+        "有上文且无二元证据时的一元增益应低于独立使用: {unpaired} vs {standalone}"
+    );
+}

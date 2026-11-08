@@ -101,3 +101,19 @@ fn no_character_model_keeps_filler_ties_in_text_order() {
         assert_eq!(candidates[0].word, "李明启");
     }
 }
+
+#[test]
+fn exact_three_char_filler_ties_use_internal_collocation() {
+    let Some(engine) = collocation_engine() else {
+        return;
+    };
+    let mut a = filler("李明启");
+    let mut b = filler("里面去");
+    a.spelling = SpellingKind::Exact;
+    b.spelling = SpellingKind::Exact;
+    a.covered = 8;
+    b.covered = 8;
+    let mut candidates = [a, b];
+    rank::sort_candidates_with_lm("limianqu", &mut candidates, false, &engine.lm);
+    assert_eq!(candidates[0].word, "里面去");
+}

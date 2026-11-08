@@ -210,20 +210,24 @@ impl ImeEngine {
             && (super::rank::pure_abbrev_input(pinyin, true)
                 || super::rank::leading_abbrev_input(&self.segmenter, pinyin, true));
         let mut abbrev_patterns: Option<Vec<Candidate>> = None;
-        if !exactly_reachable && !spells_whole && !lattice_supplies_mixed {
+        let reachable_mixed_fallback = exactly_reachable
+            && !exact_covers_whole
+            && bounds.is_none()
+            && doubled.is_empty()
+            && pinyin.len() <= 12;
+        if (!exactly_reachable && !spells_whole && !lattice_supplies_mixed)
+            || reachable_mixed_fallback
+        {
             super::indexed_mixed::merge_indexed_mixed(
                 self,
                 pinyin,
                 ctx,
                 &mut ranked,
                 &mut abbrev_patterns,
+                reachable_mixed_fallback,
             )?;
         }
-        // **旧通道已删（第 8 步，⑤⑩⑯）**：这里曾是「简拼层合并 + 配额 +
-        // 终排截断」。合并没了，但可达输入的终排/截断原来由 merge_layer
-        // 顺带承担，必须就地补回（needs_abbrev 输入的终排仍在下面
-        // needs_abbrev 块尾，那里还要追加条目边与链候选）。
-        sort_candidates(pinyin, &mut ranked, false);
+        super::rank::sort_candidates_with_lm(pinyin, &mut ranked, false, &self.lm);
         ranked.truncate(MAX_CANDIDATES);
 
         // **第二个门槛(分数)**:已经有一个「覆盖整串」的读法、而且它比容错

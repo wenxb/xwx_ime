@@ -10,7 +10,7 @@ pub(super) fn break_ties(
 ) {
     let eligible = |i: usize| {
         let c = &ranked[i];
-        c.spelling == SpellingKind::Abbrev
+        (c.spelling == SpellingKind::Abbrev || c.word.chars().count() >= 3)
             && c.freq == FILLER_FREQ_TIER
             && c.covered == input.len()
             && c.score.is_finite()

@@ -213,7 +213,6 @@ impl ImeEngine {
                 if *budget == 0 {
                     return Ok(());
                 }
-                *budget -= 1;
                 let arc_penalty = typo_penalty + arc_cost;
                 // 这条链里有没有简拼弧:逐边记录(见 `LatticeEdge::abbrev`)。
                 let past_abbrev = used_abbrev || arc_abbrev;
@@ -266,10 +265,14 @@ impl ImeEngine {
                     crate::dict::KeyPrefix::Exact
                 };
                 if prefix_state == crate::dict::KeyPrefix::None {
+                    if start == 0 || chain.len() < 3 || len > 1 || graph.is_none() {
+                        *budget -= 1;
+                    }
                     chain.pop();
                     key_buf.truncate(key_mark);
                     continue;
                 }
+                *budget -= 1;
                 let word_here = prefix_state == crate::dict::KeyPrefix::Exact;
 
                 // 「只补新边」模式(容错格以精确格为底时的复用):这条链一次弧都
