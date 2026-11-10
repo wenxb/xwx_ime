@@ -174,25 +174,23 @@ impl InputSession {
             return Ok(SessionOutput::Commit(text));
         }
         let prefix: String = self.pinyin[..covered].to_owned();
+        let prev_tail = self.committed_tail.clone();
         self.consume_covered(c);
+        self.confirmed.push(ConfirmedSegment {
+            candidate: c.clone(),
+            letters: prefix.clone(),
+            prev_tail: prev_tail.clone(),
+        });
+        self.push_tail(&c.word);
         if let Err(e) = self.refresh() {
             // 回滚:字母一个都不能少(候选查询失败不该吞掉用户输入)。
+            self.confirmed.pop();
+            self.committed_tail = prev_tail;
             self.pinyin.insert_str(0, &prefix);
             self.caret += prefix.len();
             self.cursor = 0; // 页码由下标推导(见 `page`)
             return Err(e);
         }
-        // **方案 b**:这一段留在组合里(预编辑区显示为已确认文本),不交给
-        // 应用;记账也推迟到组合结束(见 `replay_confirmed`)——于是退格
-        // 回退不需要撤销任何学习。界面照常刷新:剩余串的候选按剩余串重算。
-        self.confirmed.push(ConfirmedSegment {
-            candidate: c.clone(),
-            letters: prefix,
-        });
-        // **确认段也要进打分的字符级窗口**：方案 b 下它还没上屏，但用户意图已定，
-        // 剩余串的候选必须看得见它——否则「先确认『北京』再打 daxue」不会倾向「大学」。
-        // 走 `push_tail` 而不是直接 push：那里有长度窗口（COMMITTED_TAIL_LIMIT）。
-        self.push_tail(&c.word);
         Ok(SessionOutput::Updated(self.update()))
     }
 
@@ -222,7 +220,6 @@ impl InputSession {
     pub(super) fn commit_raw(&mut self, text: String) -> String {
         // 原始上屏打断造词缓冲(标点/回车/Verbatim 大写都经此路径,
         // 即「不跨标点造词」「不跨模式切换造词」的落点)。
-        // 原文是**语言边界**:英文上文在这里失效,且不从原文提取英文学习。
         self.english.clear();
         self.break_coin_run();
         self.record_committed(&text, None);
@@ -383,6 +380,9 @@ impl InputSession {
         self.caret = 0;
         std::sync::Arc::make_mut(&mut self.candidates).clear();
         self.cursor = 0; // 页码由下标推导(见 `page`)
+        if let Some(first) = self.confirmed.first() {
+            self.committed_tail = first.prev_tail.clone();
+        }
         self.confirmed.clear();
         self.recognized = None;
         // 「被翻页吃掉的那个点」是**当前串**的属性,串都没了就作废

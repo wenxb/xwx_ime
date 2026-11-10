@@ -52,7 +52,6 @@ pub(crate) fn recall_english(
     static_bigram: Option<&EnglishBigram>,
 ) -> Result<Vec<EnglishHit>, super::EnglishError> {
     let allow_completion = completion_allowed(input_key, ctx);
-    // 去重按**目标完整 key**；BTreeMap 让遍历顺序确定（结果与插入顺序无关）。
     let mut merged: BTreeMap<String, EnglishHit> = BTreeMap::new();
 
     // 懒取上文行：无候选时不新增一次读取/错误路径。

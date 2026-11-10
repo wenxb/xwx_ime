@@ -53,6 +53,7 @@ impl InputSession {
         // 不算边界——否则打英文单词时按一次左键就把上文抹了。
         let was_composing = self.composing();
         let is_space = matches!(event, InputEvent::Space);
+        let is_idle_backspace = !was_composing && matches!(event, InputEvent::Backspace);
         let passthrough = matches!(
             event,
             InputEvent::Char(_)
@@ -69,7 +70,12 @@ impl InputSession {
         ) || (matches!(event, InputEvent::Select(_)) && !was_composing);
         let out = self.handle_composition(event)?;
         if matches!(out, SessionOutput::Noop) {
-            if is_space {
+            if is_idle_backspace {
+                self.committed_tail.pop();
+                self.last_word = None;
+                self.coin_buffer.clear();
+                self.english.clear();
+            } else if is_space {
                 // 空闲时透传的 ASCII 空格：保留上一词，但要记住「已经隔开」，
                 // 下一个英文候选不再补空格（会话分册第 5 节）。
                 self.english.on_passthrough_space();
@@ -426,8 +432,8 @@ impl InputSession {
                 if !self.confirmed.is_empty() {
                     self.pending_url_dot = None;
                     let seg = self.confirmed.pop().expect("上面判过非空");
+                    self.committed_tail = seg.prev_tail;
                     self.pinyin.insert_str(0, &seg.letters);
-                    // 回到「选之前那一步」的光标位置:串尾(继续打字就在后面接)。
                     self.caret = self.pinyin.len();
                     self.cursor = 0; // 页码是下标的函数,自动回首页
                     self.refresh()?;

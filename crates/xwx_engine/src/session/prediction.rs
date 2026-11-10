@@ -103,7 +103,14 @@ impl InputSession {
             }
             // Backspace/Left/Right：关闭预测、清空英文上文，应用正常编辑
             // （前向 Delete 没有会话事件，由 IBus 层按同一条规则处理。）
-            InputEvent::Backspace | InputEvent::Left | InputEvent::Right => {
+            InputEvent::Backspace => {
+                self.close_and_clear();
+                self.committed_tail.pop();
+                self.last_word = None;
+                self.coin_buffer.clear();
+                PredictionStep::Handled(SessionOutput::Noop)
+            }
+            InputEvent::Left | InputEvent::Right => {
                 self.close_and_clear();
                 PredictionStep::Handled(SessionOutput::Noop)
             }

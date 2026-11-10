@@ -194,6 +194,8 @@ struct ConfirmedSegment {
     candidate: Candidate,
     /// 这一段消耗掉的原始字母——退格回退时原样还回输入串。
     letters: String,
+    /// 确认本段前的 `committed_tail`，用于退格回退时还原 LM 字符级窗口。
+    prev_tail: String,
 }
 
 /// 一次按键处理后的界面刷新数据。

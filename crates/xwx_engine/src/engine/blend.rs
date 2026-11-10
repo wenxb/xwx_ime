@@ -217,6 +217,27 @@ fn abbrev_prior_beats_en(zh: &[Candidate], input: &str, en_zipf: u16, total_freq
     })
 }
 
+/// 全拼命中的中文词条，其词频先验是否压过英文池峰值（真实词库规模下生效）。
+fn strong_zh_prior_beats_en(zh: &[Candidate], raw_input: &str, en_zipf: u16, total_freq: u64) -> bool {
+    if total_freq < 1_000_000 || en_zipf == 0 {
+        return false;
+    }
+    let log10_total = (total_freq as f64).log10();
+    let en_prior = en_zipf as f64 / 100.0 - 9.0;
+    zh.iter().any(|c| {
+        !c.echo
+            && !c.is_english()
+            && c.spelling == SpellingKind::Exact
+            && c.covered >= raw_input.len()
+            && c.freq > super::filler_freq_tier()
+            && (c.freq as f64).log10() - log10_total >= en_prior
+            && c.pinyin
+                .bytes()
+                .filter(|&b| b != b' ')
+                .eq(raw_input.bytes().map(|b| b.to_ascii_lowercase()))
+    })
+}
+
 /// `good_en`：首要英文候选有足够证据（静态频率够高，或用户学过至少 3 次）。
 pub(crate) fn good_english(e0_zipf: u16, e0_user_unigram: u32) -> bool {
     e0_zipf >= 300 || e0_user_unigram >= 3
@@ -246,39 +267,39 @@ pub(crate) fn classify_intent(
         return Some(IntentBand::EnglishFirst); // 输入不可能是拼音
     }
     // 英文上文只覆盖完整全拼的同形歧义（you/can），不跳过中文前缀或简拼保护。
+    let e0_exact = en.first().and_then(|c| c.english_match_kind()) == Some(EnglishMatchKind::Exact);
+    let strong_zh = zh.iter().any(|c| {
+        !c.echo
+            && c.spelling == SpellingKind::Exact
+            && c.covered >= raw_input.len()
+            && c.freq > super::filler_freq_tier()
+            && c.pinyin
+                .bytes()
+                .filter(|&b| b != b' ')
+                .eq(raw_input.bytes().map(|b| b.to_ascii_lowercase()))
+    });
     if recent_en
         && good_en
-        && en.first().and_then(|c| c.english_match_kind()) == Some(EnglishMatchKind::Exact)
-        && zh.iter().any(|c| {
-            !c.echo
-                && c.spelling == SpellingKind::Exact
-                && c.covered >= raw_input.len()
-                && c.freq > super::filler_freq_tier()
-                && c.pinyin.bytes().filter(|&b| b != b' ').eq(
-                    raw_input.bytes().map(|b| b.to_ascii_lowercase()),
-                )
-        })
+        && e0_exact
+        && strong_zh
+        && !strong_zh_prior_beats_en(zh, raw_input, en_zipf_max, total_freq)
     {
         return Some(IntentBand::EnglishFirst);
     }
-    if raw_input.chars().count() <= 2 {
-        // 1~2 个字母是真歧义区（`ok`/`us`/`on` 这类完整英文词 vs 两键
-        // 拼音缩写），交替混排：中文在前，英文仍在第 2 位可点。
-        // 用户实测的 ke 也在这条上收场：可#1，keep/key#2。
-        return Some(IntentBand::Mixed);
-    }
-    if plausible_chinese(zh, raw_input) {
-        // **中文可读 ⇒ 中文优先**（用户定的方向）：输入既然有真拼音
-        // 读法（全拼前缀 rug→如果、简拼 yidd→一点点），就更可能是在
-        // 打中文。「不明确的英文」不要抢前排，退到末位保留入口。
+    if raw_input.chars().count() == 1 {
         return Some(IntentBand::ChineseFirst);
     }
-    // **纯声母简拼**：`shy`/`sms`/`sds` 这类串首音节没打全，上面的判据
-    // 看不见，但它们同样是真·简拼打法，中文那边往往有几百条真实词条。
-    // 中文词条的先验压过 E0 ⇒ 交替混排（中文回到首位，英文退到第 2 位
-    // 仍可点），而不是让英文 Exact 独占前三个槽位。
+    if raw_input.chars().count() == 2 {
+        if e0_exact && !strong_zh_prior_beats_en(zh, raw_input, en_zipf_max, total_freq) {
+            return Some(IntentBand::Mixed);
+        }
+        return Some(IntentBand::ChineseFirst);
+    }
+    if plausible_chinese(zh, raw_input) {
+        return Some(IntentBand::ChineseFirst);
+    }
     if abbrev_prior_beats_en(zh, raw_input, en_zipf_max, total_freq) {
-        return Some(IntentBand::Mixed);
+        return Some(IntentBand::ChineseFirst);
     }
     // 中文读不出来 ⇒ 用户就是在打英文。
     if good_en {

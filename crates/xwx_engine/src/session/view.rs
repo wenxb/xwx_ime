@@ -188,6 +188,9 @@ impl InputSession {
     /// 随时可以退格回退——若在确认当时就写 UserLM,回退就得做「反学习」。
     pub(super) fn replay_confirmed(&mut self) {
         let held = std::mem::take(&mut self.confirmed);
+        if let Some(first) = held.first() {
+            self.committed_tail = first.prev_tail.clone();
+        }
         for seg in &held {
             self.record_commit(&seg.candidate);
         }
