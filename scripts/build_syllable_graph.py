@@ -24,7 +24,7 @@ import struct
 import sys
 
 MAGIC = b"XWXSYL1\0"
-VERSION = 2
+VERSION = 3
 HEADER_LEN = 60
 NODE_LEN = 8
 EDGE_LEN = 4
@@ -33,16 +33,39 @@ RECORD_LEN = 12
 
 def read_keys(path):
     blob = open(path, "rb").read()
-    # 只读 v1/v2 共有的前 52 字节（v2 只是在尾部追加了 total_freq）。
     magic, version, n_keys, _total, rec_off, str_off, ent_off = struct.unpack_from(
         "<8sIQQQQQ", blob, 0
     )
-    if magic != b"XWXIDM1\0" or not 1 <= version <= 2:
-        raise SystemExit(f"不是 dict.bin v1/v2（magic={magic!r} version={version}）")
+    if magic != b"XWXIDM1\0" or not 1 <= version <= 3:
+        raise SystemExit(f"不是 dict.bin v1..v3（magic={magic!r} version={version}）")
     keys = []
-    for i in range(n_keys):
-        so, sl, _eo, _el = struct.unpack_from("<IHIH", blob, rec_off + i * RECORD_LEN)
-        keys.append(blob[str_off + so : str_off + so + sl].decode("utf-8"))
+    if version >= 3:
+        n_syls = struct.unpack_from("<H", blob, 60)[0]
+        cur = 62
+        syls = []
+        for _ in range(n_syls):
+            slen = blob[cur]
+            cur += 1
+            syls.append(blob[cur : cur + slen].decode("ascii"))
+            cur += slen
+        for i in range(n_keys):
+            so, _eo, next_so, _next_eo = struct.unpack_from("<IIII", blob, rec_off + i * 8)
+            raw_k = blob[str_off + so : str_off + next_so]
+            kp, kparts = 0, []
+            while kp < len(raw_k):
+                b = raw_k[kp]
+                kp += 1
+                if b < 254:
+                    sid = b
+                else:
+                    sid = 254 + ((b - 254) << 8) + raw_k[kp]
+                    kp += 1
+                kparts.append(syls[sid])
+            keys.append(" ".join(kparts))
+    else:
+        for i in range(n_keys):
+            so, sl, _eo, _el = struct.unpack_from("<IHIH", blob, rec_off + i * RECORD_LEN)
+            keys.append(blob[str_off + so : str_off + so + sl].decode("utf-8"))
     if keys != sorted(keys):
         raise SystemExit("dict.bin 的 key 不是字典序——单趟建树的前提不成立")
     return keys
@@ -88,16 +111,32 @@ def serialize(nodes, keys):
     if len(nodes) >= (1 << 23):
         raise SystemExit(f"节点数 {len(nodes)} 超过 23-bit 编号上限")
 
-    # 边按 (syllable_id, child) 升序落盘，读取端可二分
+    # v3：只把非叶子节点（children 非空，或 0 号根）写入 nodes 数组；
+    # 叶子节点的记录号直接编码在边表的 child 字段（internal_count + ent_off）。
+    new_id = {}
+    internal_nodes = []
+    for idx, n in enumerate(nodes):
+        if n["children"] or idx == 0:
+            new_id[idx] = len(internal_nodes)
+            internal_nodes.append(n)
+    internal_count = len(internal_nodes)
+
     edges = []
-    for n in nodes:
-        kids = sorted((sid[syl], child) for syl, child in n["children"])
+    for n in internal_nodes:
+        kids = []
+        for syl, child in n["children"]:
+            if child in new_id:
+                c_enc = new_id[child]
+            else:
+                c_enc = internal_count + nodes[child]["ent"]
+            kids.append((sid[syl], c_enc))
+        kids.sort()
         n["off"] = len(edges)
         n["len"] = len(kids)
         edges.extend(kids)
 
     node_off = HEADER_LEN
-    edge_off = node_off + len(nodes) * NODE_LEN
+    edge_off = node_off + internal_count * NODE_LEN
     syl_off = edge_off + len(edges) * EDGE_LEN
     syl_bytes = b"".join(struct.pack("<H", len(s)) + s.encode() for s in names)
     out = bytearray()
@@ -105,16 +144,16 @@ def serialize(nodes, keys):
         "<8sIQQQQQQ",
         MAGIC,
         VERSION,
-        len(nodes),
+        internal_count,
         len(names),
         node_off,
         edge_off,
         syl_off,
         len(keys),
     )
-    for n in nodes:
+    for n in internal_nodes:
         if n["off"] >= (1 << 22) or n["len"] >= (1 << 10):
-            raise SystemExit(f"子表偏移/长度超出 v2 位宽: off={n['off']} len={n['len']}")
+            raise SystemExit(f"子表偏移/长度超出位宽: off={n['off']} len={n['len']}")
         out += struct.pack(
             "<II",
             (n["off"] << 10) | n["len"],
@@ -139,6 +178,8 @@ def validate(blob, keys, names, sid):
         raise SystemExit(f"头部记录数 {n_keys} 与实际 {len(keys)} 不符")
 
     def node(idx):
+        if version >= 3 and idx >= n_nodes:
+            return 0, 0, 1, idx - n_nodes, 1
         packed, ent_off = struct.unpack_from("<II", blob, node_off + idx * NODE_LEN)
         exact = ent_off != 0xFFFFFFFF
         return packed >> 10, packed & 0x3FF, int(exact), ent_off, int(exact)
@@ -152,7 +193,6 @@ def validate(blob, keys, names, sid):
             if s == want:
                 return c
         return None
-
     step = max(1, len(keys) // 400)
     for i in range(0, len(keys), step):
         cur = 0

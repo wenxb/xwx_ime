@@ -18,7 +18,7 @@ use super::{DictError, read_u16, read_u32, read_u64};
 
 const MAGIC: &[u8; 8] = b"XWXSYL1\0";
 const MIN_VERSION: u32 = 1;
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const HEADER_LEN: usize = 60;
 const NODE_LEN_V1: usize = 16;
 const EDGE_LEN_V1: usize = 6;
@@ -134,6 +134,19 @@ impl SyllableGraph {
 
     /// 第 `idx` 个节点(0 号是根)。
     pub fn node(&self, idx: u32) -> Result<GraphNode, DictError> {
+        if self.version >= 3 && (idx as usize) >= self.node_count {
+            let entry_off = idx - self.node_count as u32;
+            if (entry_off as u64) >= self.keys {
+                return Err(DictError::Corrupt("叶子节点记录号越界"));
+            }
+            return Ok(GraphNode {
+                children_off: 0,
+                children_len: 0,
+                exact: true,
+                entry_off,
+                entry_len: 1,
+            });
+        }
         let node_len = if self.version >= 2 { NODE_LEN_V2 } else { NODE_LEN_V1 };
         let base = self
             .node_off

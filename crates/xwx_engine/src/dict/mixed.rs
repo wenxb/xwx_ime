@@ -260,6 +260,7 @@ impl MixedDfs<'_> {
     /// 前缀 `prefix` 区间下界;**每次二分迭代消耗 1 步预算**。
     fn lower_bound(&mut self, prefix: &[u8]) -> Result<usize, DictError> {
         let dict = self.dict;
+        let mut kbuf = [0u8; 256];
         let (mut lo, mut hi) = (0usize, dict.pinyin_count);
         while lo < hi {
             if self.budget == 0 {
@@ -270,7 +271,7 @@ impl MixedDfs<'_> {
             self.budget -= 1;
             let mid = (lo + hi) / 2;
             let rec = dict.record(mid)?;
-            let s = dict.slice(dict.strings_off + rec.str_off, rec.str_len)?;
+            let s = dict.record_key(rec, &mut kbuf)?;
             if s < prefix {
                 lo = mid + 1;
             } else {
@@ -286,9 +287,8 @@ impl MixedDfs<'_> {
         let dict = self.dict;
         self.budget = self.budget.saturating_sub(1);
         let rec = dict.record(i)?;
-        Ok(dict
-            .slice(dict.strings_off + rec.str_off, rec.str_len)?
-            .to_vec())
+        let mut kbuf = [0u8; 256];
+        Ok(dict.record_key(rec, &mut kbuf)?.to_vec())
     }
 
     /// 枚举 `base` 区间内**本音节位**的所有不同取值(该位音节的剩余字母),
@@ -342,6 +342,7 @@ impl MixedDfs<'_> {
     pub(super) fn collect(&mut self, prefix: &[u8], mid_syllable: bool) -> Result<(), DictError> {
         let dict = self.dict;
         let mut i = self.lower_bound(prefix)?;
+        let mut kbuf = [0u8; 256];
         while i < dict.pinyin_count {
             if self.budget == 0 {
                 return Ok(());
@@ -349,7 +350,7 @@ impl MixedDfs<'_> {
             self.refresh_threshold();
             self.budget = self.budget.saturating_sub(1);
             let rec = dict.record(i)?;
-            let k = dict.slice(dict.strings_off + rec.str_off, rec.str_len)?;
+            let k = dict.record_key(rec, &mut kbuf)?;
             if !k.starts_with(prefix) {
                 return Ok(());
             }

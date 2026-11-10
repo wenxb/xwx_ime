@@ -27,7 +27,7 @@
 mod lm_path;
 mod english_config;
 
-use lm_path::{resolve_data_path, resolve_lm_path, user_lm_file_name};
+use lm_path::{attach_or_build_indexes, resolve_data_path, resolve_lm_path, user_lm_file_name};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,12 +109,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
+        Some("--build-indexes") => {
+            let dict_path = args
+                .get(1)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| resolve_data_path("XWX_DICT_PATH", "dict.bin"));
+            let dict = xwx_engine::MmapDict::open(&dict_path)?;
+            let abbrev_dst = dict_path.with_file_name("abbrev.bin");
+            let graph_dst = dict_path.with_file_name("syllable_graph.bin");
+            dict.build_abbrev_file(&abbrev_dst)?;
+            dict.build_syllable_graph_file(&graph_dst)?;
+            return Ok(());
+        }
         Some("--help") | Some("-h") => {
             println!("XWX 拼音输入法（IBus 引擎）");
             println!();
             println!("用法:");
             println!("  xwx_ime            以 --ibus 模式启动引擎（连接 ibus-daemon）");
             println!("  xwx_ime --ibus     同上，显式指定");
+            println!("  xwx_ime --build-indexes [dict.bin路径]  从词库本地生成 abbrev.bin 与 syllable_graph.bin");
             println!("  xwx_ime --xml [文件|-] [--exec PATH] [--setup PATH]  输出 component XML");
             println!("        （未知参数 / 缺值 / 输出路径重复一律报错并退出）");
             println!("        （默认 stdout；--exec 指定 XML 里的引擎路径,\n         deb 打包时用 /usr/libexec/ibus-engine-xwx）");
@@ -135,21 +148,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 词库是 dict_to_bin.py 生成的只读 mmap 二进制（dict.bin）：
     // 打开失败（缺失/损坏）时引擎退回内存空词库，不会创建任何文件。
     let dict_path = resolve_data_path("XWX_DICT_PATH", "dict.bin");
-    // 简拼副索引:`XWX_ABBREV_PATH` 覆盖,默认与 dict.bin 同目录的
-    // `abbrev.bin`。缺失/损坏时 `with_abbrev` 仅告警、引擎退回精确路径,
-    // 绝不 panic(见 `MmapDict::with_abbrev`)。
-    let abbrev_path = std::env::var("XWX_ABBREV_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dict_path.with_file_name("abbrev.bin"));
-    // 音节级转移索引:`XWX_SYLLABLE_GRAPH_PATH` 覆盖,默认与 dict.bin 同目录的
-    // `syllable_graph.bin`(由 `scripts/build_syllable_graph.py` 生成)。缺失/
-    // 损坏/不同代只告警,缩写弧回退到逐次主索引二分(功能不变、每次多一次跨页二分)。
-    let graph_path = std::env::var("XWX_SYLLABLE_GRAPH_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dict_path.with_file_name("syllable_graph.bin"));
-    // 语言模型:`XWX_LM_PATH` 显式覆盖(原样尊重,即使文件不存在,后续
-    // 逻辑优雅退化为空模型);未设置时按优先级探测数据目录里的
-    // .gram / bigram.txt(详见 resolve_lm_path 注释)。
     let lm_choice = resolve_lm_path(std::env::var("XWX_LM_PATH").ok().as_deref());
     let lm_path = lm_choice.path;
     let lm_is_gram = lm_path.is_file() && lm_path.extension().is_some_and(|e| e == "gram");
@@ -158,12 +156,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         ImeEngine::new(Some(&dict_path))?
     };
-    engine.dict = engine.dict.with_abbrev(&abbrev_path);
-    engine.dict = engine.dict.with_syllable_graph(&graph_path);
+    if engine.dict_count() > 0 {
+        engine.dict = attach_or_build_indexes(engine.dict, &dict_path);
+    }
     if engine.dict.has_abbrev() {
-        tracing::info!(path = %abbrev_path.display(), "简拼副索引已装配");
+        tracing::info!("简拼副索引已装配");
     } else {
-        tracing::info!(path = %abbrev_path.display(), "简拼副索引未装配(简拼查询退化为空)");
+        tracing::info!("简拼副索引未装配(简拼查询退化为空)");
     }
     tracing::info!(path = %dict_path.display(), entries = engine.dict_count(), "词库已就绪");
 

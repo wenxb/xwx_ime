@@ -74,14 +74,11 @@ assets = [
     # Exec 必须是绝对路径(系统目录里没有 $PATH 解析)。
     ["target/release/ibus-setup-xwx", "usr/libexec/ibus-setup-xwx", "755"],
     ["data/ibus-setup-xwx.desktop", "usr/share/applications/ibus-setup-xwx.desktop", "644"],
-    # 词库与简拼副索引随包分发:没有它们,装了包也只退化成内置小词库(Q5「不依赖
-    # 在线重建」)。引擎的数据路径已支持系统级目录(见 src/lm_path.rs)。
+    # 主词库随包分发;简拼副索引(abbrev.bin)与音节图索引(syllable_graph.bin)
+    # 是 dict.bin 的 100% 确定性派生索引,在安装期(postinst)或首次启动时由引擎
+    # 直接从 dict.bin 本地构建,不再随包分发(省去 ~51.4 MiB 原始 / ~24.3 MiB xz)。
     ["data/dict.bin", "usr/share/xwx/dict.bin", "644"],
-    ["data/abbrev.bin", "usr/share/xwx/abbrev.bin", "644"],
-    # 音节级转移索引(缩写弧建边的加速索引):与 dict.bin 同目录才会被装配
-    # (src/main.rs 默认取 `dict.bin.with_file_name("syllable_graph.bin")`)。
-    ["data/syllable_graph.bin", "usr/share/xwx/syllable_graph.bin", "644"],
-    # 英文词库(可选能力):缺它时 `src/main.rs` 只关闭英文通道并告警,
+    ["data/wanxiang-lts-zh-hans.gram", "usr/share/xwx/wanxiang-lts-zh-hans.gram", "644"],
     # 中文候选与按键行为完全不受影响(可选的降级面)。由
     # `python3 scripts/build_english_dict.py --wordfreq ...` 生成,不进 git。
     ["data/english.bin", "usr/share/xwx/english.bin", "644"],

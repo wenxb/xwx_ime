@@ -28,23 +28,39 @@ import struct
 import sys
 
 MAGIC = b"XWXABR1\0"   # 副索引魔数(与主索引 XWXIDM1 区分)
-VERSION = 2            # v2:52B 头 + 26 桶音节表 + 1B/音节下标词条区
+VERSION = 3            # v3: 8B 哨兵记录 + 2B CJK 词条 + 6-bit 音节下标 + 变长词频
 HEADER_LEN = 52        # 8s + I + 5×Q(与 dict.bin v1 同构)
-RECORD_LEN = 12        # u32 str_off + u16 str_len + u32 ent_off + u16 ent_len
+RECORD_LEN = 8         # v3: u32 str_off + u32 ent_off
 FREQ_MAX = 0xFFFFFFFF  # u32 上限,超出截断(真实词频远达不到)
 
-# 主索引(dict.bin)只读解析所需常量,与 crates/xwx_engine/src/dict.rs 一致。
-# 读的是 v1 与 v2 **共有的前 52 字节**(v2 只是在尾部追加了 total_freq),
-# 所以两个版本都能生成副索引。
 DICT_MAGIC = b"XWXIDM1\0"
 DICT_MIN_VERSION = 1
-DICT_MAX_VERSION = 2
+DICT_MAX_VERSION = 3
 DICT_HEADER_LEN = 52
 DICT_RECORD_LEN = 12
 
 
+def _decode_dict_v3_entry(block: bytes, pos: int):
+    hdr = block[pos]
+    fcode = hdr >> 6
+    clen = hdr & 0x3F
+    if fcode < 3:
+        wchars = [chr(0x4E00 + struct.unpack_from("<H", block, pos + 1 + i * 2)[0]) for i in range(clen)]
+        w = "".join(wchars)
+        foff = pos + 1 + clen * 2
+        if fcode == 0:
+            return w, 100, foff
+        if fcode == 1:
+            return w, struct.unpack_from("<H", block, foff)[0], foff + 2
+        return w, struct.unpack_from("<I", block, foff)[0], foff + 4
+    wl = block[pos + 1]
+    w = block[pos + 2 : pos + 2 + wl].decode("utf-8")
+    fq = struct.unpack_from("<I", block, pos + 2 + wl)[0]
+    return w, fq, pos + 2 + wl + 4
+
+
 def load_dict(path):
-    """解析 dict.bin,返回 [(pinyin_key, [(word, freq), ...]), ...](key 已排序)。"""
+    """解析 dict.bin (v1/v2/v3),返回 [(pinyin_key, [(word, freq), ...]), ...](key 已排序)。"""
     with open(path, "rb") as f:
         blob = f.read()
     if blob[:8] != DICT_MAGIC:
@@ -55,21 +71,49 @@ def load_dict(path):
     pinyin_cnt, _total, records_off, strings_off, entries_off = struct.unpack_from(
         "<QQQQQ", blob, 12
     )
+    syls = []
+    if version >= 3:
+        n_syls = struct.unpack_from("<H", blob, 60)[0]
+        cur = 62
+        for _ in range(n_syls):
+            slen = blob[cur]
+            cur += 1
+            syls.append(blob[cur : cur + slen].decode("ascii"))
+            cur += slen
     groups = []
     for i in range(pinyin_cnt):
-        str_off, str_len, ent_off, ent_len = struct.unpack_from(
-            "<IHIH", blob, records_off + i * DICT_RECORD_LEN
-        )
-        pinyin = blob[strings_off + str_off: strings_off + str_off + str_len].decode("utf-8")
+        if version >= 3:
+            str_off, ent_off, next_so, next_eo = struct.unpack_from("<IIII", blob, records_off + i * 8)
+            str_len, ent_len = next_so - str_off, next_eo - ent_off
+            raw_k = blob[strings_off + str_off : strings_off + str_off + str_len]
+            kp, kparts = 0, []
+            while kp < len(raw_k):
+                b = raw_k[kp]
+                kp += 1
+                if b < 254:
+                    sid = b
+                else:
+                    sid = 254 + ((b - 254) << 8) + raw_k[kp]
+                    kp += 1
+                kparts.append(syls[sid])
+            pinyin = " ".join(kparts)
+        else:
+            str_off, str_len, ent_off, ent_len = struct.unpack_from(
+                "<IHIH", blob, records_off + i * DICT_RECORD_LEN
+            )
+            pinyin = blob[strings_off + str_off: strings_off + str_off + str_len].decode("utf-8")
         block = blob[entries_off + ent_off: entries_off + ent_off + ent_len]
         words = []
         pos = 0
         while pos < len(block):
-            wl = block[pos]
-            w = block[pos + 1: pos + 1 + wl].decode("utf-8")
-            fq = struct.unpack_from("<I", block, pos + 1 + wl)[0]
+            if version >= 3:
+                w, fq, pos = _decode_dict_v3_entry(block, pos)
+            else:
+                wl = block[pos]
+                w = block[pos + 1: pos + 1 + wl].decode("utf-8")
+                fq = struct.unpack_from("<I", block, pos + 1 + wl)[0]
+                pos += 1 + wl + 4
             words.append((w, fq))
-            pos += 1 + wl + 4
         groups.append((pinyin, words))
     return groups
 
@@ -90,14 +134,14 @@ def _validate(blob):
         raise SystemExit(
             f"区段顺序/范围不合法: rec={rec_off} str={str_off} ent={ent_off} len={len(blob)}"
         )
-    if rec_off + n_keys * RECORD_LEN > str_off:
+    if rec_off + (n_keys + 1) * RECORD_LEN > str_off:
         raise SystemExit("记录数组越界")
     prev = None
     for i in range(n_keys):
-        o, sl, eo, el = struct.unpack_from("<IHIH", blob, rec_off + i * RECORD_LEN)
-        if str_off + o + sl > ent_off or ent_off + eo + el > len(blob):
+        o, eo, next_o, next_eo = struct.unpack_from("<IIII", blob, rec_off + i * RECORD_LEN)
+        if next_o < o or next_eo < eo or str_off + next_o > ent_off or ent_off + next_eo > len(blob):
             raise SystemExit(f"第 {i} 条记录越界")
-        key = blob[str_off + o: str_off + o + sl]
+        key = blob[str_off + o: str_off + next_o]
         if prev is not None and key <= prev:
             raise SystemExit(f"key 未严格升序: {prev!r} → {key!r}")
         prev = key
@@ -162,26 +206,43 @@ def main() -> None:
             syl_table.append(len(sb))
             syl_table.extend(sb)
 
-    # 词条区 v2: word_len u8 + word + syl_ids [u8; len(ik)] + freq u32 LE(按 freq 降序)。
     strings = bytearray()
     entries = bytearray()
     records = bytearray()
     for ik in keys:
-        str_off = len(strings)
+        records.extend(struct.pack("<II", len(strings), len(entries)))
         strings.extend(ik.encode("ascii"))
-        ent_off = len(entries)
+        sl = len(ik)
+        syl_bytes = (sl * 6 + 7) // 8
         for word, pinyin, freq in sorted(abbrev[ik], key=lambda x: -x[2]):
-            wb = word.encode("utf-8")
-            if len(wb) > 255:
-                raise SystemExit(f"词条过长(>255 字节): {word!r}")
-            entries.append(len(wb))
-            entries.extend(wb)
-            for syl in pinyin.split(" "):
-                if syl:
-                    entries.append(syl_id[ord(syl[0]) - ord("a")][syl])
-            entries.extend(struct.pack("<I", min(freq, FREQ_MAX)))
-        records.extend(struct.pack("<IHIH", str_off, len(ik), ent_off, len(entries) - ent_off))
-
+            fq = min(freq, FREQ_MAX)
+            sids = [syl_id[ord(syl[0]) - ord("a")][syl] for syl in pinyin.split(" ") if syl]
+            packed = bytearray(syl_bytes)
+            for k, sid_val in enumerate(sids):
+                bit_off = k * 6
+                b_idx = bit_off >> 3
+                shift = bit_off & 7
+                v = (sid_val & 0x3F) << shift
+                packed[b_idx] |= v & 0xFF
+                if b_idx + 1 < syl_bytes:
+                    packed[b_idx + 1] |= (v >> 8) & 0xFF
+            if 1 <= len(word) <= 63 and all(0x4E00 <= ord(c) <= 0x9FFF for c in word):
+                fcode = 0 if fq == 100 else (1 if fq <= 0xFFFF else 2)
+                entries.append((fcode << 6) | len(word))
+                for c in word:
+                    entries.extend(struct.pack("<H", ord(c) - 0x4E00))
+                entries.extend(packed)
+                if fcode == 1:
+                    entries.extend(struct.pack("<H", fq))
+                elif fcode == 2:
+                    entries.extend(struct.pack("<I", fq))
+            else:
+                wb = word.encode("utf-8")
+                entries.extend([0xC0, len(wb)])
+                entries.extend(wb)
+                entries.extend(packed)
+                entries.extend(struct.pack("<I", fq))
+    records.extend(struct.pack("<II", len(strings), len(entries)))
     records_off = HEADER_LEN + len(syl_table)
     strings_off = records_off + len(records)
     entries_off = strings_off + len(strings)

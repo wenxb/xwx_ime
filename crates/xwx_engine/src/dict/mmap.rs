@@ -10,9 +10,10 @@ use memmap2::Mmap;
 
 use crate::candidate::Candidate;
 
+use super::codec::{first_v3_entry_freq, parse_v3_syl_table, read_v3_dict_entry};
 use super::{AbbrevIndex, DictError, Dictionary, KeyPrefix, MAX_LOOKUP_RESULTS, MMAP_HEADER_LEN,
-            MMAP_HEADER_LEN_V1, MMAP_MAGIC, MMAP_MIN_VERSION, MMAP_RECORD_LEN, MMAP_VERSION,
-            MmapDict, MmapRecord, SyllableGraph, read_u16, read_u32, read_u64};
+            MMAP_HEADER_LEN_V1, MMAP_MAGIC, MMAP_MIN_VERSION, MMAP_RECORD_LEN, MMAP_RECORD_LEN_V3,
+            MMAP_VERSION, MmapDict, MmapRecord, SyllableGraph, read_u16, read_u32, read_u64};
 
 impl MmapDict {
     /// 打开并 mmap 映射一个 dict.bin 词库文件。
@@ -68,19 +69,33 @@ impl MmapDict {
         {
             return Err(DictError::Corrupt("区段顺序/范围不合法: records/strings/entries 起点必须递增且落在文件内"));
         }
-        let records_len = pinyin_count
-            .checked_mul(MMAP_RECORD_LEN)
-            .ok_or_else(|| DictError::Corrupt("记录数溢出"))?;
+        let records_len = if version >= 3 {
+            pinyin_count
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(MMAP_RECORD_LEN_V3))
+                .ok_or_else(|| DictError::Corrupt("记录数溢出"))?
+        } else {
+            pinyin_count
+                .checked_mul(MMAP_RECORD_LEN)
+                .ok_or_else(|| DictError::Corrupt("记录数溢出"))?
+        };
         if records_off + records_len > strings_off {
             return Err(DictError::Corrupt("记录数组越界: pinyin_count × 记录长度超出 strings 区"));
         }
+        let syl_table = if version >= 3 {
+            parse_v3_syl_table(bytes, header_len, records_off)?
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             map,
+            version,
             pinyin_count,
             total_entries,
             records_off,
             strings_off,
             entries_off,
+            syl_table,
             total_freq: total_freq.map_or_else(OnceLock::new, OnceLock::from),
             abbrev: None,
             graph: None,
@@ -164,6 +179,26 @@ impl MmapDict {
 
     /// 第 `i` 条拼音索引记录（数组内按拼音字节序排序）。
     pub(super) fn record(&self, i: usize) -> Result<MmapRecord, DictError> {
+        if self.version >= 3 {
+            let b = self.slice(
+                self.records_off + i * MMAP_RECORD_LEN_V3,
+                MMAP_RECORD_LEN_V3 * 2,
+            )?;
+            let str_off = read_u32(b, 0)? as usize;
+            let ent_off = read_u32(b, 4)? as usize;
+            let next_str_off = read_u32(b, 8)? as usize;
+            let next_ent_off = read_u32(b, 12)? as usize;
+            return Ok(MmapRecord {
+                str_off,
+                str_len: next_str_off
+                    .checked_sub(str_off)
+                    .ok_or(DictError::Corrupt("v3 记录偏移倒退"))?,
+                ent_off,
+                ent_len: next_ent_off
+                    .checked_sub(ent_off)
+                    .ok_or(DictError::Corrupt("v3 记录偏移倒退"))?,
+            });
+        }
         let b = self.slice(self.records_off + i * MMAP_RECORD_LEN, MMAP_RECORD_LEN)?;
         Ok(MmapRecord {
             str_off: read_u32(b, 0)? as usize,
@@ -182,12 +217,12 @@ impl MmapDict {
             };
         }
         let key = pinyin.as_bytes();
+        let mut kbuf = [0u8; 256];
         let (mut lo, mut hi) = (0usize, self.pinyin_count);
         while lo < hi {
             let mid = (lo + hi) / 2;
             let rec = self.record(mid)?;
-            // str_off 是相对拼音区的偏移，需加区基址
-            let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            let s = self.record_key(rec, &mut kbuf)?;
             match s.cmp(key) {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
@@ -199,11 +234,12 @@ impl MmapDict {
 
     /// 前缀查找的下界：第一条以 `prefix` 开头的记录下标。
     pub(super) fn lower_bound(&self, prefix: &[u8]) -> Result<usize, DictError> {
+        let mut kbuf = [0u8; 256];
         let (mut lo, mut hi) = (0usize, self.pinyin_count);
         while lo < hi {
             let mid = (lo + hi) / 2;
             let rec = self.record(mid)?;
-            let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            let s = self.record_key(rec, &mut kbuf)?;
             if s < prefix {
                 lo = mid + 1;
             } else {
@@ -223,6 +259,9 @@ impl MmapDict {
     /// 几十次词条解析 + 字符串分配。
     pub(super) fn first_entry_freq(&self, ent_off: usize, ent_len: usize) -> Result<u64, DictError> {
         let block = self.slice(ent_off, ent_len)?;
+        if self.version >= 3 {
+            return first_v3_entry_freq(block);
+        }
         let wl = *block.first().ok_or(DictError::Corrupt("词块为空"))? as usize;
         Ok(read_u32(block, 1 + wl)? as u64)
     }
@@ -231,6 +270,15 @@ impl MmapDict {
         let block = self.slice(ent_off, ent_len)?;
         let mut out = Vec::new();
         let mut pos = 0usize;
+        if self.version >= 3 {
+            let mut wbuf = [0u8; 256];
+            while pos < block.len() {
+                let (word, freq, next_pos) = read_v3_dict_entry(block, pos, &mut wbuf)?;
+                out.push((word.to_owned(), freq));
+                pos = next_pos;
+            }
+            return Ok(out);
+        }
         while pos < block.len() {
             let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
             let word_bytes = block
@@ -251,6 +299,17 @@ impl MmapDict {
         let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
         let mut pos = 0;
         let mut found = None;
+        if self.version >= 3 {
+            let mut wbuf = [0u8; 256];
+            while pos < block.len() {
+                let (entry, freq, next_pos) = read_v3_dict_entry(block, pos, &mut wbuf)?;
+                if found.is_none() && entry == word {
+                    found = Some(freq);
+                }
+                pos = next_pos;
+            }
+            return Ok(found);
+        }
         while pos < block.len() {
             let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
             let bytes = block.get(pos + 1..pos + 1 + wl)
@@ -355,9 +414,10 @@ impl Dictionary for MmapDict {
         let limit = limit.min(MAX_LOOKUP_RESULTS as usize);
         let start = self.lower_bound(pb)?;
         let mut out: Vec<Candidate> = Vec::new();
+        let mut kbuf = [0u8; 256];
         for i in start..self.pinyin_count {
             let rec = self.record(i)?;
-            let s = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            let s = self.record_key(rec, &mut kbuf)?;
             if !s.starts_with(pb) {
                 break;
             }

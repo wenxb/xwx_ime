@@ -8,9 +8,10 @@ use memmap2::Mmap;
 
 use crate::candidate::Candidate;
 
+use super::codec::read_v23_abbrev_entry;
 use super::{read_u16, read_u32, read_u64, DictError, MmapDict, MmapRecord, ABBREV_HEADER_LEN,
-            ABBREV_MAGIC, ABBREV_MIN_VERSION, ABBREV_VERSION, MAX_LOOKUP_RESULTS, MMAP_RECORD_LEN};
-
+            ABBREV_MAGIC, ABBREV_MIN_VERSION, ABBREV_VERSION, MAX_LOOKUP_RESULTS, MMAP_RECORD_LEN,
+            MMAP_RECORD_LEN_V3};
 /// 基于只读 mmap 二进制的词库（运行时主力实现）。
 ///
 /// 由 `scripts/dict_to_bin.py` 从 SQLite 词库转换而来；启动时 `Mmap::map`
@@ -155,9 +156,16 @@ impl AbbrevIndex {
                 "副索引区段顺序/范围不合法: records/strings/entries 起点须递增且落在文件内",
             ));
         }
-        let records_len = key_count
-            .checked_mul(MMAP_RECORD_LEN)
-            .ok_or(DictError::Corrupt("副索引记录数溢出"))?;
+        let records_len = if version >= 3 {
+            key_count
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(MMAP_RECORD_LEN_V3))
+                .ok_or(DictError::Corrupt("副索引记录数溢出"))?
+        } else {
+            key_count
+                .checked_mul(MMAP_RECORD_LEN)
+                .ok_or(DictError::Corrupt("副索引记录数溢出"))?
+        };
         if records_off + records_len > strings_off {
             return Err(DictError::Corrupt(
                 "副索引记录数组越界: key_count × 记录长度超出 strings 区",
@@ -238,6 +246,26 @@ impl AbbrevIndex {
 
     /// 第 `i` 条首字母索引记录(数组内按首字母串字节序排序)。
     fn record(&self, i: usize) -> Result<MmapRecord, DictError> {
+        if self.version >= 3 {
+            let b = self.slice(
+                self.records_off + i * MMAP_RECORD_LEN_V3,
+                MMAP_RECORD_LEN_V3 * 2,
+            )?;
+            let str_off = read_u32(b, 0)? as usize;
+            let ent_off = read_u32(b, 4)? as usize;
+            let next_str_off = read_u32(b, 8)? as usize;
+            let next_ent_off = read_u32(b, 12)? as usize;
+            return Ok(MmapRecord {
+                str_off,
+                str_len: next_str_off
+                    .checked_sub(str_off)
+                    .ok_or(DictError::Corrupt("v3 副索引记录偏移倒退"))?,
+                ent_off,
+                ent_len: next_ent_off
+                    .checked_sub(ent_off)
+                    .ok_or(DictError::Corrupt("v3 副索引记录偏移倒退"))?,
+            });
+        }
         let b = self.slice(self.records_off + i * MMAP_RECORD_LEN, MMAP_RECORD_LEN)?;
         Ok(MmapRecord {
             str_off: read_u32(b, 0)? as usize,
@@ -278,40 +306,30 @@ impl AbbrevIndex {
             }
             let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
             let mut pos = 0usize;
+            let mut wbuf = [0u8; 256];
+            let mut sbuf = [0u8; 64];
             while pos < block.len() {
-                let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
-                let word_bytes = block
-                    .get(pos + 1..pos + 1 + wl)
-                    .ok_or(DictError::Corrupt("词块越界"))?;
-                let word = std::str::from_utf8(word_bytes)
-                    .map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
-                let (pinyin, freq, step) = if self.version >= 2 {
-                    let sl = s.len();
-                    let syl_ids = block
-                        .get(pos + 1 + wl..pos + 1 + wl + sl)
-                        .ok_or(DictError::Corrupt("词块越界"))?;
-                    let freq = read_u32(block, pos + 1 + wl + sl)?;
-                    (self.decode_v2_pinyin(s, syl_ids)?, freq, 1 + wl + sl + 4)
+                let (word, pinyin, freq, next_pos) = if self.version >= 2 {
+                    let (w, ids, f, np) =
+                        read_v23_abbrev_entry(self.version, block, pos, s.len(), &mut wbuf, &mut sbuf)?;
+                    (w, self.decode_v2_pinyin(s, ids)?, f, np)
                 } else {
-                    let pl = *block
-                        .get(pos + 1 + wl)
-                        .ok_or(DictError::Corrupt("词块越界"))? as usize;
-                    let py_bytes = block
-                        .get(pos + 2 + wl..pos + 2 + wl + pl)
-                        .ok_or(DictError::Corrupt("词块越界"))?;
-                    let freq = read_u32(block, pos + 2 + wl + pl)?;
-                    let py = std::str::from_utf8(py_bytes)
-                        .map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?
-                        .to_owned();
-                    (py, freq, 2 + wl + pl + 4)
+                    let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
+                    let wb = block.get(pos + 1..pos + 1 + wl).ok_or(DictError::Corrupt("词块越界"))?;
+                    let w = std::str::from_utf8(wb).map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
+                    let pl = *block.get(pos + 1 + wl).ok_or(DictError::Corrupt("词块越界"))? as usize;
+                    let py_bytes = block.get(pos + 2 + wl..pos + 2 + wl + pl).ok_or(DictError::Corrupt("词块越界"))?;
+                    let f = read_u32(block, pos + 2 + wl + pl)? as u64;
+                    let py = std::str::from_utf8(py_bytes).map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?.to_owned();
+                    (w, py, f, pos + 2 + wl + pl + 4)
                 };
-                let mut cand = Candidate::new(word, pinyin, freq as u64);
+                let mut cand = Candidate::new(word, pinyin, freq);
                 cand.matched_len = s.len();
                 out.push(cand);
                 if out.len() >= MAX_LOOKUP_RESULTS as usize {
                     return Ok(out);
                 }
-                pos += step;
+                pos = next_pos;
             }
         }
         Ok(out)
@@ -362,17 +380,13 @@ impl AbbrevIndex {
         }
         let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
         let mut pos = 0usize;
+        let mut wbuf = [0u8; 256];
+        let mut sbuf = [0u8; 64];
         while pos < block.len() {
-            let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
-            block
-                .get(pos + 1..pos + 1 + wl)
-                .ok_or(DictError::Corrupt("词块越界"))?;
             if self.version >= 2 {
                 let sl = pb.len();
-                let syl_ids = block
-                    .get(pos + 1 + wl..pos + 1 + wl + sl)
-                    .ok_or(DictError::Corrupt("词块越界"))?;
-                let freq = read_u32(block, pos + 1 + wl + sl)? as u64;
+                let (_, syl_ids, freq, next_pos) =
+                    read_v23_abbrev_entry(self.version, block, pos, sl, &mut wbuf, &mut sbuf)?;
                 let ok = digraphs.last().is_none_or(|&(last, _)| sl > last)
                     && digraphs.iter().all(|&(idx, initial)| {
                         self.v2_syllable(pb[idx], syl_ids[idx]).is_ok_and(|syl| {
@@ -383,17 +397,14 @@ impl AbbrevIndex {
                 if ok {
                     return Ok(Some(freq));
                 }
-                pos += 1 + wl + sl + 4;
+                pos = next_pos;
             } else {
-                let pl = *block
-                    .get(pos + 1 + wl)
-                    .ok_or(DictError::Corrupt("词块越界"))? as usize;
-                let py_bytes = block
-                    .get(pos + 2 + wl..pos + 2 + wl + pl)
-                    .ok_or(DictError::Corrupt("词块越界"))?;
+                let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
+                block.get(pos + 1..pos + 1 + wl).ok_or(DictError::Corrupt("词块越界"))?;
+                let pl = *block.get(pos + 1 + wl).ok_or(DictError::Corrupt("词块越界"))? as usize;
+                let py_bytes = block.get(pos + 2 + wl..pos + 2 + wl + pl).ok_or(DictError::Corrupt("词块越界"))?;
                 let freq = read_u32(block, pos + 2 + wl + pl)? as u64;
-                let pinyin = std::str::from_utf8(py_bytes)
-                    .map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?;
+                let pinyin = std::str::from_utf8(py_bytes).map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?;
                 if digraphs.is_empty() || syllables_carry_digraphs(pinyin, digraphs) {
                     return Ok(Some(freq));
                 }
@@ -470,21 +481,17 @@ impl AbbrevIndex {
             }
             let block = self.slice(self.entries_off + rec.ent_off, rec.ent_len)?;
             let mut pos = 0usize;
+            let mut wbuf = [0u8; 256];
+            let mut sbuf = [0u8; 64];
             while pos < block.len() && out.len() < limit {
                 scanned += 1;
-                let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
-                let word_bytes = block
-                    .get(pos + 1..pos + 1 + wl)
-                    .ok_or(DictError::Corrupt("词块越界"))?;
                 if self.version >= 2 {
-                    let syl_ids = block
-                        .get(pos + 1 + wl..pos + 1 + wl + key_len)
-                        .ok_or(DictError::Corrupt("词块越界"))?;
-                    let freq = read_u32(block, pos + 1 + wl + key_len)? as u64;
+                    let (word, syl_ids, freq, next_pos) =
+                        read_v23_abbrev_entry(self.version, block, pos, key_len, &mut wbuf, &mut sbuf)?;
                     if scanned > limit && (key_len != 2 || freq <= 100) {
                         break;
                     }
-                    pos += 1 + wl + key_len + 4;
+                    pos = next_pos;
                     let mut matched = true;
                     for k in 0..key_len {
                         if !syl_ok(k, self.v2_syllable(key[k], syl_ids[k])?) {
@@ -493,21 +500,16 @@ impl AbbrevIndex {
                         }
                     }
                     if matched {
-                        let word = std::str::from_utf8(word_bytes)
-                            .map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
                         out.push((word.to_owned(), self.decode_v2_pinyin(key, syl_ids)?, freq));
                     }
                 } else {
-                    let pl = *block
-                        .get(pos + 1 + wl)
-                        .ok_or(DictError::Corrupt("词块越界"))? as usize;
-                    let py_bytes = block
-                        .get(pos + 2 + wl..pos + 2 + wl + pl)
-                        .ok_or(DictError::Corrupt("词块越界"))?;
+                    let wl = *block.get(pos).ok_or(DictError::Corrupt("词块越界"))? as usize;
+                    let wb = block.get(pos + 1..pos + 1 + wl).ok_or(DictError::Corrupt("词块越界"))?;
+                    let pl = *block.get(pos + 1 + wl).ok_or(DictError::Corrupt("词块越界"))? as usize;
+                    let py_bytes = block.get(pos + 2 + wl..pos + 2 + wl + pl).ok_or(DictError::Corrupt("词块越界"))?;
                     let freq = read_u32(block, pos + 2 + wl + pl)? as u64;
                     pos += 2 + wl + pl + 4;
-                    let pinyin = std::str::from_utf8(py_bytes)
-                        .map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?;
+                    let pinyin = std::str::from_utf8(py_bytes).map_err(|_| DictError::Corrupt("全拼不是 UTF-8"))?;
                     let mut n = 0usize;
                     let mut matched = true;
                     for syl in pinyin.split(' ') {
@@ -518,8 +520,7 @@ impl AbbrevIndex {
                         n += 1;
                     }
                     if matched && n == key_len {
-                        let word = std::str::from_utf8(word_bytes)
-                            .map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
+                        let word = std::str::from_utf8(wb).map_err(|_| DictError::Corrupt("词条不是 UTF-8"))?;
                         out.push((word.to_owned(), pinyin.to_owned(), freq));
                     }
                 }

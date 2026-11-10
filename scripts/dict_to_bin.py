@@ -18,19 +18,48 @@ import sys
 MAGIC = b"XWXIDM1\0"
 # v2 在 v1 的 52 字节头尾部追加 `total_freq`(u64)。这一列让引擎启动时不必
 # 把整个词条区扫一遍——实测那次扫描让 dict.bin 的常驻从 ~30MB 涨到 63MB。
-VERSION = 2
+VERSION = 3
 HEADER_FMT = "<8sIQQQQQQ"  # magic + version + n_keys + total + 3 偏移 + total_freq
 HEADER_LEN = 60  # 8 + 4 + 6×8
-RECORD_LEN = 12  # u32 str_off + u16 str_len + u32 ent_off + u16 ent_len
+RECORD_LEN_V3 = 8  # u32 str_off + u32 ent_off（共 n_keys + 1 条，末尾哨兵）
 FREQ_MAX = 0xFFFFFFFF  # u32 上限，超出截断（真实词频远达不到）
 
 
-def _validate(blob):
-    """写出后自检：头部自洽、区段顺序与范围、记录数组越界、拼音 key 严格升序。
+def _encode_word_v3(word: str, freq: int) -> bytes:
+    fq = min(freq, FREQ_MAX)
+    if 1 <= len(word) <= 63 and all(0x4E00 <= ord(c) <= 0x9FFF for c in word):
+        fcode = 0 if fq == 100 else (1 if fq <= 0xFFFF else 2)
+        out = bytearray([(fcode << 6) | len(word)])
+        for c in word:
+            out.extend(struct.pack("<H", ord(c) - 0x4E00))
+        if fcode == 1:
+            out.extend(struct.pack("<H", fq))
+        elif fcode == 2:
+            out.extend(struct.pack("<I", fq))
+        return bytes(out)
+    wb = word.encode("utf-8")
+    if len(wb) > 255:
+        raise SystemExit(f"词条过长（>255 字节）: {word!r}")
+    return bytes([0xC0, len(wb)]) + wb + struct.pack("<I", fq)
 
-    与 `abbrev_to_bin.py` 同一套判据——读取端（Rust）拿到坏文件只会静默降级，
-    所以产物必须在**构建这一侧**先自证。
-    """
+
+def _decode_key_v3(raw: bytes, syls: list[bytes]) -> bytes:
+    pos = 0
+    parts = []
+    while pos < len(raw):
+        b = raw[pos]
+        pos += 1
+        if b < 254:
+            sid = b
+        else:
+            sid = 254 + ((b - 254) << 8) + raw[pos]
+            pos += 1
+        parts.append(syls[sid])
+    return b" ".join(parts)
+
+
+def _validate(blob):
+    """写出后自检：头部自洽、区段顺序与范围、记录数组越界、拼音 key 严格升序。"""
     magic, version, n_keys, _total, rec_off, str_off, ent_off, total_freq = struct.unpack_from(
         HEADER_FMT, blob, 0
     )
@@ -42,18 +71,25 @@ def _validate(blob):
         raise SystemExit(
             f"区段顺序/范围不合法: rec={rec_off} str={str_off} ent={ent_off} len={len(blob)}"
         )
-    if rec_off + n_keys * RECORD_LEN > str_off:
+    if rec_off + (n_keys + 1) * RECORD_LEN_V3 > str_off:
         raise SystemExit("记录数组越界")
+    n_syls = struct.unpack_from("<H", blob, HEADER_LEN)[0]
+    cur = HEADER_LEN + 2
+    syls = []
+    for _ in range(n_syls):
+        slen = blob[cur]
+        cur += 1
+        syls.append(blob[cur : cur + slen])
+        cur += slen
     prev = None
     for i in range(n_keys):
-        o, sl, eo, el = struct.unpack_from("<IHIH", blob, rec_off + i * RECORD_LEN)
-        if str_off + o + sl > ent_off or ent_off + eo + el > len(blob):
+        o, eo, next_o, next_eo = struct.unpack_from("<IIII", blob, rec_off + i * RECORD_LEN_V3)
+        if next_o < o or next_eo < eo or str_off + next_o > ent_off or ent_off + next_eo > len(blob):
             raise SystemExit(f"第 {i} 条记录越界")
-        key = blob[str_off + o: str_off + o + sl]
+        key = _decode_key_v3(blob[str_off + o : str_off + next_o], syls)
         if prev is not None and key <= prev:
             raise SystemExit(f"拼音 key 未严格升序: {prev!r} → {key!r}")
         prev = key
-
 
 def _write_atomically(src, dst, blob):
     """校验后原子替换（Q4）：拒绝「输入=输出」，先写同目录 `.tmp`，自检通过再 replace。
@@ -96,30 +132,42 @@ def main() -> None:
     pinyins = sorted(groups)  # 字节序排序 → 引擎二分查找
     print(f"拼音 key 数: {len(pinyins)}")
 
-    # 构造三个区：records（拼音索引）→ strings（拼音串）→ entries（词条）
+    from collections import Counter
+    syl_counts = Counter()
+    for py in pinyins:
+        for s in py.split(" "):
+            syl_counts[s] += 1
+    syl_list = [s for s, _ in sorted(syl_counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+    syl_to_id = {s: i for i, s in enumerate(syl_list)}
+    syl_blob = bytearray(struct.pack("<H", len(syl_list)))
+    for s in syl_list:
+        sb = s.encode("ascii")
+        syl_blob.append(len(sb))
+        syl_blob.extend(sb)
+
     strings = bytearray()
     entries = bytearray()
     records = bytearray()
     total = 0
-    freq_sum = 0  # 全表词频总和（v2 头部字段，引擎按它做 P(词)=freq/总频 归一化）
+    freq_sum = 0
     for py in pinyins:
-        pb = py.encode("utf-8")
-        str_off = len(strings)
-        strings.extend(pb)
-        ent_off = len(entries)
+        records.extend(struct.pack("<II", len(strings), len(entries)))
+        for s in py.split(" "):
+            sid = syl_to_id[s]
+            if sid < 254:
+                strings.append(sid)
+            else:
+                rem = sid - 254
+                strings.append(254 + (rem >> 8))
+                strings.append(rem & 0xFF)
         for word, freq in groups[py]:
-            wb = word.encode("utf-8")
-            if len(wb) > 255:
-                raise SystemExit(f"词条过长（>255 字节）: {word!r}")
-            entries.append(len(wb))
-            entries.extend(wb)
             fq = min(freq, FREQ_MAX)
-            entries.extend(struct.pack("<I", fq))
+            entries.extend(_encode_word_v3(word, fq))
             freq_sum += fq
-        records.extend(struct.pack("<IHIH", str_off, len(pb), ent_off, len(entries) - ent_off))
         total += len(groups[py])
+    records.extend(struct.pack("<II", len(strings), len(entries)))
 
-    records_off = HEADER_LEN
+    records_off = HEADER_LEN + len(syl_blob)
     strings_off = records_off + len(records)
     entries_off = strings_off + len(strings)
     header = struct.pack(
@@ -130,7 +178,7 @@ def main() -> None:
     assert len(header) == HEADER_LEN, "头部布局与 Rust 端不一致"
 
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    _write_atomically(src, dst, header + records + strings + entries)
+    _write_atomically(src, dst, header + syl_blob + records + strings + entries)
     print(f"已写出: {dst}（{os.path.getsize(dst) / 1024 / 1024:.1f} MB，总频 {freq_sum}）")
 
 

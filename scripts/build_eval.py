@@ -82,22 +82,67 @@ def read_dict(path: str):
     """dict.bin → (entries: list[(pinyin_key, word, freq)], total_freq)。"""
     with open(path, "rb") as f:
         b = f.read()
-    # 只读 v1/v2 共有的前 52 字节（v2 只是在尾部追加了 total_freq）。
-    magic, _ver, _pc, _total, _ro, _so, eo = struct.unpack("<8sIQQQQQ", b[:HEADER_LEN])
+    magic, ver, pc, _total, ro, so, eo = struct.unpack("<8sIQQQQQ", b[:HEADER_LEN])
     assert magic == MAGIC, "不是 dict.bin"
-    pos = eo
     entries = []
     total_freq = 0
+    if ver >= 3:
+        n_syls = struct.unpack_from("<H", b, 60)[0]
+        cur = 62
+        syls = []
+        for _ in range(n_syls):
+            slen = b[cur]
+            cur += 1
+            syls.append(b[cur : cur + slen].decode("ascii"))
+            cur += slen
+        for i in range(pc):
+            str_off, ent_off, next_so, next_eo = struct.unpack_from("<IIII", b, ro + i * 8)
+            raw_k = b[so + str_off : so + next_so]
+            kp, kparts = 0, []
+            while kp < len(raw_k):
+                c = raw_k[kp]
+                kp += 1
+                if c < 254:
+                    sid = c
+                else:
+                    sid = 254 + ((c - 254) << 8) + raw_k[kp]
+                    kp += 1
+                kparts.append(syls[sid])
+            py = " ".join(kparts)
+            pos = eo + ent_off
+            end = eo + next_eo
+            while pos < end:
+                hdr = b[pos]
+                fcode = hdr >> 6
+                clen = hdr & 0x3F
+                if fcode < 3:
+                    word = "".join(
+                        chr(0x4E00 + struct.unpack_from("<H", b, pos + 1 + k * 2)[0])
+                        for k in range(clen)
+                    )
+                    foff = pos + 1 + clen * 2
+                    if fcode == 0:
+                        freq, pos = 100, foff
+                    elif fcode == 1:
+                        freq, pos = struct.unpack_from("<H", b, foff)[0], foff + 2
+                    else:
+                        freq, pos = struct.unpack_from("<I", b, foff)[0], foff + 4
+                else:
+                    wl = b[pos + 1]
+                    word = b[pos + 2 : pos + 2 + wl].decode("utf-8")
+                    freq = struct.unpack_from("<I", b, pos + 2 + wl)[0]
+                    pos += 2 + wl + 4
+                entries.append((py, word, freq))
+                total_freq += freq
+        return entries, total_freq
+    pos = eo
     while pos < len(b):
         wl = b[pos]
         word = b[pos + 1 : pos + 1 + wl].decode("utf-8")
         freq = struct.unpack("<I", b[pos + 1 + wl : pos + 5 + wl])[0]
-        entries.append((None, word, freq))  # pinyin 占位，下面按块补
+        entries.append((None, word, freq))
         total_freq += freq
         pos += 1 + wl + 4
-    # 第二遍读拼音索引，把 pinyin 填回去（内存占用可接受：186 万条）
-    pc = struct.unpack("<Q", b[12:20])[0]
-    ro, so = struct.unpack("<QQ", b[28:44])
     recs = []
     for i in range(pc):
         str_off, str_len, ent_off, ent_len = struct.unpack(

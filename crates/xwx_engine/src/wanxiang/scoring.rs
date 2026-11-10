@@ -60,13 +60,11 @@ impl WanxiangLM {
         for k in (1..=ctx_chars).rev() {
             // 上文末 k 字（按字符边界切字节）
             let suffix = &ctx_enc[pos[ctx_chars - k]..pos[ctx_chars]];
-            let (ok, node, matched) = self.array.traverse(self.data(), suffix, 0);
+            let (ok, node, matched) = self.traverse(suffix, 0);
             if !ok || matched != suffix.len() {
                 continue;
             }
-            let nh = self
-                .array
-                .common_prefix_search(self.data(), wd_enc, node, &mut hits);
+            let nh = self.common_prefix_search(wd_enc, node, &mut hits);
             for &(v, match_bytes) in &hits[..nh] {
                 let match_chars = unicode_length(wd_enc, match_bytes);
                 let colloc_len = k + match_chars;
@@ -108,7 +106,7 @@ impl WanxiangLM {
         };
         for k in (1..=chars).rev() {
             let suffix = &buf[pos[chars - k]..len];
-            let (ok, node, matched) = self.array.traverse(self.data(), suffix, 0);
+            let (ok, node, matched) = self.traverse(suffix, 0);
             if ok && matched == suffix.len() {
                 context.nodes[context.len] = (k, node);
                 context.len += 1;
@@ -127,9 +125,7 @@ impl WanxiangLM {
         let encoded = &buf[..len];
         let mut hits = [(0i32, 0usize); 8];
         for &(k, node) in &ctx.nodes[..ctx.len] {
-            let nh = self
-                .array
-                .common_prefix_search(self.data(), encoded, node, &mut hits);
+            let nh = self.common_prefix_search(encoded, node, &mut hits);
             for &(v, match_bytes) in &hits[..nh] {
                 let match_chars = unicode_length(encoded, match_bytes);
                 let whole = k + match_chars >= self.config.collocation_min_length

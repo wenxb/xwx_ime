@@ -1,5 +1,9 @@
 #!/bin/sh
 set -e
+# 从随包分发的 dict.bin 本地构建派生索引 abbrev.bin 与 syllable_graph.bin (~0.5s)。
+if [ -x /usr/libexec/ibus-engine-xwx ] && [ -f /usr/share/xwx/dict.bin ]; then
+    /usr/libexec/ibus-engine-xwx --build-indexes /usr/share/xwx/dict.bin >/dev/null 2>&1 || true
+fi
 # 装了新引擎后让 IBus 重新扫组件目录，省掉「重启桌面会话才生效」这一步。
 if command -v ibus >/dev/null 2>&1; then
     ibus write-cache >/dev/null 2>&1 || true

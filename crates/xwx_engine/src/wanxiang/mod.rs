@@ -261,7 +261,7 @@ impl DoubleArray {
             };
             node ^= u_offset(u) ^ b as usize;
             match self.unit(data, node) {
-                Some(nu) if u_label(nu) as u8 == b => {
+                Some(nu) if u_label(nu) == b as u32 => {
                     matched += 1;
                 }
                 _ => return (false, node, matched),
@@ -295,7 +295,7 @@ impl DoubleArray {
                 Some(u) => u,
                 None => break,
             };
-            if u_label(unit) as u8 != b {
+            if u_label(unit) != b as u32 {
                 break;
             }
             let has_leaf = u_has_leaf(unit);
@@ -385,14 +385,21 @@ impl Default for WanxiangConfig {
 /// 支持的 `.gram` 格式前缀（万象/Rime 的 `Rime::Grammar/<major>.<minor>`）。
 ///
 /// 只认 major=1：minor 变化不影响数组布局，major 变了一定要重新核对解析。
-const SUPPORTED_GRAM_FORMAT_PREFIX: &str = "Rime::Grammar/1.";
+const SUPPORTED_GRAM_FORMAT_V1: &str = "Rime::Grammar/1.";
+const SUPPORTED_GRAM_FORMAT_V2: &str = "Rime::Grammar/2.";
+
+#[derive(Debug)]
+enum GramBackend {
+    DoubleArray(DoubleArray),
+    Compact(compact::CompactDawg),
+}
 
 #[derive(Debug)]
 pub struct WanxiangLM {
     /// 文件映射；持有映射（数据不读进堆）。
     mmap: Mmap,
-    /// double-array 元信息（数据区间在 `self.mmap` 内）。
-    array: DoubleArray,
+    /// 后端索引（v1 double-array 或 v2 compact CSR DAWG）。
+    backend: GramBackend,
     /// 打分配置（第 6 步评测调参入口）。
     pub config: WanxiangConfig,
     /// 文件头信息（调试/校验）。
@@ -407,52 +414,75 @@ impl WanxiangLM {
         let mmap = unsafe { Mmap::map(&file)? };
         advise_random(&mmap);
         let header = Header::parse(&mmap)?;
-        // **不能只判「非空」**：空只是最没信息的一种坏文件。真正要认的是
-        // 「这个格式我们支持」——上游 octagram 的数组布局随版本变，拿不认识的
-        // format 硬解只会得到静默的乱码分数（Q4）。
-        if !header.format.starts_with(SUPPORTED_GRAM_FORMAT_PREFIX) {
-            return Err(LmError::BadGram(format!(
-                "不支持的 .gram 格式 {:?}（只支持以 {:?} 开头）",
-                header.format, SUPPORTED_GRAM_FORMAT_PREFIX
-            )));
-        }
-        if header.double_array_size == 0 {
-            return Err(LmError::BadGram("double_array_size 为 0".into()));
-        }
-        let array = DoubleArray::new(
-            mmap.len(),
-            header.array_file_offset,
-            header.double_array_size as usize,
-        )
-        .ok_or_else(|| {
-            LmError::BadGram(format!(
-                "double-array 越界: offset {} + {}B > 文件长度 {}",
+        let backend = if header.format.starts_with(SUPPORTED_GRAM_FORMAT_V1) {
+            if header.double_array_size == 0 {
+                return Err(LmError::BadGram("double_array_size 为 0".into()));
+            }
+            let array = DoubleArray::new(
+                mmap.len(),
                 header.array_file_offset,
-                header.double_array_size as usize * 4,
-                mmap.len()
-            ))
-        })?;
+                header.double_array_size as usize,
+            )
+            .ok_or_else(|| {
+                LmError::BadGram(format!(
+                    "double-array 越界: offset {} + {}B > 文件长度 {}",
+                    header.array_file_offset,
+                    header.double_array_size as usize * 4,
+                    mmap.len()
+                ))
+            })?;
+            GramBackend::DoubleArray(array)
+        } else if header.format.starts_with(SUPPORTED_GRAM_FORMAT_V2) {
+            GramBackend::Compact(compact::CompactDawg::parse(&mmap)?)
+        } else {
+            return Err(LmError::BadGram(format!(
+                "不支持的 .gram 格式 {:?}（只支持以 {:?} 或 {:?} 开头）",
+                header.format, SUPPORTED_GRAM_FORMAT_V1, SUPPORTED_GRAM_FORMAT_V2
+            )));
+        };
         Ok(WanxiangLM {
             mmap,
-            array,
+            backend,
             config: WanxiangConfig::default(),
             _header: header,
         })
     }
 
-    /// 单元数（真实文件为 105,063,424）。
+    /// 单元/状态数。
     pub fn num_units(&self) -> usize {
-        self.array.num_units
+        match &self.backend {
+            GramBackend::DoubleArray(a) => a.num_units,
+            GramBackend::Compact(c) => c.total_states,
+        }
     }
 
-    /// 词表规模：万象未做全量统计（需要一遍 420MB 扫描），恒为 0；
+    /// 词表规模：万象未做全量统计（需要一遍扫描），恒为 0；
     /// 与 [`LmStore::vocab_size`] 口径一致。
     pub fn vocab_size(&self) -> u64 {
         0
     }
 
-    fn data(&self) -> &[u8] {
-        self.array.slice(&self.mmap)
+    #[inline]
+    fn traverse(&self, key: &[u8], start_node: usize) -> (bool, usize, usize) {
+        match &self.backend {
+            GramBackend::DoubleArray(a) => a.traverse(a.slice(&self.mmap), key, start_node),
+            GramBackend::Compact(c) => c.traverse(&self.mmap, key, start_node),
+        }
+    }
+
+    #[inline]
+    fn common_prefix_search(
+        &self,
+        key: &[u8],
+        node_pos: usize,
+        results: &mut [(i32, usize)],
+    ) -> usize {
+        match &self.backend {
+            GramBackend::DoubleArray(a) => {
+                a.common_prefix_search(a.slice(&self.mmap), key, node_pos, results)
+            }
+            GramBackend::Compact(c) => c.common_prefix_search(&self.mmap, key, node_pos, results),
+        }
     }
 
     /// 把「存储值 + 自然对数惩罚」折算成 log10 概率（推导见模块文档）。
@@ -533,6 +563,7 @@ impl LanguageModel for WanxiangLM {
     }
 }
 
+mod compact;
 mod scoring;
 pub(crate) use scoring::PreparedContext;
 #[cfg(test)]

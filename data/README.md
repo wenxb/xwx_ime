@@ -37,27 +37,24 @@ rime-ice 词表(dict.yaml) → build_dict.py → dict.sqlite3 → dict_to_bin.py
 （`crates/xwx_engine/src/dict.rs`）启动时 mmap 映射，查询=内存二分，
 零 SQL、零锁、无逐击键磁盘 IO。
 
-### 二进制布局（v2，little-endian）
+### 二进制布局（v3，little-endian，向下兼容 v1/v2）
 
 ```text
 偏移      内容
 0         magic: "XWXIDM1\0"（8 字节）
-8         u32 LE: 版本号（当前 2）
+8         u32 LE: 版本号（当前 3，兼容 1..=3）
 12        u64 LE: 拼音 key 数 P
 20        u64 LE: 词条总数
-28        u64 LE: 拼音索引区偏移（P × 12 字节）
-36        u64 LE: 拼音字符串区偏移
+28        u64 LE: 拼音索引区偏移（v3 为 (P+1) × 8 字节哨兵差分）
+36        u64 LE: 拼音字符串区偏移（v3 为 1~2 字节音节编号序列）
 44        u64 LE: 词条区偏移
-52        u64 LE: 全表词频总和（v2 新增）
+52        u64 LE: 全表词频总和（v2+）
+60        音节字典表（v3 新增：u16 数量 + [u8 len + ascii]）
 
-拼音索引区（P 条，按拼音字节序排序 → 二分查找）:
-  u32 LE 拼音串偏移（相对字符串区）+ u16 LE 长度
-  + u32 LE 词块偏移（相对词条区）+ u16 LE 词块长度
-
-词条区（每拼音一个块）:
-  word_len u8 + word UTF-8 + freq u32 LE，块内按 freq 降序
+词条区（v3，每拼音一个块，按 freq 降序）:
+  hdr u8: 高 2 位为词频档（0: freq=100 占 0B；1: u16 占 2B；2: u32 占 4B；3: 原始 UTF-8 回退），
+          低 6 位为字数 clen；后跟 clen × u16 LE（U+4E00 起偏移）+ 变长词频。
 ```
-
 **v1 → v2 只加了偏移 52 的那 8 字节**，前 52 字节逐字节同布局，因此：
 
 - 读取端 v1/v2 都收（`MmapDict::from_bytes` 按版本选头长 52/60）；
@@ -96,8 +93,9 @@ key 是「拼音各音节首字母串」(`"zhong guo ren"` → `"zgr"`);每个�
 一个首字母 key,因此关联总数恒等于词条数(实测 1.00×,无组合爆炸)。
 `MmapDict::with_abbrev` 装配后,`lookup_abbrev` 对纯简拼直接二分这张表。
 
-### 二进制布局(v1,little-endian)
+### 二进制布局(v3,little-endian,向下兼容 v1/v2)
 
+v3 将索引记录缩为 `(K + 1) × 8B` 哨兵差分，词条区复用 `dict.bin` v3 的 2B/字 CJK + 变长词频编码，并将 26 桶音节下标按 6-bit 紧凑打包（30.3 MiB，较 v2 缩减 35%）。以下为 v1 原始布局参考：
 与 `dict.bin` **v1 前 52 字节同构**:同样的 52 字节头、12 字节索引记录、
 词条区按 freq 降序。差别两处:魔数换成 `XWXABR1\0`,词条区每条多带一个
 「全拼」字段(查出的词要回送打分流程,必须带回全拼)。
@@ -158,8 +156,9 @@ python3 scripts/abbrev_to_bin.py in.bin out.bin   # 自定义路径
 不报错——换词库后忘了重建它只会变慢,不会错。也因此不进 git,本机重新
 生成即可。
 
-### 二进制布局(v1,little-endian)
+### 二进制布局(v3,little-endian,向下兼容 v1/v2)
 
+v3 仅在节点区存储内部节点（`children_len > 0`），叶子节点的记录号直接编码在 4B 边表的 23-bit `child` 字段（`internal_node_count + record_idx`），体积缩至 21.1 MiB。以下为 v1 原始布局参考：
 ```text
 偏移      内容
 0         magic: "XWXSYL1\0"(8 字节)

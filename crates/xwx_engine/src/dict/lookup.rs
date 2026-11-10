@@ -33,11 +33,12 @@ impl MmapDict {
     /// 零分配：一次二分 + 一次切片比较。
     pub fn key_prefix_state(&self, prefix: &str) -> Result<KeyPrefix, DictError> {
         let p = prefix.as_bytes();
+        let mut kbuf = [0u8; 256];
         let (mut lo, mut hi) = (0usize, self.pinyin_count);
         while lo < hi {
             let mid = (lo + hi) / 2;
             let rec = self.record(mid)?;
-            let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            let k = self.record_key(rec, &mut kbuf)?;
             if k < p {
                 lo = mid + 1;
             } else {
@@ -48,7 +49,7 @@ impl MmapDict {
             return Ok(KeyPrefix::None);
         }
         let rec = self.record(lo)?;
-        let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+        let k = self.record_key(rec, &mut kbuf)?;
         Ok(if k == p {
             KeyPrefix::Exact
         } else if k.starts_with(p) {
@@ -73,11 +74,12 @@ impl MmapDict {
         hi: usize,
     ) -> Result<(KeyPrefix, usize), DictError> {
         let p = prefix.as_bytes();
+        let mut kbuf = [0u8; 256];
         let (mut lo, mut hi) = (lo.min(self.pinyin_count), hi.min(self.pinyin_count));
         while lo < hi {
             let mid = (lo + hi) / 2;
             let rec = self.record(mid)?;
-            let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+            let k = self.record_key(rec, &mut kbuf)?;
             if k < p {
                 lo = mid + 1;
             } else {
@@ -88,7 +90,7 @@ impl MmapDict {
             return Ok((KeyPrefix::None, lo));
         }
         let rec = self.record(lo)?;
-        let k = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+        let k = self.record_key(rec, &mut kbuf)?;
         let state = if k == p {
             KeyPrefix::Exact
         } else if k.starts_with(p) {
@@ -500,11 +502,12 @@ impl MmapDict {
             //    且后续音节的**首字节等于 tail 首字节**(第 908-913 行的判据)。
             //    于是扫描可以直接从 `prefix + ' ' + tail[0]` 处起,跳过前面
             //    成千上万条首字母不对的 key(它们原本也只会 `continue`)。
+            let mut kbuf = [0u8; 256];
             if tail.is_empty() {
                 let i = self.lower_bound(pb)?;
                 if i < self.pinyin_count {
                     let rec = self.record(i)?;
-                    let key = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+                    let key = self.record_key(rec, &mut kbuf)?;
                     if key == pb {
                         let py = std::str::from_utf8(key)
                             .map_err(|_| DictError::Corrupt("拼音不是合法文本"))?
@@ -537,7 +540,7 @@ impl MmapDict {
             let start = self.lower_bound(nb)?;
             for i in start..self.pinyin_count {
                 let rec = self.record(i)?;
-                let key = self.slice(self.strings_off + rec.str_off, rec.str_len)?;
+                let key = self.record_key(rec, &mut kbuf)?;
                 if !key.starts_with(nb) {
                     break;
                 }

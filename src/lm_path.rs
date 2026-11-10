@@ -110,14 +110,24 @@ pub(crate) struct LmChoice {
 /// 3. `bigram.txt`(文本 bigram,回落到旧行为;不存在也返回此路径,
 ///    由调用方走"未找到"分支)。
 pub(crate) fn resolve_lm_path(explicit: Option<&str>) -> LmChoice {
-    resolve_lm_path_in(
+    resolve_lm_path_with_system(
         explicit,
         &xdg_data_home(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME")),
+        Some(std::path::Path::new(SYSTEM_DATA_DIR)),
     )
 }
 
 /// 在指定 XDG 数据根目录下解析语言模型路径(可测试的核心逻辑)。
+#[cfg(test)]
 fn resolve_lm_path_in(explicit: Option<&str>, xdg_data_home: &std::path::Path) -> LmChoice {
+    resolve_lm_path_with_system(explicit, xdg_data_home, None)
+}
+
+fn resolve_lm_path_with_system(
+    explicit: Option<&str>,
+    xdg_data_home: &std::path::Path,
+    system_dir: Option<&std::path::Path>,
+) -> LmChoice {
     if let Some(p) = explicit {
         return LmChoice {
             path: PathBuf::from(p),
@@ -126,24 +136,22 @@ fn resolve_lm_path_in(explicit: Option<&str>, xdg_data_home: &std::path::Path) -
     }
     let xwx_dir = xdg_data_home.join("xwx");
 
-    // 1) 首选简体万象
-    let preferred = xwx_dir.join("wanxiang-lts-zh-hans.gram");
-    if preferred.is_file() {
-        return LmChoice {
-            path: preferred,
-            source: LmSource::ProbedGram,
-        };
+    for dir in [Some(xwx_dir.as_path()), system_dir].into_iter().flatten() {
+        let preferred = dir.join("wanxiang-lts-zh-hans.gram");
+        if preferred.is_file() {
+            return LmChoice {
+                path: preferred,
+                source: LmSource::ProbedGram,
+            };
+        }
+        if let Some(gram) = first_gram_in(dir) {
+            return LmChoice {
+                path: gram,
+                source: LmSource::ProbedGram,
+            };
+        }
     }
 
-    // 2) 目录下任意 .gram,按文件名字典序取第一个(确定性)
-    if let Some(gram) = first_gram_in(&xwx_dir) {
-        return LmChoice {
-            path: gram,
-            source: LmSource::ProbedGram,
-        };
-    }
-
-    // 3) 回落 bigram.txt
     LmChoice {
         path: xwx_dir.join("bigram.txt"),
         source: LmSource::FallbackBigramTxt,
@@ -161,6 +169,71 @@ fn first_gram_in(dir: &std::path::Path) -> Option<PathBuf> {
         .collect();
     grams.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     grams.into_iter().next()
+}
+
+/// 为已打开的词库装配 `abbrev.bin` 与 `syllable_graph.bin`；
+/// 若未显式指定环境变量且本地缺失/异代，则自动从 `dict.bin` 生成至用户数据目录。
+pub(crate) fn attach_or_build_indexes(
+    mut dict: xwx_engine::DictStore,
+    dict_path: &std::path::Path,
+) -> xwx_engine::DictStore {
+    let user_dir = xdg_data_home_for_config().join("xwx");
+    let sibling_abbrev = dict_path.with_file_name("abbrev.bin");
+    let user_abbrev = user_dir.join("abbrev.bin");
+    if let Some(exp) = std::env::var_os("XWX_ABBREV_PATH") {
+        dict = dict.with_abbrev(PathBuf::from(exp));
+    } else {
+        for cand in [&sibling_abbrev, &user_abbrev] {
+            if cand.is_file() {
+                dict = dict.with_abbrev(cand);
+                if dict.has_abbrev() {
+                    break;
+                }
+            }
+        }
+        if !dict.has_abbrev() {
+            let target = if sibling_abbrev
+                .parent()
+                .is_some_and(|p| p != std::path::Path::new(SYSTEM_DATA_DIR))
+            {
+                &sibling_abbrev
+            } else {
+                &user_abbrev
+            };
+            if dict.build_companion_indexes(Some(target), None).is_ok() {
+                dict = dict.with_abbrev(target);
+            }
+        }
+    }
+
+    let sibling_graph = dict_path.with_file_name("syllable_graph.bin");
+    let user_graph = user_dir.join("syllable_graph.bin");
+    if let Some(exp) = std::env::var_os("XWX_SYLLABLE_GRAPH_PATH") {
+        dict = dict.with_syllable_graph(PathBuf::from(exp));
+    } else {
+        for cand in [&sibling_graph, &user_graph] {
+            if cand.is_file() {
+                dict = dict.with_syllable_graph(cand);
+                if dict.has_syllable_graph() {
+                    break;
+                }
+            }
+        }
+        if !dict.has_syllable_graph() && std::env::var_os("XWX_ABBREV_PATH").is_none() {
+            let target = if sibling_graph
+                .parent()
+                .is_some_and(|p| p != std::path::Path::new(SYSTEM_DATA_DIR))
+            {
+                &sibling_graph
+            } else {
+                &user_graph
+            };
+            if dict.build_companion_indexes(None, Some(target)).is_ok() {
+                dict = dict.with_syllable_graph(target);
+            }
+        }
+    }
+    dict
 }
 
 #[cfg(test)]

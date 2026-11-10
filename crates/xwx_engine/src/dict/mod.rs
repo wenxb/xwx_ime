@@ -20,6 +20,8 @@
 //! 这样各子模块能直接读它们的私有字段,只有跨模块调用的方法才标 `pub(super)`。
 
 mod abbrev;
+mod builder;
+mod codec;
 mod lookup;
 mod mixed;
 mod mixed_walk;
@@ -47,26 +49,28 @@ const MAX_LOOKUP_RESULTS: i64 = 500;
 
 /// dict.bin 二进制词库的魔数（8 字节，含结尾 `\0`）。
 pub const MMAP_MAGIC: &[u8; 8] = b"XWXIDM1\0";
-/// dict.bin 当前格式版本（v2 在头部尾部补了全表词频总和）。
-const MMAP_VERSION: u32 = 2;
+/// dict.bin 当前格式版本（v3：8B 哨兵记录 + 音节字典键 + 2B CJK 与变长词频）。
+const MMAP_VERSION: u32 = 3;
 /// 仍可读取的最老版本：v1 没有 `total_freq` 字段，读取端回落到线性扫描。
 /// 保留是因为数据文件随发布物分发，换二进制不该强制用户同时重建数据。
 const MMAP_MIN_VERSION: u32 = 1;
 /// 头部长：v1 的 52 字节 + total_freq(8) = 60。
 /// 前 52 字节**与 v1 逐字节同布局**（新字段追加在尾部），所以 v1 的读取
-/// 路径在 v2 上仍然定位正确，只有版本号会拒绝——这正是回退分支能复用的原因。
+/// 路径在 v2/v3 上仍然定位正确，只有版本号会拒绝——这正是回退分支能复用的原因。
 const MMAP_HEADER_LEN: usize = 60;
 /// v1 头长（回退路径用）。
 const MMAP_HEADER_LEN_V1: usize = 52;
-/// 单条拼音索引：str_off(u32) + str_len(u16) + ent_off(u32) + ent_len(u16) = 12。
+/// v1/v2 单条拼音索引：str_off(u32) + str_len(u16) + ent_off(u32) + ent_len(u16) = 12。
 const MMAP_RECORD_LEN: usize = 12;
+/// v3 单条索引：str_off(u32) + ent_off(u32) = 8（长度由下一条哨兵记录差分得出）。
+const MMAP_RECORD_LEN_V3: usize = 8;
 
 /// abbrev.bin 简拼副索引的魔数(8 字节,含结尾 `\0`)。
 pub const ABBREV_MAGIC: &[u8; 8] = b"XWXABR1\0";
-/// abbrev.bin 支持的最低版本（v1 词条区存原始全拼，v2 存音节分桶下标）。
+/// abbrev.bin 支持的最低版本（v1 词条区存原始全拼，v2 存音节分桶下标，v3 紧凑编码）。
 const ABBREV_MIN_VERSION: u32 = 1;
 /// abbrev.bin 当前格式版本。
-const ABBREV_VERSION: u32 = 2;
+const ABBREV_VERSION: u32 = 3;
 /// abbrev.bin 头部长:magic(8) + version(4) + 5×u64(40) = 52(与主索引同构)。
 const ABBREV_HEADER_LEN: usize = 52;
 
@@ -197,29 +201,15 @@ struct MmapRecord {
 #[derive(Debug)]
 pub struct MmapDict {
     map: Mmap,
+    version: u32,
     pinyin_count: usize,
     total_entries: u64,
-    /// 「音节链 → 存在性」的**跨按键备忘**（简拼弧裁剪用）。
-    ///
-    /// 打字时同一批前缀会被反复查询：打 `wom` 时查过 `wo`/`wo men`，打 `women`
-    /// 时还会再查一次。每次查询是一次跨页 mmap 二分（实测 ~1µs，全库顺序读完
-    /// 1.73M 条 key 只要 41ms，说明成本在页错误而不是比较），缓存命中就把它省掉。
-    /// 上限到了整体清空即可——它只是备忘，不清也不会错。
     records_off: usize,
     strings_off: usize,
     entries_off: usize,
-    /// 全表词频总和。
-    ///
-    /// v2 数据文件把总和写在头部，构造时就已填好（`OnceLock` 已是初值）；
-    /// v1 数据文件没有这个字段，退回懒扫描一次并缓存（约 32MB 页的线性
-    /// 读，实测把 `dict.bin` 常驻抬高到 63MB——这就是升 v2 的原因）。
+    syl_table: Vec<Box<[u8]>>,
     total_freq: OnceLock<u64>,
-    /// 简拼副索引(可选;缺省时纯简拼查询优雅退化为空,引擎走精确路径)。
-    /// 音节表不随它走(编译期静态表 `segmenter::SYLLABLES`),因此混合简拼
-    /// 在副索引缺失时照常工作——绝不回退到「懒扫描主索引建表」(那次扫描
-    /// 实测约 840ms,且发生在按键处理路径上,不可接受)。
     abbrev: Option<AbbrevIndex>,
-    /// 音节级转移索引(可选;缺省时缩写弧回退到逐次 `key_prefix_state` 二分)。
     graph: Option<SyllableGraph>,
 }
 

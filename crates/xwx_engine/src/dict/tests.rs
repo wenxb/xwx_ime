@@ -14,7 +14,7 @@ type TestAbbrevGroups<'a> = Vec<(&'a [u8], Vec<(&'a str, &'a str, u32)>)>;
 ///
 /// `version` 决定头长：v1 是 52 字节（无词频总和），v2 是 60 字节（尾部带
 /// `total_freq`）。两条路径都要能读——v1 是旧数据文件的兼容面。
-fn build_test_bin(version: u32) -> Vec<u8> {
+pub(super) fn build_test_bin(version: u32) -> Vec<u8> {
     // (拼音, [(词, freq)])，顺序即拼音字节序：hao < ni < "ni hao"
     let groups: TestGroups = vec![
         (b"hao", vec![("好", 80)]),
@@ -73,7 +73,7 @@ fn temp_path(name: &str) -> std::path::PathBuf {
 #[test]
 fn mmap_lookup_exact() {
     let path = temp_path("lookup");
-    fs::write(&path, build_test_bin(MMAP_VERSION)).expect("写测试词库失败");
+    fs::write(&path, build_test_bin(2)).expect("写测试词库失败");
     let dict = MmapDict::open(&path).expect("打开失败");
     fs::remove_file(&path).ok();
 
@@ -91,7 +91,7 @@ fn mmap_lookup_exact() {
 fn mmap_lookup_phrase_with_space() {
     // 含空格的拼音 key（"ni hao"）在排序数组中与 "ni" 相邻，二分应能区分
     let path = temp_path("phrase");
-    fs::write(&path, build_test_bin(MMAP_VERSION)).expect("写测试词库失败");
+    fs::write(&path, build_test_bin(2)).expect("写测试词库失败");
     let dict = MmapDict::open(&path).expect("打开失败");
     fs::remove_file(&path).ok();
 
@@ -103,7 +103,7 @@ fn mmap_lookup_phrase_with_space() {
 #[test]
 fn mmap_lookup_prefix_range() {
     let path = temp_path("prefix");
-    fs::write(&path, build_test_bin(MMAP_VERSION)).expect("写测试词库失败");
+    fs::write(&path, build_test_bin(2)).expect("写测试词库失败");
     let dict = MmapDict::open(&path).expect("打开失败");
     fs::remove_file(&path).ok();
 
@@ -252,7 +252,7 @@ fn build_test_abbrev_bin(version: u32) -> Vec<u8> {
 
 #[test]
 fn abbrev_index_lookup_pure() {
-    for version in [1, ABBREV_VERSION] {
+    for version in [1, 2] {
         let path = temp_path("abbrev_pure");
         fs::write(&path, build_test_abbrev_bin(version)).expect("写副索引失败");
         let idx = AbbrevIndex::open(&path).expect("打开副索引失败");
@@ -278,7 +278,7 @@ fn abbrev_index_rejects_bad_magic() {
 fn mmap_dict_without_abbrev_degrades_gracefully() {
     // 副索引缺失:lookup_abbrev 返回空(不 panic),精确查询不受影响。
     let path = temp_path("no_abbrev");
-    fs::write(&path, build_test_bin(MMAP_VERSION)).expect("写词库失败");
+    fs::write(&path, build_test_bin(2)).expect("写词库失败");
     let dict = MmapDict::open(&path).expect("打开词库失败");
     fs::remove_file(&path).ok();
 
@@ -293,7 +293,7 @@ fn mmap_dict_without_abbrev_degrades_gracefully() {
 fn mmap_dict_with_missing_abbrev_file_still_works() {
     // 装配一个不存在的副索引路径:with_abbrev 仅告警置 None,不 panic。
     let path = temp_path("dict_ok");
-    fs::write(&path, build_test_bin(MMAP_VERSION)).expect("写词库失败");
+    fs::write(&path, build_test_bin(2)).expect("写词库失败");
     let dict = MmapDict::open(&path)
         .expect("打开词库失败")
         .with_abbrev("/nonexistent/path/abbrev.bin");
