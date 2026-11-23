@@ -11,6 +11,77 @@ mod literal;
 mod sentence;
 
 impl ImeEngine {
+    /// 统一词先验对数分（log10）：`freq == 0`（用户自造词）按 `USER_COINED_PRIOR_FREQ` 兜底，
+    /// 真实大词库（`total_freq >= 1_000_000`）中的 `freq == FILLER_FREQ_TIER` 填充条目扣 `FILLER_PRIOR_PENALTY`。
+    #[inline]
+    pub(super) fn word_prior_logp(freq: u64, log10_total: f64, total_freq: u64) -> f32 {
+        if total_freq == 0 {
+            return 0.0;
+        }
+        let eff = if freq == 0 { USER_COINED_PRIOR_FREQ } else { freq };
+        let raw = ((eff as f64).log10() - log10_total) as f32;
+        if total_freq >= 1_000_000 && freq == FILLER_FREQ_TIER {
+            raw - FILLER_PRIOR_PENALTY
+        } else {
+            raw
+        }
+    }
+
+    /// 词内凝聚度加分（仅填充档多字词触发，避免与标定词频重复计分并省去热路径 DAWG 随机读）。
+    #[inline]
+    pub(super) fn internal_cohesion_bonus(&self, word: &str, freq: u64) -> f32 {
+        if freq != FILLER_FREQ_TIER || word.len() <= 3 {
+            return 0.0;
+        }
+        match self.lm.collocation_model() {
+            Some(wx) => wx.internal_collocation_score(word) * INTERNAL_COLLOC_WEIGHT,
+            None => 0.0,
+        }
+    }
+
+    /// 计算简拼整词相对输入的缩写音节数对应的通道惩罚（与简拼链按音节扣 `ABBREV_PENALTY` 同刻度）。
+    pub(super) fn abbrev_syllable_penalty(inp: &str, pinyin: &str) -> f32 {
+        fn rec(inp: &[u8], syls: &[&[u8]]) -> Option<usize> {
+            if syls.is_empty() {
+                return inp.is_empty().then_some(0);
+            }
+            let syl = syls[0];
+            let mut best: Option<usize> = None;
+            let mut step = |take: usize, is_abbrev: bool| {
+                if inp.len() >= take && inp[..take] == syl[..take] {
+                    if let Some(rest) = rec(&inp[take..], &syls[1..]) {
+                        let c = rest + usize::from(is_abbrev);
+                        best = Some(best.map_or(c, |b| b.min(c)));
+                    }
+                }
+            };
+            step(syl.len(), false);
+            if syl.len() > 2 && matches!(&syl[..2], b"zh" | b"ch" | b"sh") {
+                step(2, true);
+            }
+            if syl.len() > 1 {
+                step(1, true);
+            }
+            if syl == b"er" && inp.first() == Some(&b'r') {
+                if let Some(rest) = rec(&inp[1..], &syls[1..]) {
+                    let c = rest + 1;
+                    best = Some(best.map_or(c, |b| b.min(c)));
+                }
+            }
+            if syls.len() == 1 && inp.len() > 1 && inp.len() < syl.len() && syl.starts_with(inp) {
+                best = Some(best.map_or(1, |b| b.min(1)));
+            }
+            best
+        }
+        let syls: Vec<&[u8]> = pinyin.split(' ').map(str::as_bytes).collect();
+        let count = if syls.len() <= 8 {
+            rec(inp.as_bytes(), &syls).unwrap_or(syls.len())
+        } else {
+            syls.len()
+        };
+        ABBREV_PENALTY * count as f32
+    }
+
     pub(in crate::engine) fn fill_entry_evidence(
         &self,
         pinyin: &str,
@@ -26,32 +97,50 @@ impl ImeEngine {
         let Some(freq) = d.entry_freq(&c.pinyin, &c.word)? else {
             return Ok(());
         };
-        if c.freq == 0 {
-            c.freq = freq;
-        }
+        let from_chain = c.freq == 0;
         let Some(ev) = ev else {
+            if from_chain && freq > FILLER_FREQ_TIER {
+                c.freq = freq;
+            }
             return Ok(());
         };
         if ev.total == 0 || c.covered < pinyin.len() {
+            if from_chain && freq > FILLER_FREQ_TIER {
+                c.freq = freq;
+            }
             return Ok(());
         }
-        let dict_logp = ((freq.max(1) as f64).log10() - (ev.total as f64).log10()) as f32;
-        let lm = self
-            .lm
-            .score_with_context(&ev.state, ev.context.as_ref(), &c.word);
-        c.score = dict_logp + (lm - self.lm.floor_log10()) * self.lm_weight;
+        let log10_total = (ev.total as f64).log10();
+        let dict_logp = Self::word_prior_logp(freq, log10_total, ev.total);
+        let lm_gain = self.lm.score_gain_with_context(
+            &ev.state,
+            ev.context.as_ref(),
+            &c.word,
+            WANXIANG_GAIN_SCALE,
+        );
+        let abbrev_cost = if c.spelling == SpellingKind::Abbrev {
+            Self::abbrev_syllable_penalty(pinyin, &c.pinyin)
+        } else {
+            0.0
+        };
+        let entry_score = dict_logp
+            + lm_gain * self.lm_weight
+            + self.internal_cohesion_bonus(&c.word, freq)
+            - abbrev_cost;
+        if from_chain {
+            // 组合链分不该被词库填充档（freq=100）或偏低整词频拖垮：取两者更强证据。
+            if freq > FILLER_FREQ_TIER {
+                c.freq = freq;
+            }
+            if entry_score > c.score {
+                c.score = entry_score;
+            }
+        } else {
+            c.score = entry_score;
+        }
         Ok(())
     }
 
-    /// 推入一条**已重算**的整串候选；同一 (词, 音) 已有既排行（精确补全/
-    /// 兜底给出的同款读法）时就地改分，而不是按旧判据去重丢弃。
-    ///
-    /// 为什么必须就地改分：同一 (词,音) 的整串读法只有一个真实分数（词条
-    /// 口径），两套刻度并存时旧刻度压死新刻度——实测 W1a 后 `sh` 的
-    /// 是(词频 31M，词条口径 −2.39) 撞上 Exact 补全旧行(−13.99)被丢弃，
-    /// 首页被 500K 档的 [s][h] 二字词(−4.18)整页占住。改分后同读法同分。
-    /// `rescored=false`（重算未发生，如非降级范围）维持原「去重跳过」，
-    /// 非 降级世界的分数一个都不动。
     pub(super) fn push_rescored(
         ranked: &mut Vec<Candidate>,
         index: &mut crate::candidate_index::CandidateIndex,
@@ -60,10 +149,15 @@ impl ImeEngine {
     ) {
         match index.find(ranked, &c) {
             Some(i) => {
-                if rescored {
+                if rescored
+                    && (c.covered > ranked[i].covered
+                        || (c.covered == ranked[i].covered && c.score > ranked[i].score))
+                {
                     ranked[i].score = c.score;
                     ranked[i].covered = c.covered;
-                    ranked[i].freq = c.freq;
+                    if c.freq > FILLER_FREQ_TIER || ranked[i].freq == 0 {
+                        ranked[i].freq = c.freq;
+                    }
                 }
             }
             None => {
@@ -122,38 +216,20 @@ impl ImeEngine {
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
 
-        // 首词(位置 0)的 LM 状态由真实上文 ctx 给出,这是精确的
-        // (首词的前文就是已上屏文本,不存在近似问题)。
         let initial = self.lm.state_from_context(ctx);
         let scorer = self.lm.prepare(&initial);
 
-        // 同一 (word, pinyin) 可能由多条边给出(不同音节链切到同一拼音
-        // key,或模糊展开键与精确键撞车),保留得分最高的一条。
         let mut best: HashMap<(&str, &str), Candidate> = HashMap::new();
         for edge in &lattice[0] {
             if edge.gap {
-                continue; // 空词边不是候选(它只是让 beam 跨过一段字母)
+                continue;
             }
-            // 注意:这里**不**过滤补全分为 -inf 的边(它到不了串尾)。
-            // 这类边是「只解释输入前缀」的词(如 `women…` 的「我」),分段
-            // 上屏下恰恰有用(用户可以先上屏这一段,剩下的留给下一轮);
-            // 它们在排序里落在自己的 u_min 桶内、按分数靠后,不会挤掉
-            // 完整读法。容错格会带来更多这类前缀边,同样按低分排在桶内。
-            let logp = scorer.score(&edge.word);
-            let dict_logp = if total_freq > 0 {
-                ((edge.freq.max(1) as f64).log10() - log10_total) as f32
-            } else {
-                0.0
-            };
-            // 边自身得分与前向 beam 完全同式;补全分取自后向 DP。
-            // 边终点必有完整补全:beam 已确认整串可解,且任何有出边的
-            // 位置都能沿格走到串尾(边严格前进、终点不超串长),
-            // 故 best_suffix[edge.end] 必为有限值。
-            // 补全只能用**剩下的**预算:首边自己用掉的编辑数
-            // 必须先扣掉,否则「首边错一处 + 补全再错一处」就凑出超预算读法。
-            // `best_suffix.len() - 1` 就是这次 DP 的预算上界。
+            let lm_gain = scorer.score_gain(&edge.word, WANXIANG_GAIN_SCALE);
+            let dict_logp = Self::word_prior_logp(edge.freq, log10_total, total_freq);
             let remaining = (best_suffix.len() - 1).saturating_sub(edge.edit_count as usize);
-            let score = dict_logp + logp * self.lm_weight
+            let score = dict_logp
+                + lm_gain * self.lm_weight
+                + self.internal_cohesion_bonus(&edge.word, edge.freq)
                 - edge.fuzzy_penalty
                 - edge.typo_penalty
                 + best_suffix[remaining][edge.end];
@@ -244,6 +320,36 @@ impl ImeEngine {
         })
     }
 
+    /// 输入是否呈「完整音节前缀 + 中段声母缩写 + 后续音节/残缺尾」形态（如 `womenxqu`/`womenqbeijing`/`meixqu`/`taqle`/`yougbmen`）。
+    pub(super) fn has_mid_abbrev_shape(&self, pinyin: &str) -> bool {
+        const INITIAL_LETTERS: &[u8] = b"bpmfdtnlgkhjqxrzcsyw";
+        let n = pinyin.len();
+        if n < 4 {
+            return false;
+        }
+        for i in 2..n.saturating_sub(1) {
+            if self.segmenter.segment(&pinyin[..i]).is_empty() {
+                continue;
+            }
+            for k in 1..=3usize {
+                if i + k >= n {
+                    continue;
+                }
+                let mid = &pinyin[i..i + k];
+                let is_init = mid.bytes().all(|b| INITIAL_LETTERS.contains(&b))
+                    || (k == 2 && matches!(mid, "zh" | "ch" | "sh"));
+                if !is_init {
+                    continue;
+                }
+                let tail = &pinyin[i + k..];
+                if !self.segmenter.segment(tail).is_empty() || self.ends_one_letter_short(tail) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn best_chain_candidates(
         &self,
         pinyin: &str,
@@ -252,30 +358,26 @@ impl ImeEngine {
         spelling: SpellingKind,
         per_word_penalty: f32,
     ) -> Result<Vec<Candidate>, EngineError> {
-        // 先验进 beam 的剪枝目标（见 `decode_beam_with_lattice_penalized`）。
+        let beam_width = if spelling == SpellingKind::Abbrev {
+            ABBREV_BEAM_WIDTH
+        } else {
+            SENTENCE_BEAM_WIDTH
+        };
         let paths = self.decode_beam_with_lattice_penalized(
             pinyin,
             ctx,
-            ABBREV_CHAIN_NBEST,
+            beam_width,
             lattice,
             per_word_penalty,
         )?;
         let mut out: Vec<Candidate> = Vec::new();
         for path in paths {
+            if out.len() >= ABBREV_CHAIN_NBEST {
+                break;
+            }
             if path.words.is_empty() {
                 continue;
             }
-            // **词数上限**：整串读法的词数不得超过输入字母数的一半。
-            //
-            // 与「简拼弧只拼多音节词」同一口径的**字母级**版本：真实简拼每个词
-            // 至少要吃掉两个字母（`wmjtqbj` 7 字母 2 个词、`zmgai` 5 字母 2 个词），
-            // 而「把每个字母当成一个独立的词」是病态输入的特征——实测
-            // `zhzhzhzh`（连续 zh、无元音、不是真拼音）会被解成「自会在喝醉后在乎」
-            // 这类读法，而它此前只该出「原样回显」。
-            // 不变量：**每个音节至少吃掉一个输入字母** ⇒ 读法的音节数不得
-            // 超过输入字母数。破坏它的读法只可能来自「有的弧一个字母都没
-            // 消耗」的实现缺陷——实测 `zhzhzhzh`（8 字母）会被解成 9 个音节
-            // 的「自会在喝醉后在乎」，而它此前只该出「原样回显」。
             let syllables: usize = path
                 .words
                 .iter()
@@ -291,7 +393,7 @@ impl ImeEngine {
                 .map(|w| w.pinyin.as_str())
                 .collect::<Vec<_>>()
                 .join(" ");
-            if out.iter().any(|c: &Candidate| c.word == word && c.pinyin == key) {
+            if out.iter().any(|c: &Candidate| c.word == word) {
                 continue;
             }
             out.push(Candidate {
@@ -299,7 +401,11 @@ impl ImeEngine {
                 pinyin: key,
                 score: path.score,
                 freq: 0,
-                spelling,
+                spelling: if path.used_edits > 0 && spelling == SpellingKind::Exact {
+                    SpellingKind::Fuzzy
+                } else {
+                    spelling
+                },
                 echo: false,
                 covered: pinyin.len(),
                 matched_len: 0,

@@ -108,12 +108,43 @@ pub fn abbrev_syllables(prefix: &str) -> &'static [&'static str] {
         one: [Vec<&'static str>; 26],
         two: Vec<(&'static str, Vec<&'static str>)>,
     }
-    // 短音节优先：简拼里最省事的读法就是「一个声母就定下来的常用短音节」
-    // (`wo`/`men`/`ji`/`qu`…)。链枚举是按顺序花预算的，长音节先试会把
-    // `w`→`wang`、`m`→`mang` 这类分支排到前面，实测 `wmjtqbj` 因此只解出
-    // 「外媒镜头前不久」，真正的「我们今天去北京」连格子都没进。
-    fn sort_len_asc(v: &mut Vec<&'static str>) {
-        v.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+    // 常用高频音节优先展开，避免预算在低频音节（sa/se/za/ze/ca/ce）上耗尽。
+    const HIGH_FREQ_SYLLABLES: &[&str] = &[
+        "de", "yi", "shi", "wo", "bu", "zai", "ren", "you", "zhe", "zen", "ta", "wei", "shang",
+        "ge", "guo", "zhong", "lai", "shuo", "dao", "men", "he", "jiu", "yao", "hui", "ke",
+        "neng", "sheng", "zhi", "zi", "da", "le", "chu", "nian", "ye", "xia", "yu", "cheng", "ji",
+        "dou", "dui", "li", "tian", "qu", "xiao", "mei", "hao", "ni", "xiang", "duo", "hou",
+        "zuo", "kan", "jin", "gong", "xin", "fang", "fa", "ming", "hen", "zhen", "zheng", "zhu",
+        "jian", "jia", "jing", "jie", "ju", "jiao", "jiang", "xi", "xing", "xian", "xue", "xie",
+        "xu", "xuan", "shu", "si", "shen", "shou", "she", "suo", "san", "su", "shui", "shao",
+        "shan", "zhan", "zui", "zhang", "zu", "zong", "zou", "zhao", "zhou", "zhuan", "zhuang",
+        "chang", "chan", "ci", "cai", "chi", "cong", "cha", "chuan", "che", "ce", "chao", "chong",
+        "wu", "wen", "wang", "wan", "me", "ma", "mian", "min", "mu", "mo", "mi", "man", "yuan",
+        "ying", "yong", "yin", "yan", "yue", "yang", "bei", "ben", "bi", "bian", "biao", "bing",
+        "ba", "bai", "ban", "bao", "bang", "bo", "bie", "dang", "di", "dian", "ding", "dong",
+        "du", "dai", "dan", "deng", "duan", "fen", "fu", "fei", "feng", "fan", "gao", "gei",
+        "gen", "geng", "guan", "guang", "gui", "gan", "gang", "gu", "gai", "gou", "hai", "han",
+        "hang", "hua", "huan", "huang", "hu", "huo", "hong", "kai", "kuai", "kui", "kou", "kong",
+        "ku", "ken", "lao", "lian", "liang", "lin", "ling", "liu", "long", "lu", "lun", "luo",
+        "na", "nai", "nan", "nei", "nin", "nong", "nv", "pai", "pan", "pei", "peng", "pi", "pian",
+        "pin", "ping", "po", "pu", "qi", "qian", "qiang", "qiao", "qie", "qin", "qing", "qiu",
+        "quan", "que", "qun", "ran", "rang", "re", "ri", "rong", "ru", "ruo", "tai", "tan",
+        "tang", "tao", "te", "ti", "tiao", "tie", "ting", "tong", "tou", "tu", "tuan", "tui",
+        "tuo", "ai", "an", "ao", "er",
+    ];
+    fn sort_by_prior(v: &mut Vec<&'static str>) {
+        let rank = |s: &str| {
+            HIGH_FREQ_SYLLABLES
+                .iter()
+                .position(|&p| p == s)
+                .unwrap_or(usize::MAX)
+        };
+        v.sort_by(|a, b| {
+            rank(a)
+                .cmp(&rank(b))
+                .then_with(|| a.len().cmp(&b.len()))
+                .then_with(|| a.cmp(b))
+        });
     }
     static INDEX: std::sync::OnceLock<Index> = std::sync::OnceLock::new();
     let idx = INDEX.get_or_init(|| {
@@ -135,10 +166,10 @@ pub fn abbrev_syllables(prefix: &str) -> &'static [&'static str] {
             }
         }
         for v in one.iter_mut() {
-            sort_len_asc(v);
+            sort_by_prior(v);
         }
         for (_, v) in two.iter_mut() {
-            sort_len_asc(v);
+            sort_by_prior(v);
         }
         Index { one, two }
     });
@@ -333,38 +364,26 @@ mod tests {
     }
 
     #[test]
-    fn simple_two_syllables() {
-        let r = segs("nihao");
-        // "ni" + "ha" + "o" 与 "ni" + "hao" 都合法
-        assert!(r.contains(&vec!["ni".into(), "hao".into()]));
-        assert!(r.contains(&vec!["ni".into(), "ha".into(), "o".into()]));
+    fn segment_valid_and_ambiguous_inputs() {
+        let nihao = segs("nihao");
+        assert!(nihao.contains(&vec!["ni".into(), "hao".into()]));
+        assert!(nihao.contains(&vec!["ni".into(), "ha".into(), "o".into()]));
+
+        let xian = segs("xian");
+        assert!(xian.contains(&vec!["xian".into()]));
+        assert!(xian.contains(&vec!["xi".into(), "an".into()]));
+
+        assert!(segs("zhuang").contains(&vec!["zhuang".into()]));
     }
 
     #[test]
-    fn ambiguous_xian() {
-        let r = segs("xian");
-        assert!(r.contains(&vec!["xian".into()]));
-        assert!(r.contains(&vec!["xi".into(), "an".into()]));
+    fn segment_invalid_and_empty_inputs() {
+        for input in ["", "qqq", "你好"] {
+            assert!(segs(input).is_empty(), "{input:?} 不应有合法切分");
+        }
     }
 
-    #[test]
-    fn longest_syllable() {
-        let r = segs("zhuang");
-        assert!(r.contains(&vec!["zhuang".into()]));
-    }
-
-    #[test]
-    fn no_segmentation() {
-        assert!(segs("qqq").is_empty());
-        assert!(segs("你好").is_empty());
-    }
-
-    /// üe 的两种键盘写法:`lue`/`nue` 与词库的 `lve`/`nve` 等价,且切分结果
-    /// 必须是**词库写法**(`dict.lookup` 的 key 靠它拼)。**只限 üe**:
-    /// `lu`/`nu` 是「路/努」的合法全拼,不得当成 `lv`/`nv`(用户 2026-10-02 口径)。
-    ///
-    /// 失败见证:把 `canonical_syllable` 的 `"lue" => "lve"` 去掉 → 红
-    /// (切分退化成 `lu`+`e`);把 `"lu" => "lv"` 加进去 → 「nu 不得切出 nv」红。
+    /// üe 的两种键盘写法：`lue`/`nue` 归一为词库写法 `lve`/`nve`，`lu`/`nu` 不归一。
     #[test]
     fn ue_accepts_both_spellings_but_lu_is_not_lv() {
         let s = Segmenter::new();
@@ -375,19 +394,13 @@ mod tests {
         let r = segs("hulue");
         assert!(
             r.contains(&vec!["hu".into(), "lve".into()]),
-            "`hulue` 必须切出词库写法 hu+lve(否则「忽略」查不到): {r:?}"
+            "`hulue` 必须切出词库写法 hu+lve: {r:?}"
         );
         assert!(
             r.contains(&vec!["hu".into(), "lu".into(), "e".into()]),
             "原来的 hu+lu+e 读法不得消失: {r:?}"
         );
-        let n = segs("nu");
-        assert_eq!(n, vec![vec!["nu".to_string()]], "`nu` 不得被切出 `nv`(女)");
-    }
-
-    #[test]
-    fn empty_input() {
-        assert!(segs("").is_empty());
+        assert_eq!(segs("nu"), vec![vec!["nu".to_string()]], "`nu` 不得切出 `nv`");
     }
 
     /// 整串可切性(容错解码的门槛):只回答「能不能整串切成音节」。

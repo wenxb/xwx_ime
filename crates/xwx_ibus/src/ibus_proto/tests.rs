@@ -24,47 +24,22 @@ fn mode_property_matches_the_upstream_wire_shape() {
     );
 }
 
-/// 与 ibus 1.5.29 反序列化端注册的类型串逐字对照。
+/// 与 ibus 1.5.29 反序列化端注册的类型串逐字对照（调用真实构造器）。
 #[test]
 fn gvariant_signatures_match_ibus_1529() {
-    let text = Structure::from(("IBusText", empty_props(), "你", attr_list_value()));
-    assert_eq!(text.full_signature().as_str(), "(sa{sv}sv)");
+    let text = ibus_text("你").expect("IBusText 构造失败");
+    assert_eq!(text.value_signature().to_string(), "(sa{sv}sv)");
 
-    let attrs = Structure::from((
-        "IBusAttrList",
-        empty_props(),
-        Vec::<Value<'static>>::new(),
-    ));
-    assert_eq!(attrs.full_signature().as_str(), "(sa{sv}av)");
+    assert_eq!(attr_list_value().value_signature().to_string(), "(sa{sv}av)");
 
-    let table = Structure::from((
-        "IBusLookupTable",
-        empty_props(),
-        9u32,
-        0u32,
-        true,
-        true,
-        0i32,
-        Vec::<Value<'static>>::new(),
-        Vec::<Value<'static>>::new(),
-    ));
-    assert_eq!(table.full_signature().as_str(), "(sa{sv}uubbiavav)");
+    let table = ibus_lookup_table(&["你".to_string()], 0, 9).expect("IBusLookupTable 构造失败");
+    assert_eq!(table.value_signature().to_string(), "(sa{sv}uubbiavav)");
 
-    let desc = Structure::try_from(
-        engine_desc_value("/usr/libexec/ibus-setup-xwx").expect("引擎描述构造失败"),
-    )
-    .expect("应为结构体");
-    assert_eq!(desc.full_signature().as_str(), "(sa{sv}ssssssssussssssss)");
+    let desc = engine_desc_value("/usr/libexec/ibus-setup-xwx").expect("IBusEngineDesc 构造失败");
+    assert_eq!(desc.value_signature().to_string(), "(sa{sv}ssssssssussssssss)");
 
-    let engines = vec![Value::from(desc)];
-    let comp = Structure::from((
-        "IBusComponent",
-        empty_props(),
-        "org.freedesktop.IBus.Engine.xwx", "", "", "MIT", "xwx", "", "", "",
-        Vec::<Value<'static>>::new(),
-        engines,
-    ));
-    assert_eq!(comp.full_signature().as_str(), "(sa{sv}ssssssssavav)");
+    let comp = component_value("/usr/libexec/ibus-setup-xwx").expect("IBusComponent 构造失败");
+    assert_eq!(comp.value_signature().to_string(), "(sa{sv}ssssssssavav)");
 }
 
 #[test]

@@ -65,48 +65,66 @@ impl ImeEngine {
         let len = pinyin.len();
         let mut arena: Vec<BeamNode> = Vec::with_capacity((len + 1) * k);
         let mut beams: Vec<Vec<usize>> = (0..=len).map(|_| Vec::new()).collect();
-        // 词频项归一化分母：log10(freq/总词频)，与 LM 的 log10 概率同量纲。
-        // 总词频为 0（空词库）时词频项取 0，不进对数（避免 -inf/NaN）。
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
-        // **基线补偿**：LM 的「无证据基线分」（万象实测 -11.605767，见
-        // examples/lm_word_probe.rs）不该按词数复付——多词读法每多一个词
-        // 就白扣一次基线，实测「出+在+哪」因此输给单词「杵在那」12.19 个
-        // log10。这里对第 2 个词起扣掉基线（保留各词高于基线的条件证据）。
-        // 只对**全拼整句路径**（`per_word_penalty == 0.0`）生效：简拼层的逐词
-        // 惩罚口径是上一期的约定，不动它。模型没有基线概念时 floor 是 0.0 ⇒ 原式。
-        let _ = per_word_penalty;
         arena.push(BeamNode {
             score: 0.0,
-            state: self.lm.state_from_context(ctx),
+            state: Some(self.lm.state_from_context(ctx)),
             edge: None,
             parent: None,
             used_edits: 0,
         });
         beams[0].push(0);
 
-        // 注:`'` 强制切分点已在 `build_lattice` 的逐音节检查里完全
-        // 落实——格里本来就不含任何跨 `'` 的边,beam 只在格上推进,
-        // 不需要也不应再做边界过滤(边的合法性由格决定)。
         for pos in 0..len {
             let cur = std::mem::take(&mut beams[pos]);
             if cur.is_empty() {
                 continue;
             }
+            let edge_base: Vec<f32> = lattice[pos]
+                .iter()
+                .map(|edge| {
+                    if edge.gap {
+                        0.0
+                    } else {
+                        Self::word_prior_logp(edge.freq, log10_total, total_freq)
+                            + self.internal_cohesion_bonus(&edge.word, edge.freq)
+                    }
+                })
+                .collect();
             let mut touched: Vec<usize> = Vec::new();
             for &node_idx in &cur {
+                if arena[node_idx].state.is_none() {
+                    let parent_idx = arena[node_idx].parent.expect("非根节点必有父节点");
+                    let (epos, eslot) = arena[node_idx].edge.expect("非根节点必有边");
+                    let edge = &lattice[epos][eslot];
+                    let pstate = arena[parent_idx].state.as_ref().expect("父节点必已物化");
+                    let next_state = if edge.gap {
+                        pstate.clone()
+                    } else {
+                        self.lm.advance_state(pstate, &edge.word)
+                    };
+                    arena[node_idx].state = Some(next_state);
+                }
+                let node_score = arena[node_idx].score;
+                let node_used = arena[node_idx].used_edits;
+                let boundary_cost = if arena[node_idx].edge.is_some() {
+                    per_word_penalty
+                } else {
+                    0.0
+                };
+                let cur_state = arena[node_idx].state.as_ref().expect("刚物化").clone();
+                let scorer = self.lm.prepare(&cur_state);
                 for (slot, edge) in lattice[pos].iter().enumerate() {
                     if edge.gap {
-                        // 空词边:状态不变、无词频/LM 项,只扣编辑惩罚。
-                        // 空词弧本身就吃掉一次编辑预算。
-                        let used = arena[node_idx].used_edits + 1;
+                        let used = node_used + 1;
                         if used > MAX_TYPO_EDITS {
                             continue;
                         }
                         let idx = arena.len();
                         arena.push(BeamNode {
-                            score: arena[node_idx].score - edge.typo_penalty,
-                            state: arena[node_idx].state.clone(),
+                            score: node_score - edge.typo_penalty,
+                            state: None,
                             edge: Some((pos, slot)),
                             parent: Some(node_idx),
                             used_edits: used,
@@ -115,26 +133,20 @@ impl ImeEngine {
                         touched.push(edge.end);
                         continue;
                     }
-                    let used = arena[node_idx].used_edits + edge.edit_count;
+                    let used = node_used + edge.edit_count;
                     if used > MAX_TYPO_EDITS {
                         continue;
                     }
-                    let (logp, next_state) = self.lm.score(&arena[node_idx].state, &edge.word);
-                    let dict_logp = if total_freq > 0 {
-                        // freq 为 0 的词条按 1 兜底（log10(1/T) 仍为有限值）
-                        ((edge.freq.max(1) as f64).log10() - log10_total) as f32
-                    } else {
-                        0.0
-                    };
+                    let lm_gain = scorer.score_gain(&edge.word, WANXIANG_GAIN_SCALE);
                     let idx = arena.len();
                     arena.push(BeamNode {
-                        // 模糊惩罚是同量纲(log10)的加性扣分:精确边 0,
-                        // 模糊边减去累计 -log10(weight),多处混淆叠加累加。
-                        score: arena[node_idx].score + dict_logp + logp * self.lm_weight
+                        score: node_score
+                            + edge_base[slot]
+                            + lm_gain * self.lm_weight
                             - edge.fuzzy_penalty
                             - edge.typo_penalty
-                            - per_word_penalty,
-                        state: next_state,
+                            - boundary_cost,
+                        state: None,
                         edge: Some((pos, slot)),
                         parent: Some(node_idx),
                         used_edits: used,
@@ -148,11 +160,24 @@ impl ImeEngine {
             // 桶内不需要去重，只需按分截断。
             touched.sort_unstable();
             touched.dedup();
+            // 终点桶仅在有每词罚分（整句/简拼 n-best 入口）时放宽到 3*k，
+            // 避免同词面不同切法（如 `没兴趣` 与 `没+兴趣`、`我们+下去` 与 `我+们+下去`）
+            // 在去重前挤掉真正不同的候选，且零额外 LM 调用。
+            let end_k = if per_word_penalty > 0.0 {
+                k.saturating_mul(3)
+            } else {
+                k
+            };
             for &t in &touched {
-                prune_beam(&mut beams[t], &arena, k);
+                prune_beam(&mut beams[t], &arena, if t == len { end_k } else { k });
             }
         }
-        prune_beam(&mut beams[len], &arena, k);
+        let end_k = if per_word_penalty > 0.0 {
+            k.saturating_mul(3)
+        } else {
+            k
+        };
+        prune_beam(&mut beams[len], &arena, end_k);
         // 重建完整路径：沿 parent 走回根，反转成词序。
         let mut paths: Vec<BeamPath> = Vec::with_capacity(beams[len].len());
         for &idx in &beams[len] {
@@ -172,6 +197,7 @@ impl ImeEngine {
             paths.push(BeamPath {
                 score: arena[idx].score,
                 words,
+                used_edits: arena[idx].used_edits,
             });
         }
         Ok(paths)
@@ -252,31 +278,29 @@ impl ImeEngine {
                 .any(|chain| Self::key_respects_boundaries(&chain.join(" "), bounds))
                 .then_some((k, segments))
         });
-        if let Some((k, segments)) = segmented {
+        if let Some((_, segments)) = segmented {
+            // 沿最长可切分前缀的各音节前缀回查（如 `womenjint` 查 `wo men jin` → `wo men` → `wo`），
+            // 避免最长前缀无词条时跳过中间多字词（如「我们」「中国」「输入」「候选」）。
+            let mut seen_keys = std::collections::HashSet::new();
             for seg in segments {
                 let joined = seg.join(" ");
                 if !Self::key_respects_boundaries(&joined, bounds) {
-                    continue; // 这条切法跨了 `'`:整条丢掉
+                    continue;
                 }
-                // 覆盖范围(分段上屏):`dict.lookup(joined)` 命中的词恰好
-                // 覆盖被切成音节的那段前缀 `pinyin[..k]` ⇒ `k` 字节;
-                // 首音节词只覆盖**第一个音节**⇒ 它的字节长度。
-                // 两者都只在这个兜底分支里出现(整串解不出时的「最长可切分
-                // 前缀」),其余来源见各自注释。
-                let joined_cov = k;
-                let mut head = self.dict.lookup(&joined)?;
-                for c in head.iter_mut() {
-                    c.covered = joined_cov;
-                }
-                merged.extend(head);
-                // A1:只查首音节(覆盖位置 0 的前缀词),不遍历后续音节
-                // ——非起始音节的词对当前输入没有意义(见函数级文档)。
-                // 多种切法各自的首音节都会查到(循环按切法逐个处理)。
-                if let Some(first) = seg.first() {
-                    let first_cov = first.len();
-                    let mut head = self.dict.lookup(first)?;
+                let mut cov = 0usize;
+                let mut prefix_key = String::new();
+                for (idx, syl) in seg.iter().enumerate() {
+                    if idx > 0 {
+                        prefix_key.push(' ');
+                    }
+                    prefix_key.push_str(syl);
+                    cov += syl.len();
+                    if !seen_keys.insert(prefix_key.clone()) {
+                        continue;
+                    }
+                    let mut head = self.dict.lookup(&prefix_key)?;
                     for c in head.iter_mut() {
-                        c.covered = first_cov;
+                        c.covered = cov;
                     }
                     merged.extend(head);
                 }
@@ -336,21 +360,16 @@ impl ImeEngine {
 
         let state = self.lm.state_from_context(ctx);
         let scorer = self.lm.prepare(&state);
-        // 与 decode_beam 同一打分公式：log10(freq/总词频) + lm_weight × logp
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
         let mut ranked: Vec<Candidate> = merged
             .into_iter()
             .map(|mut c| {
-                let lm_score = scorer.score(c.word.as_str());
-                let dict_logp = if total_freq > 0 {
-                    ((c.freq.max(1) as f64).log10() - log10_total) as f32
-                } else {
-                    0.0
-                };
-                // 兜底路径不经过 expand_fuzzy,fuzzy_penalty 恒为 0;
-                // 公式与 decode_beam 一致(此处减 0,省略减法项)。
-                c.score = dict_logp + lm_score * self.lm_weight;
+                let lm_gain = scorer.score_gain(c.word.as_str(), WANXIANG_GAIN_SCALE);
+                let dict_logp = Self::word_prior_logp(c.freq, log10_total, total_freq);
+                c.score = dict_logp
+                    + lm_gain * self.lm_weight
+                    + self.internal_cohesion_bonus(&c.word, c.freq);
                 c
             })
             .collect();

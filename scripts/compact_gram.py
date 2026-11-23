@@ -463,9 +463,15 @@ def _extract_dict_aux(dict_path: str, w2_path: str, w3_path: str, w3_all_path: s
         out = bytearray()
         for ch in s:
             cp = ord(ch)
-            out.append(0xE0 | ((cp >> 16) & 0x0F))
-            out.append((cp >> 8) & 0xFF)
-            out.append(cp & 0xFF)
+            if 0x4000 <= cp < 0xA000:
+                if (cp & 0xFF) == 0:
+                    out.append(0xE1)
+                    out.append(((cp >> 8) + 0x40) & 0xFF)
+                else:
+                    out.append(((cp >> 8) + 0x40) & 0xFF)
+                    out.append(cp & 0xFF)
+            else:
+                return b""
         return bytes(out)
 
     w2_top = sorted(
@@ -500,7 +506,7 @@ def main() -> None:
         raise SystemExit("用法: python3 scripts/compact_gram.py <in.gram> <out.gram> [dict.bin]")
     in_gram, out_gram = sys.argv[1], sys.argv[2]
     dict_bin = sys.argv[3] if len(sys.argv) > 3 else "data/dict.bin"
-    _extract_dict_aux(dict_bin, "/tmp/w2_top.bin", "/tmp/w3_top.bin", "/tmp/w3_all_dict.bin")
+    _extract_dict_aux(dict_bin, "/tmp/w2_gt10k.bin", "/tmp/w3_gt1000.bin", "/tmp/w3_all_dict.bin")
     with tempfile.TemporaryDirectory() as td:
         c_file = os.path.join(td, "build_compact_gram.c")
         bin_file = os.path.join(td, "build_compact_gram")

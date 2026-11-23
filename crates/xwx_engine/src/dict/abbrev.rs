@@ -467,8 +467,9 @@ impl AbbrevIndex {
     ) -> Result<Vec<(String, String, u64)>, DictError> {
         let mut out = Vec::new();
         let mut scanned = 0usize;
+        let scan_cap = if key_len == 2 { limit } else { limit.max(2048) };
         for i in lo..hi.min(self.key_count) {
-            if out.len() >= limit || (key_len != 2 && scanned >= limit) {
+            if out.len() >= limit || (key_len != 2 && scanned >= scan_cap) {
                 break;
             }
             let rec = self.record(i)?;
@@ -488,7 +489,9 @@ impl AbbrevIndex {
                 if self.version >= 2 {
                     let (word, syl_ids, freq, next_pos) =
                         read_v23_abbrev_entry(self.version, block, pos, key_len, &mut wbuf, &mut sbuf)?;
-                    if scanned > limit && (key_len != 2 || freq <= 100) {
+                    if (key_len == 2 && scanned > limit && freq <= 100)
+                        || (key_len != 2 && (scanned > scan_cap || (scanned > limit && freq <= 100 && !out.is_empty())))
+                    {
                         break;
                     }
                     pos = next_pos;

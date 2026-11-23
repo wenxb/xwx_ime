@@ -85,26 +85,34 @@ pub fn fullwidth_punct(c: char) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    /// 表驱动:任务书点名的每个标点逐条断言(字符集级,字节级见下)。
+    /// 表驱动覆盖全部 22 项标点映射（含多字符 `_`/`^`、半角 `/`、`"`、`[]{}`、`` ` ``）。
     #[test]
-    fn required_mappings() {
+    fn all_punct_mappings() {
         let cases: &[(char, &str)] = &[
-            (',', "\u{FF0C}"),         // ,
-            ('.', "\u{3002}"),         // 。
-            (';', "\u{FF1B}"),         // ;
-            (':', "\u{FF1A}"),         // :
-            ('?', "\u{FF1F}"),         // ?
-            ('!', "\u{FF01}"),         // !
-            ('\\', "\u{3001}"),        // 、
-            ('<', "\u{300A}"),         // 《
-            ('>', "\u{300B}"),         // 》
-            ('(', "\u{FF08}"),         // (
-            (')', "\u{FF09}"),         // )
-            ('~', "\u{FF5E}"),         // ~
-            ('$', "\u{FFE5}"),         // ¥
-            ('_', "\u{2014}\u{2014}"), // ——
-            ('^', "\u{2026}\u{2026}"), // ……
+            (',', "\u{FF0C}"),
+            ('.', "\u{3002}"),
+            (';', "\u{FF1B}"),
+            (':', "\u{FF1A}"),
+            ('?', "\u{FF1F}"),
+            ('!', "\u{FF01}"),
+            ('\\', "\u{3001}"),
+            ('<', "\u{300A}"),
+            ('>', "\u{300B}"),
+            ('(', "\u{FF08}"),
+            (')', "\u{FF09}"),
+            ('~', "\u{FF5E}"),
+            ('$', "\u{FFE5}"),
+            ('_', "\u{2014}\u{2014}"),
+            ('^', "\u{2026}\u{2026}"),
+            ('/', "/"),
+            ('"', "\u{201C}"),
+            ('[', "\u{300C}"),
+            (']', "\u{300D}"),
+            ('{', "\u{300E}"),
+            ('}', "\u{300F}"),
+            ('`', "\u{FF40}"),
         ];
+        assert_eq!(cases.len(), 22);
         for (input, expected) in cases {
             assert_eq!(
                 fullwidth_punct(*input),
@@ -114,33 +122,11 @@ mod tests {
         }
     }
 
-    /// 多字符映射必须逐字节等于 librime symbols.yaml 的字面值:
-    /// `_` → U+2014×2,`^` → U+2026×2(该文件经 hexdump 实读确认,
-    /// 不是 6 个半角句点、也不是单个省略号)。
+    /// 非标点字符（含预留分隔符 `'`、字母、数字、空格与未映射符号）返回 `None`。
     #[test]
-    fn multi_char_mappings_match_librime_bytes() {
-        assert_eq!(fullwidth_punct('_'), Some("\u{2014}\u{2014}"));
-        assert_eq!(fullwidth_punct('^'), Some("\u{2026}\u{2026}"));
-    }
-
-    /// 斜杠出半角 `/`,不出顿号——顿号由 `\` 承担(见模块文档)。
-    #[test]
-    fn slash_stays_ascii() {
-        assert_eq!(fullwidth_punct('/'), Some("/"));
-        assert_eq!(fullwidth_punct('\\'), Some("\u{3001}"), "`\\` 仍出顿号");
-    }
-
-    /// 单引号是 B2 音节分隔符的预留键,绝不能进标点表。
-    #[test]
-    fn apostrophe_is_not_punct() {
-        assert_eq!(fullwidth_punct('\''), None, "' 预留给 B2 音节分隔符");
-    }
-
-    /// 字母/数字/空白不在标点表内(字母进拼音串,数字是选词键,
-    /// 空格是确认键——各有既有语义,别被标点逻辑劫持)。
-    #[test]
-    fn letters_digits_space_are_not_punct() {
-        for c in "abcdefghijklmnopqrstuvwxyz0123456789 ".chars() {
+    fn non_punct_returns_none() {
+        for c in "'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 +-=@#%&*|".chars()
+        {
             assert_eq!(fullwidth_punct(c), None, "{c:?} 不应进标点表");
         }
     }

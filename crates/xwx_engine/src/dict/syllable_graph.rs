@@ -267,70 +267,51 @@ impl SyllableGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn dict_path() -> Option<PathBuf> {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
-        p.exists().then_some(p)
-    }
-
-    fn data_path() -> Option<PathBuf> {
-        // 单元测试的 CARGO_MANIFEST_DIR 是 crate 目录(集成测试才是仓库根)。
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/syllable_graph.bin");
-        p.exists().then_some(p)
-    }
+    use crate::dict::tests::build_test_bin;
+    use crate::dict::MmapDict;
 
     #[test]
-    fn target_forms_are_reachable_in_the_graph() {
-        let Some(path) = data_path() else {
-            eprintln!("跳过：没有 data/syllable_graph.bin，先跑 scripts/build_syllable_graph.py");
-            return;
-        };
-        let g = SyllableGraph::open(&path).expect("音节级索引应能打开");
-        assert!(g.syllable_count() > 400, "音节表应覆盖全部音节");
-        // 「我们今天」的链存在；半音节 t 的后继音节只该有 tian
-        let n = g
-            .walk(&["wo", "men", "jin"])
-            .unwrap()
-            .expect("wo men jin 应在索引里");
-        let typed: Vec<String> = g
-            .children_starting_with(n, "t")
-            .unwrap()
-            .into_iter()
-            .map(|(s, _)| s)
-            .collect();
-        assert_eq!(typed, vec!["tian".to_string()]);
-        // 目标整词必须是完整词条，且带 dict.bin 的记录号(不是空标记)
-        for key in [["zhuang", "tai", "lan"], ["zen", "me", "gai"]] {
-            let idx = g
-                .walk(&key)
-                .unwrap()
-                .unwrap_or_else(|| panic!("{key:?} 应在索引里"));
-            let node = g.node(idx).unwrap();
-            assert!(node.exact, "{key:?} 应是完整词条");
-            assert_ne!(node.entry_off, NO_ENTRY, "{key:?} 应带词条区间");
-            assert!(node.entry_len >= 1);
-        }
-        assert!(g.child(0, "zzz").unwrap().is_none(), "不存在的音节不该有子节点");
-    }
+    fn synthetic_graph_walks_expands_and_enforces_generation() {
+        let dir = std::env::temp_dir().join(format!("xwx_syl_graph_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dict_p = dir.join("dict.bin");
+        let graph_p = dir.join("syllable_graph.bin");
+        std::fs::write(&dict_p, build_test_bin(2)).unwrap();
 
-    #[test]
-    fn graph_is_assembled_only_when_it_matches_the_dict() {
-        let (Some(graph_path), Some(dict_path)) = (data_path(), dict_path()) else {
-            eprintln!("跳过：缺少 data/syllable_graph.bin 或 data/dict.bin");
-            return;
-        };
-        let d = crate::dict::MmapDict::open(&dict_path)
-            .unwrap()
-            .with_syllable_graph(&graph_path);
-        assert!(d.syllable_graph().is_some(), "同代索引应被装配");
-        // 装配判据就是这一条：索引头部记录数 == 词库记录数
-        assert_eq!(d.syllable_graph().unwrap().keys(), d.pinyin_count as u64);
-        // 拿词库文件冒充索引(魔数不符) → 不装配、不 panic
-        let bad = crate::dict::MmapDict::open(&dict_path)
-            .unwrap()
-            .with_syllable_graph(&dict_path);
-        assert!(bad.syllable_graph().is_none(), "不是索引的文件不该被装配");
+        let dict = MmapDict::open(&dict_p).unwrap();
+        dict.build_syllable_graph_file(&graph_p).unwrap();
+        let g = SyllableGraph::open(&graph_p).expect("音节级索引应能打开");
+        assert_eq!(g.syllable_count(), 2);
+        assert_eq!(g.keys(), dict.pinyin_count as u64);
+
+        // walk / children_starting_with / walk_key / 不存在音节
+        let ni = g.walk(&["ni"]).unwrap().expect("ni 应在索引里");
+        let ni_node = g.node(ni).unwrap();
+        assert!(ni_node.exact && ni_node.entry_off != NO_ENTRY && ni_node.entry_len == 1);
+        let next: Vec<(String, u32)> = g.children_starting_with(ni, "h").unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0, "hao");
+        let leaf = g.node(next[0].1).unwrap();
+        assert!(leaf.exact && leaf.entry_off != NO_ENTRY);
+        assert_eq!(g.walk_key("ni hao").unwrap(), Some(leaf));
+        assert!(g.child(0, "zzz").unwrap().is_none());
+
+        // 同代装配成功
+        let attached = dict.with_syllable_graph(&graph_p);
+        assert!(attached.syllable_graph().is_some());
+        assert_eq!(attached.syllable_graph().unwrap().keys(), attached.pinyin_count as u64);
+
+        // 异代(改 keys 计数)与非索引文件均不装配、不 panic
+        let mut wrong_gen = std::fs::read(&graph_p).unwrap();
+        let bad_keys = (attached.pinyin_count as u64) + 1;
+        wrong_gen[52..60].copy_from_slice(&bad_keys.to_le_bytes());
+        let wrong_p = dir.join("wrong_gen.bin");
+        std::fs::write(&wrong_p, &wrong_gen).unwrap();
+        assert!(MmapDict::open(&dict_p).unwrap().with_syllable_graph(&wrong_p).syllable_graph().is_none());
+        assert!(MmapDict::open(&dict_p).unwrap().with_syllable_graph(&dict_p).syllable_graph().is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

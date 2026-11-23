@@ -34,12 +34,10 @@ impl ImeEngine {
             return Ok(());
         }
         let max_len = (n - pos).min(segmenter::MAX_SYLLABLE_LEN);
-        // **简拼模式下先试长窗口**：长窗口才有「字面音节」(wo/men/jin/tian)，
-        // 而 len=1 只是缩写弧。旧顺序从 1 开始，位置 0 会先钻进 `w`→整音节
-        // 的子树把预算烧光，等轮到 `wo` 时预算已尽——实测 `womenjintianqbj`
-        // 的「我们今天」(0→12) 边因此压根没建出来（探针：只有「去北京」在）。
+        // 统一长窗口优先：精确模式先探 `tian`/`xian` 再探 `ti+an`/`xi+an`，避免长句被短音节子树烧光预算；
+        // 简拼模式同样先探完整字面音节，再探单字母简拼弧。
         for step in 1..=max_len {
-            let len = if abbrev { max_len + 1 - step } else { step };
+            let len = max_len + 1 - step;
             if *budget == 0 {
                 return Ok(());
             }
@@ -146,32 +144,47 @@ impl ImeEngine {
                     typo = keep;
                 }
                 for (typo_syl, cost, _) in typo {
-                    readings.push((typo_syl, cost, 1, false));
+                    let trailing_non_doubled_del = pos + len == n
+                        && syl.len() == typo_syl.len() + 1
+                        && syl.starts_with(typo_syl)
+                        && syl.len() >= 2
+                        && syl.as_bytes()[syl.len() - 1] != syl.as_bytes()[syl.len() - 2];
+                    let leading_non_doubled_del = pos == 0
+                        && n >= 3
+                        && syl.len() == typo_syl.len() + 1
+                        && syl.ends_with(typo_syl)
+                        && syl.len() >= 2
+                        && syl.as_bytes()[0] != syl.as_bytes()[1];
+                    let extra = if trailing_non_doubled_del {
+                        TRAILING_GAP_EXTRA_PENALTY
+                    } else if leading_non_doubled_del {
+                        LEADING_GAP_EXTRA_PENALTY
+                    } else {
+                        0.0
+                    };
+                    readings.push((typo_syl, cost + extra, 1, false));
                 }
             } else if abbrev && (len == 1 || (len == 2 && matches!(syl, "zh" | "ch" | "sh"))) {
-                // **简拼弧**:窗口不是完整音节时,把整段当成音节的首字母。
-                //
-                // **两条规则都按上游(RIME 的简拼代数)实现**:
-                // - `abbrev/^(\l).+$/$1/`:首字母 ∵ `j` → `ji`/`jin`/`jing`…
-                // - `abbrev/^([zcs]h).+$/$1/`:**`zh`/`ch`/`sh` 作为一个声母**,
-                //   一个音节吃**两个**输入字母。
-                // 只做前者会漏掉真正的双字母声母:`shh`(时候)被读成三个音节
-                // `社(she)会(hui)化(hua)`——实测候选第一是「社会化」而不是「时候」。
-                // (第三条 `derive/^([zcs])h(.*)$/$1$2/` 即 `zh` 可写成 `z`,
-                //  由 len==1 的分支覆盖。)
-                //
-                // 代价 `ABBREV_PENALTY` 逐弧累加后扣在 `typo_penalty` 上
-                // (同一对数域,量纲一致),「走没走简拼」另由 `abbrev` 标记,
-                // 供候选层序使用。
+                // 单字母简拼弧若拆破合法完整音节（如 `shu`→`s+hu`、`gai`→`g+ai`、`hou`→`h+o`），
+                // 加高惩罚抑制伪双首字母垃圾读法，不影响正常简拼（`wmjtqbj`/`zgr`/`yiwanc` 等）。
+                let splits_syllable = len == 1
+                    && (2..=max_len).any(|l| {
+                        !Self::syllable_crosses_boundary(pos, l, bounds)
+                            && (self
+                                .segmenter
+                                .is_syllable(segmenter::canonical_syllable(&pinyin[pos..pos + l]))
+                                || (l == 2 && matches!(&pinyin[pos..pos + 2], "zh" | "ch" | "sh")))
+                    });
+                let arc_base = if splits_syllable {
+                    ABBREV_PENALTY + SYLLABLE_SPLIT_PENALTY
+                } else {
+                    ABBREV_PENALTY
+                };
                 for s in segmenter::abbrev_syllables(&pinyin[pos..pos + len]) {
-                    readings.push((s, ABBREV_PENALTY, 0, true));
+                    readings.push((s, arc_base, 0, true));
                 }
-                // **儿化音的 `r`**:输入末尾一个 `r` 是「儿」的通用简写
-                // (`zaiyikuair` → 在一块儿),但 `abbrev_syllables("r")` 只找得到
-                // 以 `r` 开头的音节(`ren`/`ri`/`rong`…),`er` 不在其中 ⇒ 单独补一条。
-                // 与简拼弧同代价同标记(它本来就是缩写读法)。
                 if len == 1 && &pinyin[pos..pos + 1] == "r" {
-                    readings.push(("er", ABBREV_PENALTY, 0, true));
+                    readings.push(("er", arc_base, 0, true));
                 }
             }
             // **末尾半音节补全**(与上面几支互斥的读法选择**并行**,不是 else):
@@ -249,12 +262,15 @@ impl ImeEngine {
                     },
                     _ => (None, None),
                 };
-                let prefix_state = if arc_abbrev {
+                let exact_graph_prune = !abbrev
+                    && !tolerant
+                    && !self.fuzzy_enabled
+                    && graph.is_some()
+                    && user_entries.is_none_or(|u| !u.has_entry_prefix(joined));
+                let prefix_state = if arc_abbrev || exact_graph_prune {
                     match graph {
                         Some(_) => match (node, child_info) {
-                            // 链本身已不是任何词条的 key 前缀 ⇒ 它的任何延长也不是，
-                            // 整棵子树剪掉。旧路径在这里同样得到 `None`，只是要先付
-                            // 一次主索引二分才发现。
+                            // 链本身已不是任何词条的 key 前缀 ⇒ 它的任何延长也不是，整棵子树剪掉。
                             (None, _) | (Some(_), None) => crate::dict::KeyPrefix::None,
                             (Some(_), Some(info)) if info.exact => crate::dict::KeyPrefix::Exact,
                             (Some(_), Some(_)) => crate::dict::KeyPrefix::Prefix,
@@ -265,7 +281,7 @@ impl ImeEngine {
                     crate::dict::KeyPrefix::Exact
                 };
                 if prefix_state == crate::dict::KeyPrefix::None {
-                    if start == 0 || chain.len() < 3 || len > 1 || graph.is_none() {
+                    if !exact_graph_prune && (start == 0 || chain.len() < 3 || len > 1 || graph.is_none()) {
                         *budget -= 1;
                     }
                     chain.pop();
@@ -275,21 +291,13 @@ impl ImeEngine {
                 *budget -= 1;
                 let word_here = prefix_state == crate::dict::KeyPrefix::Exact;
 
-                // 「只补新边」模式(容错格以精确格为底时的复用):这条链一次弧都
-                // 没用过 ⇒ 它的边在精确格里已经在,不必重复推。
-                //
-                // **简拼弧只拼多音节词**(2026-10-02):一个字母配单字词等于把
-                // 「一个字」和「一个字母」划等号(`w`→王/我、`m`→莽/忙 全是高频
-                // 单字),词频项会把它们顶到整句读法前面——实测 `wmjtqbj` 出的是
-                // 「王莽讲堂前北京」。这也是用户早前否掉的「一字一字母」形态
-                // (见 `MixedDfs` 的 `used_literal` 门槛,同一口径)。多音节词
-                // (`wo men`、`qu bei jing`)不受影响。
+                // 简拼弧默认拼多音节词（单字简拼由 `build_lattice_flags` 在合法断点按 top-K 补充，
+                // 避免 DFS 预算被单字耗尽或把所有中间字节位置推入工作队列）。
                 let abbrev_word_len_ok = !past_abbrev || chain.len() >= 2;
                 if !(only_typo_edges && arc_penalty == 0.0)
                     && abbrev_word_len_ok
-                    && (!arc_abbrev || word_here)
+                    && (!(arc_abbrev || exact_graph_prune) || word_here)
                 {
-                    // 普通键借用缓冲；只有模糊音展开才需要分配键集合。
                     let fuzzy_keys = if self.fuzzy_enabled {
                         expand_fuzzy_scored(joined, &self.fuzzy_pairs)
                     } else {
@@ -313,7 +321,6 @@ impl ImeEngine {
                             };
                             cache.insert(key.to_owned(), cands);
                         }
-                        // 缓存候选直接借用，只复制最终格边持有的词与拼音。
                         for c in &cache[key] {
                             lattice[start].push(LatticeEdge {
                                 end,
@@ -322,10 +329,6 @@ impl ImeEngine {
                                 freq: c.freq,
                                 fuzzy_penalty,
                                 typo_penalty: arc_penalty,
-                                // **累计**而不是本弧：词边代表 [start, end) 整段被消费，前面
-                                // 音节用掉的编辑数必须算进来；否则「前面错过、末尾音节精确」的
-                                // 词边会少报，后向 DP 的整条路径预算形同虚设。递归往下传的也是
-                                // `typo_edits + arc_edits`，两处口径一致。
                                 edit_count: typo_edits + arc_edits,
                                 gap: false,
                                 abbrev: past_abbrev,
@@ -401,7 +404,22 @@ impl ImeEngine {
                     continue;
                 }
                 *budget -= 1;
-                let cost = typo_penalty + segmenter::gap_cost(gap);
+                let is_trailing_non_doubled = pos + gap == n
+                    && gap == 1
+                    && (pos == 0 || pinyin.as_bytes()[pos] != pinyin.as_bytes()[pos - 1]);
+                let is_leading_non_doubled = pos == 0
+                    && gap == 1
+                    && n >= 3
+                    && pinyin.as_bytes()[0] != pinyin.as_bytes()[1];
+                let cost = typo_penalty
+                    + segmenter::gap_cost(gap)
+                    + if is_trailing_non_doubled {
+                        TRAILING_GAP_EXTRA_PENALTY
+                    } else if is_leading_non_doubled {
+                        LEADING_GAP_EXTRA_PENALTY
+                    } else {
+                        0.0
+                    };
                 if pos + gap == n {
                     // 尾部残留:本位置直接送一条空词边到串尾,否则 beam
                     // 到不了 `n`、整串白解(这就是 `…gongyuann` 的形状)。

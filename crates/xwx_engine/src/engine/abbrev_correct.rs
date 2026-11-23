@@ -28,6 +28,8 @@ use super::*;
 /// 放本文件而不是 `segmenter.rs`：全拼容错的替换证据没有同列档
 /// （libime/librime 的 keyboard_map 都只收同行），它是简拼变体生成新开的档。
 const TYPO_P_ADJACENT_COL: f64 = 0.02;
+/// 简拼串里连敲同键（如 `zgrr`→`zgr`）的回弹概率，显著高于无关多打。
+const TYPO_P_DOUBLE_KEY: f64 = 0.25;
 
 /// QWERTY 列对齐（自上而下）：标准错位布局的近似列（`y`-`h`-`n`、
 /// `u`-`j`-`m`…）。与 `segmenter.rs` 的 `QWERTY_ROWS`（同行）互补。
@@ -78,7 +80,11 @@ pub(in crate::engine) fn generate_variants(input: &str) -> Vec<Variant> {
     let bytes = input.as_bytes();
     let mut out: Vec<Variant> = Vec::new();
     let push = |v: Variant, out: &mut Vec<Variant>| {
-        if v.key == input || out.iter().any(|e| e.key == v.key) {
+        if v.key == input {
+            return;
+        }
+        if let Some(existing) = out.iter_mut().find(|e| e.key == v.key) {
+            existing.cost = existing.cost.min(v.cost);
             return;
         }
         out.push(v);
@@ -90,14 +96,18 @@ pub(in crate::engine) fn generate_variants(input: &str) -> Vec<Variant> {
         let key = String::from_utf8(v).expect("ASCII 串换位仍是 ASCII");
         push(Variant { key, cost: segmenter::typo_penalty_transpose() }, &mut out);
     }
-    // ② 删一个字母（`zgr` ← `zgrm`）：多打。方言型删除（`zh` 丢 `h`）
-    // 更便宜，沿用 `deletion_penalty` 的判定。
+    // ② 删一个字母（`zgr` ← `zgrm` / `zgrr`）：同键回弹单独走低代价，其余沿用 `deletion_penalty`。
     for i in 0..bytes.len() {
         let prev = if i > 0 { Some(bytes[i - 1] as char) } else { None };
         let mut v = input.as_bytes().to_vec();
         let deleted = v.remove(i) as char;
         let key = String::from_utf8(v).expect("ASCII 串删字母仍是 ASCII");
-        push(Variant { key, cost: segmenter::deletion_penalty(deleted, prev) }, &mut out);
+        let cost = if prev == Some(deleted) {
+            segmenter::penalty(TYPO_P_DOUBLE_KEY)
+        } else {
+            segmenter::deletion_penalty(deleted, prev)
+        };
+        push(Variant { key, cost }, &mut out);
     }
     // ③ 替换：同行邻键（`wnjtqbj` 的 `n→m`）→ 同列邻键（`dhj` 型的 `h→y`）。
     for i in 0..bytes.len() {
@@ -208,10 +218,16 @@ impl ImeEngine {
             user_entries,
         )?;
         for c in corrected {
-            if ranked
-                .iter()
-                .any(|e| e.word == c.word && e.pinyin == c.pinyin)
+            if let Some(existing) = ranked
+                .iter_mut()
+                .find(|e| e.word == c.word && e.pinyin == c.pinyin)
             {
+                if existing.covered != 0
+                    && (c.covered > existing.covered
+                        || (c.covered == existing.covered && c.score > existing.score))
+                {
+                    *existing = c;
+                }
                 continue;
             }
             ranked.push(c);

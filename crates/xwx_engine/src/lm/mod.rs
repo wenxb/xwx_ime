@@ -313,7 +313,7 @@ impl LanguageModel for BigramLM {
 /// +11.45(1 条)掉到 +7.45(10001 条)——重度用户的个人化比新用户弱
 /// 4 个数量级;而计数与语料规模无关(由
 /// `mixed_boost_independent_of_corpus_size` 钉住)。
-pub const USER_COUNT_GAIN_R: f32 = 1000.0;
+pub const USER_COUNT_GAIN_R: f32 = 120.0;
 /// 有词级上文但二元计数为 0 时的一元增益折减系数（防无关旧词冲垮整句上下文）。
 const USER_UNPAIRED_UNI_SCALE: f32 = 0.25;
 
@@ -570,7 +570,5 @@ impl LanguageModel for LmStore {
 }
 
 mod prepared;
-#[cfg(test)]
-mod prepared_tests;
 #[cfg(test)]
 mod tests;

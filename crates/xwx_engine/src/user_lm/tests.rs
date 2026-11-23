@@ -1,125 +1,89 @@
-//! 本模块的单测(从同一个文件里拆出,2026-10-02:`mod.rs` 只管实现,
-//! 测试单独一个文件;`use super::*` 让它们照旧能碰私有条目)。
+//! `user_lm` 模块单测。
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Barrier;
 
 use super::*;
 
 #[test]
 fn learn_produces_counts_for_committed_word() {
-    // 计数口径(2026-10-02 起):这一层只回计数,不回概率。
     let lm = UserLM::in_memory();
-    assert_eq!(
-        lm.counts_with(&lm.snapshot(), None, "斯巴克"),
-        (0, 0),
-        "没学过就没有任何计数"
-    );
+    assert_eq!(lm.counts_with(&lm.snapshot(), None, "斯巴克"), (0, 0));
     for _ in 0..5 {
         lm.learn(None, "斯巴克");
-    }
-    assert_eq!(
-        lm.counts_with(&lm.snapshot(), None, "斯巴克"),
-        (5, 0),
-        "5 次上屏 ⇒ 一元计数 5"
-    );
-    // 二元单独记:中→国 学 5 次,一元也各 +5
-    for _ in 0..5 {
         lm.learn(Some("中"), "国");
     }
     let snap = lm.snapshot();
-    assert_eq!(
-        lm.counts_with(&snap, Some("中"), "国"),
-        (5, 5),
-        "有上文「中」时:一元 5 + 二元(中→国) 5"
-    );
-    assert_eq!(
-        lm.counts_with(&snap, None, "国"),
-        (5, 0),
-        "没有上文时只有一元计数,二元不给分"
-    );
-    assert_eq!(
-        lm.counts_with(&snap, Some("今天"), "国"),
-        (5, 0),
-        "上文不匹配时不产生二元计数"
-    );
+    assert_eq!(lm.counts_with(&snap, None, "斯巴克"), (5, 0));
+    assert_eq!(lm.counts_with(&snap, Some("中"), "国"), (5, 5));
+    assert_eq!(lm.counts_with(&snap, None, "国"), (5, 0));
+    assert_eq!(lm.counts_with(&snap, Some("今天"), "国"), (5, 0));
 }
 
 #[test]
-fn persistence_roundtrip_keeps_effect() {
-    let dir = std::env::temp_dir().join(format!("xwx_userlm_test_{}", std::process::id()));
+fn persistence_roundtrip_keeps_all_three_sections() {
+    let dir = std::env::temp_dir().join(format!("xwx_userlm_rt_{}", std::process::id()));
     let path = dir.join("user_bigram.txt");
     let _ = std::fs::remove_dir_all(&dir);
     {
         let lm = UserLM::open_or_create(&path);
         assert!(!path.exists(), "首次运行不应创建文件");
         for _ in 0..3 {
-            lm.learn(Some("今天"), "天气");
+            lm.learn(None, "我们");
+            lm.learn(Some("我们"), "今天");
         }
-        // 强制落盘(未达阈值也应能写:退出兜底路径)
+        lm.add_entry("张三丰", "zhang san feng");
+        lm.add_entry("张叁丰", "zhang san feng");
+        lm.add_entry("自造", "zi zao");
+        lm.block_candidate("词库词", "ci ku ci");
+        lm.block_candidate("自造", "zi zao"); // 屏蔽同时删造词条目
         lm.flush().expect("flush 不应失败");
-        assert!(path.is_file(), "flush 后文件应存在");
+        assert!(path.is_file());
+        assert_eq!(lm.dirty_count(), 0);
     }
-    // 模拟崩溃残留:临时文件不应影响正式文件
+    // 崩溃残留 .tmp 不影响正式文件重载
     std::fs::write(dir.join("user_bigram.txt.tmp.99999"), b"garbage").unwrap();
     {
         let lm = UserLM::open_or_create(&path);
         let snap = lm.snapshot();
-        let with_prev = lm.counts_with(&snap, Some("今天"), "天气");
-        let unknown = lm.counts_with(&snap, None, "没学过的词");
-        assert!(
-            with_prev.0 > 0 && with_prev.1 > 0 && unknown == (0, 0),
-            "重载后学习效果应仍在: {with_prev:?} vs {unknown:?}"
-        );
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
+        assert_eq!(lm.counts_with(&snap, None, "我们"), (3, 0));
+        assert_eq!(lm.counts_with(&snap, Some("我们"), "今天"), (3, 3));
+        assert_eq!(lm.counts_with(&snap, None, "没学过的词"), (0, 0));
 
-#[test]
-fn missing_and_corrupt_files_degrade_gracefully() {
-    let dir = std::env::temp_dir().join(format!("xwx_userlm_bad_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    // 缺失:不 panic、空模型
-    let missing = dir.join("nope.txt");
-    let lm = UserLM::open_or_create(&missing);
-    assert_eq!(lm.unigram_len(), 0);
-    // 损坏:格式错误的行 → 告警后空模型,不 panic
-    std::fs::create_dir_all(&dir).unwrap();
-    let bad = dir.join("bad.txt");
-    std::fs::write(&bad, "好\t不是数字\n两\t个\t字段\t太多\n").unwrap();
-    let lm = UserLM::open_or_create(&bad);
-    assert_eq!(lm.unigram_len(), 0, "损坏文件应退化为空模型");
-    // **契约变更**:损坏文件进只读恢复态,不再被下次 flush
-    // 自动覆盖——空模型覆盖唯一副本才是真正的数据丢失。旧断言就是
-    // 「损坏后 flush 能重写」,那正是要修的行为。
-    assert!(lm.is_read_only(), "损坏文件应进只读恢复态");
-    lm.learn(None, "好");
-    let before = std::fs::read(&bad).unwrap();
-    lm.flush().expect("只读态 flush 不该报错");
-    assert_eq!(std::fs::read(&bad).unwrap(), before, "只读态不许覆盖原文件");
-    // 显式恢复后才允许重新开始
-    lm.recover_corrupt_file().expect("恢复失败");
-    lm.flush().expect("恢复后 flush 应能重写");
-    let lm = UserLM::open_or_create(&bad);
-    assert_eq!(lm.unigram_len(), 1, "重写后应能正常加载");
+        let got = snap.lookup_entries("zhang san feng");
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&"张三丰".to_string()) && got.contains(&"张叁丰".to_string()));
+        assert!(snap.lookup_entries("zi zao").is_empty());
+
+        assert_eq!(lm.blocklist_len(), 2);
+        assert!(snap.is_blocked("ci ku ci", "词库词"));
+        assert!(snap.is_blocked("zi zao", "自造"));
+        assert!(!snap.is_blocked("ci ku ci", "别的词"));
+        assert!(!snap.is_blocked("别的拼音", "词库词"));
+
+        // 无新学习时 flush 是空操作
+        lm.flush().expect("空 flush 不应失败");
+        assert_eq!(lm.dirty_count(), 0);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn entry_cap_triggers_decay() {
     let lm = UserLM::in_memory();
-    // 一个高频词 + 顶满上限的一次性词
     for _ in 0..100 {
         lm.learn(None, "常用词");
     }
     for i in 0..MAX_USER_UNIGRAMS {
         lm.learn(None, &format!("长尾词{i}"));
     }
-    // 再学一次 → 超过上限 → 衰减
     lm.learn(None, "触发衰减");
     let n = lm.unigram_len();
     assert!(n <= MAX_USER_UNIGRAMS, "衰减后条数应回到上限内: {n}");
     let snap = lm.snapshot();
     let (hot, _) = lm.counts_with(&snap, None, "常用词");
     let (cold, _) = lm.counts_with(&snap, None, "长尾词0");
-    assert!(hot > cold, "高频词应在衰减后仍高于长尾: {hot} vs {cold}");
+    assert!(hot > cold, "高频词衰减后仍应高于长尾: {hot} vs {cold}");
 }
 
 #[test]
@@ -131,294 +95,169 @@ fn dirty_threshold_gates_flush() {
     assert!(!lm.needs_flush());
     lm.learn(None, "甲");
     assert_eq!(lm.dirty_count(), 1);
-    assert!(!lm.needs_flush(), "未达阈值不应要求落盘");
+    assert!(!lm.needs_flush());
     for _ in 0..FLUSH_LEARN_THRESHOLD {
         lm.learn(None, "乙");
     }
-    assert!(lm.needs_flush(), "达到阈值应要求落盘");
+    assert!(lm.needs_flush());
     lm.flush().expect("flush 失败");
     assert_eq!(lm.dirty_count(), 0);
     assert!(!lm.needs_flush());
-    // 无新学习时 flush 是 no-op(文件 mtime 不变)
+
+    // 无新学习时 flush 是 no-op（文件 mtime 不变）
     let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(10));
     lm.flush().expect("无学习 flush 应直接跳过");
-    let mtime2 = std::fs::metadata(&path).unwrap().modified().unwrap();
-    assert_eq!(mtime, mtime2, "无学习不应重写文件");
+    assert_eq!(mtime, std::fs::metadata(&path).unwrap().modified().unwrap());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn legacy_file_without_entries_section_loads_as_empty_entries() {
-    // 向后兼容(验收判据 A6):造词功能引入**之前**的旧格式文件
-    // (只有 bigram 计数行,没有造词分节标记)必须仍能正常加载,
-    // 且词条表为空——与「那时还没有造词」的语义一致。
+fn legacy_files_without_newer_sections_load_cleanly() {
     let dir = std::env::temp_dir().join(format!("xwx_userlm_legacy_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("old.txt");
-    // 手写一份旧格式(分节标记绝不出现):与引入造词前的 flush
-    // 产物逐字节同构。
-    std::fs::write(&path, "# xwx 用户词频学习模型\n你\t3\n你\t好\t2\n").unwrap();
-    let lm = UserLM::open_or_create(&path);
-    // bigram 行(你,好)的「好」不单独计 unigram:BigramLM 的
-    // unigrams 只收「词<TAB>次数」行,去重后只有「你」一个。
-    assert_eq!(lm.unigram_len(), 1, "旧文件的计数区应正常加载");
-    assert_eq!(lm.entry_len(), 0, "旧文件没有造词区,词条表应为空");
-    assert!(lm.snapshot().lookup_entries("ni hao").is_empty());
+
+    // 仅计数区（引入造词前）
+    let v1 = dir.join("v1.txt");
+    std::fs::write(&v1, "# xwx 用户词频学习模型\n你\t3\n你\t好\t2\n").unwrap();
+    let lm1 = UserLM::open_or_create(&v1);
+    assert_eq!(lm1.unigram_len(), 1);
+    assert_eq!(lm1.entry_len(), 0);
+    assert!(lm1.snapshot().lookup_entries("ni hao").is_empty());
+
+    // 计数区 + 造词区，无屏蔽表区（引入屏蔽表前）
+    let v2 = dir.join("v2.txt");
+    std::fs::write(&v2, "# xwx 用户词频学习模型\n你\t3\n# xwx-user-entries\n自造\tzi zao\n").unwrap();
+    let lm2 = UserLM::open_or_create(&v2);
+    assert_eq!(lm2.unigram_len(), 1);
+    assert_eq!(lm2.entry_len(), 1);
+    assert_eq!(lm2.blocklist_len(), 0);
+    assert!(!lm2.snapshot().is_blocked("zi zao", "自造"));
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn entries_section_survives_roundtrip() {
-    // 新格式:bigram 区 + 造词区同一份文件,写出去再读回来两段都在。
-    let dir = std::env::temp_dir().join(format!("xwx_userlm_rt_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let path = dir.join("rt.txt");
-    {
-        let lm = UserLM::open_or_create(&path);
-        lm.learn(Some("今天"), "天气");
-        lm.add_entry("张三丰", "zhang san feng");
-        lm.add_entry("张叁丰", "zhang san feng"); // 同 key 不同词
-        lm.flush().expect("flush 不应失败");
-    }
-    {
-        let lm = UserLM::open_or_create(&path);
-        // learn(Some("今天"), "天气") 记 unigram(天气) + bigram(今天,天气):
-        // unigram key 去重后只有「天气」一个。
-        assert_eq!(lm.unigram_len(), 1, "计数区应读回");
-        let snap = lm.snapshot();
-        let got = snap.lookup_entries("zhang san feng");
-        assert_eq!(got.len(), 2, "同一 key 的两个词都应读回");
-        assert!(got.contains(&"张三丰".to_string()) && got.contains(&"张叁丰".to_string()),
-            "两个词都应在: {got:?}");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn add_entry_is_idempotent_per_word_key() {
-    // 同一 (word, key) 重复记不重复:用户反复上屏同一自造词
-    // 只留一份(排序增益由 unigram 计数表达,不靠词条重复)。
+fn entries_and_block_candidate_behavior_and_idempotency() {
     let lm = UserLM::in_memory();
     for _ in 0..3 {
-        lm.add_entry("张三丰", "zhang san feng");
+        lm.add_entry("自造短语", "zi zao duan yu");
     }
     assert_eq!(lm.entry_len(), 1);
-    assert_eq!(lm.snapshot().lookup_entries("zhang san feng").len(), 1);
-}
+    assert_eq!(lm.snapshot().lookup_entries("zi zao duan yu").len(), 1);
 
-// —— 屏蔽表(Ctrl+Delete 删候选)——
-
-#[test]
-fn block_candidate_marks_blocked_and_removes_user_entry() {
-    // 核心判据:屏蔽一条候选后,该 (key, word) 被标记;若它是用户
-    // 造词条目,词条同时被删(连根拔);若是词库词(entries 里没有),
-    // 只屏蔽、不影响任何词条。
-    let lm = UserLM::in_memory();
-    lm.add_entry("自造短语", "zi zao duan yu");
-    assert_eq!(lm.entry_len(), 1);
-
-    // 词库词:entries 里没有,屏蔽只进 blocklist,不动词条
+    // 词库词：只进屏蔽表、不动造词条目，且重复屏蔽幂等
+    lm.block_candidate("词库词", "ci ku ci");
     lm.block_candidate("词库词", "ci ku ci");
     assert!(lm.snapshot().is_blocked("ci ku ci", "词库词"));
-    assert_eq!(lm.entry_len(), 1, "词库词的屏蔽不应动造词条目");
+    assert_eq!(lm.entry_len(), 1);
+    assert_eq!(lm.blocklist_len(), 1);
 
-    // 用户造词:屏蔽 + 删词条
+    // 用户造词：屏蔽并连同造词条目一起删除
     lm.block_candidate("自造短语", "zi zao duan yu");
     assert!(lm.snapshot().is_blocked("zi zao duan yu", "自造短语"));
-    assert_eq!(lm.entry_len(), 0, "用户造词应连同词条一起删掉");
-    assert!(
-        lm.snapshot().lookup_entries("zi zao duan yu").is_empty(),
-        "删掉后按 key 查不到该词条"
-    );
+    assert_eq!(lm.entry_len(), 0);
+    assert!(lm.snapshot().lookup_entries("zi zao duan yu").is_empty());
     assert_eq!(lm.blocklist_len(), 2);
 }
 
 #[test]
-fn block_candidate_is_idempotent() {
-    // 重复屏蔽同一条不重复计(幂等,与 add_entry 同一取舍)。
-    let lm = UserLM::in_memory();
-    lm.block_candidate("词", "ci");
-    lm.block_candidate("词", "ci");
-    assert_eq!(lm.blocklist_len(), 1);
-    assert!(lm.snapshot().is_blocked("ci", "词"));
-}
-
-#[test]
 fn block_candidate_clears_counts_too() {
-    // **语义变更（2026-10-02）**：旧断言是「屏蔽不动计数」，
-    // 现在改成「屏蔽连计数一起清」，理由见 `block_candidate` 文档：
-    // ① 屏蔽键是 (拼音, 词)，而计数按**词**记——不清的话同一个词
-    //    在别的拼音路径上仍带着计数被加分（多音字串味）；
-    // ② 计数就是排名的燃料，燃料不清等于没删。
     let lm = UserLM::in_memory();
     lm.learn(None, "某词");
     lm.learn(Some("某词"), "下一词");
-    assert_eq!(lm.counts_with(&lm.snapshot(), None, "某词"), (1, 0));
+    lm.learn(Some("旁词"), "某词");
+    assert_eq!(lm.counts_with(&lm.snapshot(), None, "某词"), (2, 0));
     assert_eq!(lm.counts_with(&lm.snapshot(), Some("某词"), "下一词"), (1, 1));
 
     lm.block_candidate("某词", "mou ci");
 
-    assert!(lm.snapshot().is_blocked("mou ci", "某词"), "仍要进屏蔽表");
-    assert_eq!(
-        lm.counts_with(&lm.snapshot(), None, "某词"),
-        (0, 0),
-        "被删的词一元计数应清零"
-    );
-    assert_eq!(
-        lm.counts_with(&lm.snapshot(), Some("某词"), "下一词"),
-        (1, 0),
-        "指向它的二元计数应清掉(只剩「下一词」自己的一元计数)"
-    );
-    assert_eq!(
-        lm.counts_with(&lm.snapshot(), Some("旁词"), "某词"),
-        (0, 0),
-        "任何上文下它都不该再有计数"
-    );
-}
-
-#[test]
-fn blocklist_survives_roundtrip() {
-    // 落盘 + 读回:屏蔽表经 flush 写入 `# xwx-user-blocklist` 区,
-    // 重开后仍生效;与计数区、造词区三段共存。
-    let dir = std::env::temp_dir().join(format!("xwx_userlm_bl_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let path = dir.join("bl.txt");
-    {
-        let lm = UserLM::open_or_create(&path);
-        lm.learn(None, "今天");
-        lm.add_entry("自造", "zi zao");
-        lm.block_candidate("词库词", "ci ku ci");
-        lm.block_candidate("自造", "zi zao"); // 同时屏蔽 + 删词条
-        lm.flush().expect("flush 不应失败");
-    }
-    {
-        let lm = UserLM::open_or_create(&path);
-        assert_eq!(lm.unigram_len(), 1, "计数区应读回");
-        assert_eq!(lm.entry_len(), 0, "自造词条已被删(屏蔽连根拔)");
-        assert!(lm.snapshot().is_blocked("ci ku ci", "词库词"), "屏蔽表应读回");
-        assert!(lm.snapshot().is_blocked("zi zao", "自造"), "屏蔽表应读回");
-        assert!(!lm.snapshot().is_blocked("ci ku ci", "别的词"), "键含词,不误伤");
-        assert!(!lm.snapshot().is_blocked("别的拼音", "词库词"), "键含拼音,不误伤");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn legacy_file_with_blocklist_section_loads() {
-    // 向后兼容:含造词区但无屏蔽表区的「次新」文件(引入屏蔽表之前)
-    // 正常加载,屏蔽表为空;手写一份该形态验证分节解析不回退。
-    let dir = std::env::temp_dir().join(format!("xwx_userlm_leg2_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("mid.txt");
-    std::fs::write(
-        &path,
-        "# xwx 用户词频学习模型\n你\t3\n# xwx-user-entries\n自造\tzi zao\n",
-    )
-    .unwrap();
-    let lm = UserLM::open_or_create(&path);
-    assert_eq!(lm.unigram_len(), 1, "计数区应加载");
-    assert_eq!(lm.entry_len(), 1, "造词区应加载");
-    assert_eq!(lm.blocklist_len(), 0, "无屏蔽表区时屏蔽表为空");
-    assert!(!lm.snapshot().is_blocked("zi zao", "自造"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// 写路径必须是「取表—改—发布」的**原子**操作。
-///
-/// 旧实现用 `mem::take` 把共享表换成空表再释放锁:窗口里别的线程读到空模型
-/// (屏蔽项、计数全消失),两个写者还会互相覆盖。这里让 4 个写者并发 learn
-/// (词有重叠,丢更新会体现为总数变少),读者同时断言屏蔽项从不消失。
-#[test]
-fn concurrent_writes_never_publish_an_empty_table() {
-    use std::sync::{Arc as StdArc, Barrier};
-
-    let lm = StdArc::new(UserLM::in_memory());
-    lm.block_candidate("测试词", "ce shi ci");
-    assert_eq!(lm.blocklist_len(), 1);
-
-    let writers = 4usize;
-    let per_writer = 500usize;
-    let words = 32usize;
-    let barrier = StdArc::new(Barrier::new(writers + 2));
-    let mut handles = Vec::new();
-
-    for w in 0..writers {
-        let lm = StdArc::clone(&lm);
-        let barrier = StdArc::clone(&barrier);
-        handles.push(std::thread::spawn(move || {
-            barrier.wait();
-            for i in 0..per_writer {
-                lm.learn(None, &format!("词{}", (w * 7 + i) % words));
-            }
-        }));
-    }
-    {
-        let lm = StdArc::clone(&lm);
-        let barrier = StdArc::clone(&barrier);
-        handles.push(std::thread::spawn(move || {
-            barrier.wait();
-            for _ in 0..200_000 {
-                assert_eq!(
-                    lm.blocklist_len(),
-                    1,
-                    "写路径的窗口里发布了空表:屏蔽项短暂消失"
-                );
-            }
-        }));
-    }
-    barrier.wait();
-    for h in handles {
-        h.join().expect("线程 panic");
-    }
-
     let snap = lm.snapshot();
-    let total: u64 = (0..words)
-        .map(|i| lm.counts_with(&snap, None, &format!("词{i}")).0 as u64)
-        .sum();
-    assert_eq!(
-        total,
-        (writers * per_writer) as u64,
-        "并发学习丢了更新:计数总数少于学习次数"
-    );
-    assert_eq!(lm.blocklist_len(), 1);
+    assert!(snap.is_blocked("mou ci", "某词"));
+    assert_eq!(lm.counts_with(&snap, None, "某词"), (0, 0));
+    assert_eq!(lm.counts_with(&snap, Some("某词"), "下一词"), (1, 0));
+    assert_eq!(lm.counts_with(&snap, Some("旁词"), "某词"), (0, 0));
 }
 
-/// 落盘后再载入必须完整。
 #[test]
-fn flush_then_reload_keeps_every_count() {
-    let dir = std::env::temp_dir().join(format!("xwx_userlm_rt2_{}", std::process::id()));
+fn unblock_and_unblock_last_behavior() {
+    let lm = UserLM::in_memory();
+    assert!(!lm.unblock_last());
+
+    lm.add_entry("自造短语", "zi zao duan yu");
+    lm.block_candidate("自造短语", "zi zao duan yu");
+    lm.block_candidate("词库词", "ci ku ci");
+    assert_eq!(lm.blocklist_len(), 2);
+
+    // unblock_last 只撤销最近一条，槽位用完后返回 false
+    assert!(lm.unblock_last());
+    assert!(!lm.snapshot().is_blocked("ci ku ci", "词库词"));
+    assert!(lm.snapshot().is_blocked("zi zao duan yu", "自造短语"));
+    assert!(!lm.unblock_last());
+    assert_eq!(lm.blocklist_len(), 1);
+
+    // unblock 指名解屏蔽且幂等
+    lm.unblock("自造短语", "zi zao duan yu");
+    lm.unblock("自造短语", "zi zao duan yu");
+    assert!(!lm.snapshot().is_blocked("zi zao duan yu", "自造短语"));
+    assert_eq!(lm.blocklist_len(), 0);
+}
+
+#[test]
+fn empty_blocklist_fast_path_tracks_the_snapshot_generation() {
+    let user = UserLM::in_memory();
+    let empty = user.snapshot();
+    assert!(!empty.is_blocked("ni", "你"));
+    user.block_candidate("你", "ni");
+    let blocked = user.snapshot();
+    assert!(!empty.is_blocked("ni", "你"));
+    assert!(blocked.is_blocked("ni", "你"));
+    assert!(!blocked.is_blocked("ni", "妮"));
+    user.unblock("你", "ni");
+    assert!(!user.snapshot().is_blocked("ni", "你"));
+    assert!(blocked.is_blocked("ni", "你"));
+}
+
+#[test]
+fn missing_and_corrupt_user_files_never_overwrite_original() {
+    let dir = std::env::temp_dir().join(format!("xwx_userlm_corrupt_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    let missing = UserLM::open_or_create(&dir.join("nope.txt"));
+    assert_eq!(missing.unigram_len(), 0);
+    assert!(!missing.is_read_only());
+
     std::fs::create_dir_all(&dir).expect("建目录失败");
-    let path = dir.join("user_bigram.txt");
+    let cases = [
+        ("counts", "# xwx\n我们\tnot-a-number\n"),
+        ("entries", "# xwx\n# xwx-user-entries\n坏行没有制表符\n"),
+        ("blocklist", "# xwx\n# xwx-user-blocklist\n坏行没有制表符\n"),
+    ];
+    for (tag, content) in cases {
+        let path = dir.join(format!("{tag}.txt"));
+        std::fs::write(&path, content).expect("写坏文件失败");
+        let before = std::fs::read(&path).expect("读坏文件失败");
 
-    let lm = UserLM::open_or_create(&path);
-    for _ in 0..3 {
-        lm.learn(None, "我们");
-        lm.learn(Some("我们"), "今天");
+        let lm = UserLM::open_or_create(&path);
+        assert_eq!(lm.unigram_len(), 0, "{tag}: 损坏文件应退化为空模型");
+        assert!(lm.is_read_only(), "{tag}: 损坏文件必须进只读恢复态");
+
+        lm.learn(None, "新词");
+        lm.add_entry("新词", "xin ci");
+        lm.block_candidate("新词", "xin ci");
+        lm.flush().expect("只读态 flush 不该报错");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "{tag}: 只读态不得覆盖原文件");
+
+        // 显式恢复后留备份并允许重新落盘
+        let backup = lm.recover_corrupt_file().expect("恢复失败").expect("应留下备份");
+        assert_eq!(std::fs::read(&backup).unwrap(), before, "{tag}: 备份必须是原件字节");
+        assert!(!lm.is_read_only());
+        lm.flush().expect("恢复后应能回写");
+        assert!(std::fs::read_to_string(&path).unwrap().contains("新词"));
     }
-    lm.add_entry("我们今天", "wo men jin tian");
-    lm.block_candidate("测试词", "ce shi ci");
-    lm.flush().expect("落盘失败");
-    assert_eq!(lm.dirty_count(), 0, "落盘成功后应清零");
-
-    let reloaded = UserLM::open_or_create(&path);
-    let snap = reloaded.snapshot();
-    assert_eq!(reloaded.counts_with(&snap, None, "我们"), (3, 0));
-    // 一元计数对 prev/word 各自加(learn 给词本身记频,bigram 另记)
-    assert_eq!(reloaded.counts_with(&snap, Some("我们"), "今天"), (3, 3));
-    assert_eq!(reloaded.blocklist_len(), 1);
-
-    // 没有新学习时 flush 是空操作(空写只徒增 SSD 磨损)。
-    reloaded.flush().expect("空 flush 不应失败");
-    assert_eq!(reloaded.dirty_count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 落盘**失败**时这一代必须还是脏的(不能静默丢):
-/// 把路径的父目录指成一个普通文件,`create_dir_all` 必失败。
 #[test]
 fn failed_flush_keeps_the_generation_dirty() {
     use std::os::unix::fs::PermissionsExt;
@@ -430,158 +269,113 @@ fn failed_flush_keeps_the_generation_dirty() {
     lm.learn(None, "我们");
     assert_eq!(lm.dirty_count(), 1);
 
-    // 目录设成只读 → 临时文件写不进去(可写状态下真实发生的写失败)。
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).expect("chmod 失败");
     let result = lm.flush();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod 恢复失败");
     if result.is_ok() {
-        // root 无视权限位:这条用例在这种情况下没有可测的东西。
         let _ = std::fs::remove_dir_all(&dir);
-        return;
+        return; // root 无视权限位
     }
-    assert_eq!(lm.dirty_count(), 1, "失败后这一代必须还回去,不能丢");
+    assert_eq!(lm.dirty_count(), 1, "失败后这一代必须还回去");
     lm.flush().expect("恢复可写后应能补上");
     assert_eq!(lm.dirty_count(), 0);
-
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 损坏的用户文件绝不能被「空模型 + 回写」覆盖掉。
-///
-/// 三张表各自的坏行都要进只读恢复态:计数区(坏 count)、造词区、屏蔽区
-/// (后两者是缺制表符的坏行)。只读态下 learn/flush 都不许改动原文件。
-#[test]
-fn corrupt_user_file_is_never_overwritten() {
-    let dir = std::env::temp_dir().join(format!("xwx_userlm_corrupt_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("建目录失败");
-
-    let cases: [(&str, String); 3] = [
-        ("counts", "# xwx\n我们\tnot-a-number\n".to_string()),
-        (
-            "entries",
-            "# xwx\n# xwx-user-entries\n坏行没有制表符\n".to_string(),
-        ),
-        (
-            "blocklist",
-            "# xwx\n# xwx-user-blocklist\n坏行没有制表符\n".to_string(),
-        ),
-    ];
-    for (tag, content) in cases {
-        let path = dir.join(format!("{tag}.txt"));
-        std::fs::write(&path, &content).expect("写坏文件失败");
-        let before = std::fs::read(&path).expect("读坏文件失败");
-
-        let lm = UserLM::open_or_create(&path);
-        assert!(lm.is_read_only(), "{tag}: 坏文件必须进只读恢复态");
-
-        lm.learn(None, "新词");
-        lm.add_entry("新词", "xin ci");
-        lm.block_candidate("新词", "xin ci");
-        lm.flush().expect("只读态 flush 不该报错(只是不写盘)");
-        assert_eq!(
-            std::fs::read(&path).expect("读文件失败"),
-            before,
-            "{tag}: 只读态下原文件必须逐字节不变"
-        );
-
-        // 显式恢复:先把原件留档,再允许回写。
-        let backup = lm
-            .recover_corrupt_file()
-            .expect("恢复失败")
-            .expect("应留下备份");
-        assert_eq!(
-            std::fs::read(&backup).expect("读备份失败"),
-            before,
-            "{tag}: 备份必须是原件字节"
-        );
-        assert!(!lm.is_read_only(), "{tag}: 恢复后应解除只读");
-        lm.flush().expect("恢复后应能回写");
-        let rewritten = std::fs::read_to_string(&path).expect("读新文件失败");
-        assert!(rewritten.contains("新词"), "{tag}: 新文件应含新数据");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// 读不出文件(权限)同样不许转成覆盖:进只读态、原文件大小不变。
 #[test]
 fn unreadable_user_file_is_not_truncated() {
     use std::os::unix::fs::PermissionsExt;
-
     let dir = std::env::temp_dir().join(format!("xwx_userlm_perm_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建目录失败");
     let path = dir.join("user_bigram.txt");
     std::fs::write(&path, "我们\t3\n").expect("写文件失败");
-    // root 无视权限位:那种情况下这条用例没有可测的东西,跳过。
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod 失败");
-    let readable = std::fs::read(&path).is_ok();
-    if !readable {
+    if std::fs::read(&path).is_err() {
         let lm = UserLM::open_or_create(&path);
         assert!(lm.is_read_only(), "读不出来必须进只读态");
         lm.learn(None, "新词");
         lm.flush().expect("只读态 flush 不该报错");
-        assert_eq!(
-            std::fs::metadata(&path).expect("stat 失败").len(),
-            "我们\t3\n".len() as u64,
-            "只读态下文件不许被截断"
-        );
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), "我们\t3\n".len() as u64);
     }
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// **解屏蔽**：屏蔽过的 `(拼音, 词)` 移出屏蔽表后不再被拦；幂等。
-///
-/// `unblock` **不**恢复被 `block_candidate` 清掉的计数（语义是「以后别再压它」，
-/// 不是「把历史恢复原状」）——这条在 `unblock` 的文档里写明，计数会随重新使用长回来。
 #[test]
-fn unblock_removes_the_block_and_is_idempotent() {
-    let lm = UserLM::in_memory();
-    lm.add_entry("自造短语", "zi zao duan yu");
-    lm.block_candidate("自造短语", "zi zao duan yu");
-    assert!(
-        lm.snapshot().is_blocked("zi zao duan yu", "自造短语"),
-        "屏蔽后应被拦"
-    );
+fn concurrent_writes_never_publish_an_empty_table() {
+    let lm = Arc::new(UserLM::in_memory());
+    lm.block_candidate("测试词", "ce shi ci");
     assert_eq!(lm.blocklist_len(), 1);
 
-    lm.unblock("自造短语", "zi zao duan yu");
-    assert!(
-        !lm.snapshot().is_blocked("zi zao duan yu", "自造短语"),
-        "解屏蔽后不该再被拦"
-    );
-    assert_eq!(lm.blocklist_len(), 0, "屏蔽表应被清空");
+    let (writers, per_writer, words) = (4usize, 500usize, 32usize);
+    let barrier = Arc::new(Barrier::new(writers + 2));
+    let done = Arc::new(AtomicBool::new(false));
+    let mut writer_handles = Vec::with_capacity(writers);
 
-    // 幂等：没屏蔽过/重复解屏蔽都安全。
-    lm.unblock("自造短语", "zi zao duan yu");
-    assert_eq!(lm.blocklist_len(), 0);
+    for w in 0..writers {
+        let lm = Arc::clone(&lm);
+        let barrier = Arc::clone(&barrier);
+        writer_handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            for i in 0..per_writer {
+                lm.learn(None, &format!("词{}", (w * 7 + i) % words));
+            }
+        }));
+    }
+    let reader = {
+        let lm = Arc::clone(&lm);
+        let barrier = Arc::clone(&barrier);
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            barrier.wait();
+            while !done.load(Ordering::Acquire) {
+                assert_eq!(lm.blocklist_len(), 1, "写路径窗口不得发布空表");
+                std::hint::spin_loop();
+            }
+        })
+    };
+
+    barrier.wait();
+    for h in writer_handles {
+        h.join().expect("写线程 panic");
+    }
+    done.store(true, Ordering::Release);
+    reader.join().expect("读线程 panic");
+
+    let snap = lm.snapshot();
+    let total: u64 = (0..words)
+        .map(|i| lm.counts_with(&snap, None, &format!("词{i}")).0 as u64)
+        .sum();
+    assert_eq!(total, (writers * per_writer) as u64, "并发学习不得丢更新");
+    assert_eq!(lm.blocklist_len(), 1);
 }
 
-/// **撤销最近一次屏蔽**（Ctrl+Shift+Delete 的引擎侧）：用户手里没有候选可点，
-/// 靠槽位记住上一条；槽位只有一个，撤过就空，更早的要用 `unblock` 指名道姓。
 #[test]
-fn unblock_last_undoes_the_most_recent_block() {
-    let lm = UserLM::in_memory();
-    assert!(!lm.unblock_last(), "没屏蔽过时应返回 false 且不 panic");
-
-    lm.add_entry("自造短语", "zi zao duan yu");
-    lm.block_candidate("自造短语", "zi zao duan yu");
-    lm.block_candidate("词库词", "ci ku ci");
-    assert_eq!(lm.blocklist_len(), 2);
-
-    assert!(lm.unblock_last(), "应撤销最近一条（词库词）");
-    assert!(
-        !lm.snapshot().is_blocked("ci ku ci", "词库词"),
-        "最近一条该被解掉"
-    );
-    assert!(
-        lm.snapshot().is_blocked("zi zao duan yu", "自造短语"),
-        "更早那条不受影响"
-    );
-
-    assert!(!lm.unblock_last(), "槽位已空，再撤返回 false");
-    assert_eq!(lm.blocklist_len(), 1, "更早那条仍在屏蔽表里");
-    lm.unblock("自造短语", "zi zao duan yu");
-    assert_eq!(lm.blocklist_len(), 0);
+fn flush_with_concurrent_learning_preserves_all_counts_after_final_flush() {
+    let path = std::env::temp_dir().join(format!(
+        "xwx_userlm_concurrent_flush_{}.txt",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let user = Arc::new(UserLM::open_or_create(&path));
+    let barrier = Arc::new(Barrier::new(2));
+    let writer = Arc::clone(&user);
+    let writer_barrier = Arc::clone(&barrier);
+    let thread = std::thread::spawn(move || {
+        writer_barrier.wait();
+        for _ in 0..2000 {
+            writer.learn(Some("我们"), "今天");
+        }
+    });
+    barrier.wait();
+    for _ in 0..20 {
+        user.flush().unwrap();
+    }
+    thread.join().unwrap();
+    user.flush().unwrap();
+    assert_eq!(user.dirty_count(), 0);
+    let loaded = UserLM::open_or_create(&path);
+    assert_eq!(loaded.counts_with(&loaded.snapshot(), Some("我们"), "今天"), (2000, 2000));
+    std::fs::remove_file(path).unwrap();
 }

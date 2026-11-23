@@ -1,60 +1,47 @@
 #!/usr/bin/env python3
-"""xwx_ime 词库构建脚本：Rime 词库 → dict.sqlite3。
+"""xwx_ime 词库构建脚本：Rime 词库 → dict.sqlite3（含词频去畸变与 wordfreq 校准）。
 
 优先级：
 1. fcitx5-rime 的 rime_ice 词库（带 import_tables，按顺序展开；重复词条
-   "最上面的权重生效"，与 Rime 语义一致 → 用 INSERT OR IGNORE）；
+   "最上面的权重生效"，与 Rime 语义一致）；
 2. 系统预装 luna_pinyin（/usr/share/rime-data/）。
 
+词频校准（默认启用，可用 `--no-wordfreq` 关闭外部词频融合）：
+- 融合 `wordfreq('zh')` 现代中文词频（每十亿词出现次），按 Rime 多音字占比拆回各读音；
+- 剥离 rime_ice `base.dict.yaml` 的 `+500,000` 人工偏移与顶格假频/论坛脏词；
+- `ext`/`tencent` 中命中 `wordfreq` 的真实词脱出 `freq=100` 填充档，其余保持 `100`。
+
 用法：
-    python3 scripts/build_dict.py [输出路径]
-    # 默认输出 $XDG_DATA_HOME/xwx/dict.sqlite3（通常 ~/.local/share/xwx/）
+    python3 scripts/build_dict.py [输出路径] [--no-wordfreq]
 """
 
+import math
 import os
 import re
 import sqlite3
 import sys
 
-# ---------------------------------------------------------------------------
-# 路径发现
-# ---------------------------------------------------------------------------
-
 FCITX5_RIME = os.path.expanduser("~/.local/share/fcitx5/rime")
 RIME_ICE = os.path.join(FCITX5_RIME, "rime_ice.dict.yaml")
 LUNA = "/usr/share/rime-data/luna_pinyin.dict.yaml"
 
-# 只保留纯汉字词条（rime_ice 里有 A A / DNA 这类字母词，拼音输入法不需要）
 WORD_RE = re.compile(r"^[一-鿿]+$")
-# 拼音只允许小写字母 + 空格（v 表示 ü）
 PY_RE = re.compile(r"^[a-zv ]+$")
-# ü 的各种 Unicode 形式 → v
 UML = str.maketrans({"ü": "v", "ǖ": "v", "ǘ": "v", "ǚ": "v", "ǜ": "v"})
-
 
 #: 与引擎侧 `FILLER_FREQ_TIER` 同值：这一档的词条被当作「没有真实词频依据」。
 FILLER_FREQ_TIER = 100
 
 
 def parse_dict_lines(path: str):
-    """逐行解析 .dict.yaml：跳过 YAML 头（---/...）、# 注释、无 tab 的行。
-
-    yield (word, pinyin, freq)；pinyin 为空字符串表示"无注音条目"（需按
-    单字表自动补全，对应 Rime 自动注音语义，见 rime_ice README 对 tencent
-    表的说明）：
-    - 三列：`词<TAB>拼音<TAB>权重`；
-    - 两列且第二列是拼音：`词<TAB>拼音`（权重按 1）；
-    - 两列且第二列是数字：`词<TAB>权重`（无注音 → pinyin 为空串）。
-
-    freq 非整数时给 1。
-    """
+    """逐行解析 .dict.yaml，yield (word, pinyin, freq)。"""
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.rstrip("\n")
             if not line or line.startswith(("#", "---", "...")):
                 continue
             if "\t" not in line:
-                continue  # YAML 元信息行
+                continue
             parts = line.split("\t")
             if len(parts) < 2:
                 continue
@@ -74,13 +61,9 @@ def parse_dict_lines(path: str):
             else:
                 second = parts[1].strip()
                 if PY_RE.match(second):
-                    # 带注音但无权重
                     yield word, second.translate(UML), 1
                 elif second.isdigit():
-                    # 无注音：词<TAB>权重（如 tencent 大词库）
                     yield word, "", max(int(second), 1)
-                else:
-                    continue  # 既不是拼音也不是权重：无效行跳过
 
 
 def collect_imports(path: str):
@@ -96,10 +79,9 @@ def collect_imports(path: str):
             if line == "...":
                 break
             if in_block and line.startswith("- "):
-                ref = line[2:].split("#")[0].strip()  # 去掉行内注释
+                ref = line[2:].split("#")[0].strip()
                 if not ref:
                     continue
-                # 路径相对 rime 配置目录；可能带 .dict.yaml 后缀或没有
                 base = os.path.dirname(path)
                 for cand in (ref, ref + ".dict.yaml"):
                     full = cand if os.path.isabs(cand) else os.path.join(base, cand)
@@ -110,124 +92,202 @@ def collect_imports(path: str):
 
 
 def find_source():
-    """返回 (主词库路径, 展开顺序的完整词库文件列表)。"""
     if os.path.exists(RIME_ICE):
         files = [RIME_ICE]
         files.extend(collect_imports(RIME_ICE))
         return "rime_ice", files
     if os.path.exists(LUNA):
         return "luna_pinyin", [LUNA]
-    sys.exit(f"找不到 Rime 词库：{RIME_ICE} 或 {LUNA}\n"
-             "可先安装：sudo apt install rime-data-luna-pinyin")
+    sys.exit(
+        f"找不到 Rime 词库：{RIME_ICE} 或 {LUNA}\n"
+        "可先安装：sudo apt install rime-data-luna-pinyin"
+    )
+
+
+def load_wordfreq(enabled: bool) -> dict[str, float]:
+    if not enabled:
+        return {}
+    try:
+        from wordfreq import get_frequency_dict
+
+        wf = get_frequency_dict("zh")
+        print(f"词频校准: 已加载 wordfreq(zh) {len(wf)} 条")
+        return wf
+    except Exception as exc:
+        print(f"词频校准: 未加载 wordfreq({exc})，仅做 Rime 去平台与异常截顶")
+        return {}
+
+
+def calibrate_freq(
+    word: str,
+    raw_freq: int,
+    src_stem: str,
+    ratio: float,
+    wf: dict[str, float],
+) -> int:
+    """将各来源词频统一校准到现代语料每十亿次尺度，消除 +500k 平台与假频污染。"""
+    wf_p = wf.get(word, 0.0)
+    wf_f = int(round(wf_p * 1e9)) if wf_p > 0.0 else 0
+    n = len(word)
+
+    if n == 1:
+        # 单字在 wordfreq（jieba 分词）中对构词字（先/工/公）偏低、对百科专名（县）偏高；
+        # 与 8105 字频几何融合兼顾单字常用度与现代语料尺度。
+        if wf_f > 0:
+            wf_split = max(1, int(round(wf_f * ratio)))
+            if raw_freq > FILLER_FREQ_TIER:
+                rime_scaled = max(1.0, raw_freq * 0.45)
+                return max(1, int(round((rime_scaled * wf_split) ** 0.5)))
+            return wf_split
+        return min(raw_freq, 5_000) if raw_freq > FILLER_FREQ_TIER else raw_freq
+
+    if src_stem in ("ext", "tencent") and raw_freq == FILLER_FREQ_TIER:
+        if wf_f > FILLER_FREQ_TIER:
+            return max(FILLER_FREQ_TIER + 1, int(round(wf_f * ratio)))
+        return FILLER_FREQ_TIER
+
+    if n == 2:
+        if wf_f > 0:
+            wf_split = max(1, int(round(wf_f * ratio)))
+            if 500_000 <= raw_freq <= 515_000:
+                return max(wf_split, int(round(25_000 * ratio)))
+            return wf_split
+        if 500_000 <= raw_freq <= 515_000:
+            return 100_000 + (raw_freq - 500_000) * 200
+        if raw_freq > 515_000:
+            return 20_000
+        if raw_freq > FILLER_FREQ_TIER:
+            return max(FILLER_FREQ_TIER + 1, int(round(raw_freq * 0.05)))
+        return raw_freq
+
+    # 3+ 字短语：wordfreq 往往按子词切分（如 中国人 仅 525、不知道 为 0）；
+    # 正常区间单调融合，极端假频（>2M 如 江泽民同志/三国群英传）截顶，
+    # +500k 档无 wordfreq 的高频口语短语用子词几何均值与论坛脏词（阅读权限）区分。
+    if wf_f > 0:
+        wf_split = max(1, int(round(wf_f * ratio)))
+        if raw_freq > 2_000_000:
+            return wf_split
+        if raw_freq > FILLER_FREQ_TIER:
+            return max(wf_split, int(round(raw_freq * 0.45)))
+        return wf_split
+
+    if raw_freq > 2_000_000:
+        return 2_000
+    if raw_freq >= 500_000:
+        best_geo = 0.0
+        for k in range(1, n):
+            fl = wf.get(word[:k], 0)
+            fr = wf.get(word[k:], 0)
+            if fl > 0 and fr > 0:
+                g = math.sqrt(fl * fr) * 1e9
+                if g > best_geo:
+                    best_geo = g
+        return min(80_000, max(2_000, int(round(best_geo * 0.035 * ratio))))
+    if raw_freq > FILLER_FREQ_TIER:
+        return max(FILLER_FREQ_TIER + 1, int(round(raw_freq * 0.35)))
+    return raw_freq
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    args = sys.argv[1:]
+    use_wf = True
+    if "--no-wordfreq" in args:
+        use_wf = False
+        args.remove("--no-wordfreq")
+
+    out = args[0] if args else os.path.join(
         os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
-        "xwx", "dict.sqlite3",
+        "xwx",
+        "dict.sqlite3",
     )
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
 
     src_name, files = find_source()
     print(f"词库源: {src_name}")
     for f in files:
         print(f"  + {os.path.basename(f)}")
+    wf = load_wordfreq(use_wf)
 
-    conn = sqlite3.connect(out)
-    conn.execute("""CREATE TABLE IF NOT EXISTS entries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pinyin TEXT NOT NULL,
-        word TEXT NOT NULL,
-        freq INTEGER NOT NULL DEFAULT 0)""")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_pinyin_word ON entries(pinyin, word)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_pinyin ON entries(pinyin)")
-    conn.execute("DELETE FROM entries")  # 全量重建
-
-    seen = 0
+    seen_count = 0
     auto_filled = 0
     omitted = 0
-    rows = []
-    # **每个来源的词频分布**（2026-10-05 加）：词表来源里有「只给词、不给权重」
-    # 的一类（rime-ice 的 tencent 表就是：98 万条**权重全 ≤100**，且不是按词频
-    # 排序——用 jieba 的独立词频对拍，Spearman 只有 0.149，它排在最前面的词在
-    # 外部词频里是生僻词）。这类条目进了词库就是**同频堆**：排序时无区分度，
-    # 只能靠上文 LM 与用户模型拉开，二字简拼这类池子大的输入上就表现为
-    # 「目标词沉底」（实测未召回率 11.58% vs 有真实词频的 1.15%，见
-    # docs/typing_eval_fixes.md 四·补四）。
-    # 构建期把这件事打出来，别等评测才发现。
-    src_stats: dict[str, list[int]] = {}
-    # 单字 → 读音表：从单字条建立。8105 字表一个字可能有多个读音行
-    # （每行带权重），自动注音应取**权重最高**（最常用）的读音：
-    # 如 召 shao(1)/zhao(128448) → zhao。权重相同时保留先出现者。
     char_pinyin: dict[str, str] = {}
     char_weight: dict[str, int] = {}
+    seen_pw: set[tuple[str, str]] = set()
+    entries: list[tuple[str, str, int, str]] = []
+    word_raw_sum: dict[str, int] = {}
+
     for path in files:
+        fname = os.path.basename(path)
+        src_stem = fname.split(".")[0]
         for word, pinyin, freq in parse_dict_lines(path):
-            seen += 1
-            if pinyin and len(word) == 1:
-                if freq > char_weight.get(word, 0):
-                    char_pinyin[word] = pinyin
-                    char_weight[word] = freq
+            seen_count += 1
+            if pinyin and len(word) == 1 and freq > char_weight.get(word, 0):
+                char_pinyin[word] = pinyin
+                char_weight[word] = freq
             if not pinyin:
-                # 自动注音：逐字查表拼接；任何字查不到读音就跳过该词——
-                # 宁可少收，不给错误的拼音。
                 syllables = [char_pinyin.get(c, "") for c in word]
                 if not all(syllables):
                     omitted += 1
                     continue
                 pinyin = " ".join(syllables)
                 auto_filled += 1
-            rows.append((pinyin, word, freq))
-            st = src_stats.setdefault(os.path.basename(path), [0, 0])
-            st[0] += 1
-            st[1] += freq <= FILLER_FREQ_TIER
-            if len(rows) >= 100_000:
-                flush(conn, rows)
-                rows = []
-    flush(conn, rows)
+            key = (pinyin, word)
+            if key in seen_pw:
+                continue
+            seen_pw.add(key)
+            entries.append((pinyin, word, freq, src_stem))
+            word_raw_sum[word] = word_raw_sum.get(word, 0) + freq
+
+    conn = sqlite3.connect(out)
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pinyin TEXT NOT NULL,
+        word TEXT NOT NULL,
+        freq INTEGER NOT NULL DEFAULT 0)"""
+    )
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_pinyin_word ON entries(pinyin, word)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_pinyin ON entries(pinyin)")
+    conn.execute("DELETE FROM entries")
+
+    src_stats: dict[str, list[int]] = {}
+    batch = []
+    for pinyin, word, raw_freq, src_stem in entries:
+        total_w = word_raw_sum[word]
+        ratio = (raw_freq / total_w) if total_w > 0 else 1.0
+        freq = calibrate_freq(word, raw_freq, src_stem, ratio, wf)
+        batch.append((pinyin, word, freq))
+        st = src_stats.setdefault(src_stem, [0, 0])
+        st[0] += 1
+        st[1] += freq <= FILLER_FREQ_TIER
+        if len(batch) >= 100_000:
+            flush(conn, batch)
+            batch = []
+    flush(conn, batch)
     conn.commit()
 
     n = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
     print(
-        f"解析 {seen} 条（自动注音 {auto_filled} 条，缺字跳过 {omitted} 条），"
-        f"过滤 {seen - omitted - n} 条重复/无效，入库 {n} 条 → {out}"
+        f"解析 {seen_count} 条（自动注音 {auto_filled} 条，缺字跳过 {omitted} 条），"
+        f"过滤 {seen_count - omitted - n} 条重复/无效，入库 {n} 条 → {out}"
     )
-
-    # **同频堆告警**：某个来源超过一半条目落在填充档（freq ≤ 100）、且它自己
-    # 就有 5 万条以上时，词频这一路对这批词是没有信息的（实测 rime-ice 里
-    # `tencent` 98 万条 100%、`ext` 33 万条 100%，合计占词库 ~70%）。
-    #
-    # **补词频这条路已量过，别重复试**：jieba 词表覆盖填充档 5.0%（补进去实测
-    # 只多召回 0.12pp）、wordfreq 2.6%、THUOCL+DomainWordsDict（181 万词并集）
-    # 7.7%——填充档主体是村级地名/小区/街道这类超本地专名，公开词频资源都不覆盖。
-    # 详见 docs/typing_eval_fixes.md 四·补四。
-    print("  各来源词频分布（填充档 = freq ≤ %d）：" % FILLER_FREQ_TIER)
-    noisy: list[str] = []
+    print(f"  各来源校准后分布（填充档 = freq ≤ {FILLER_FREQ_TIER}）：")
     for name, (cnt, low) in sorted(src_stats.items(), key=lambda kv: -kv[1][0]):
-        pct = low / cnt if cnt else 0
-        print(f"    {name:28} {cnt:9} 条，填充档 {pct:6.1%}")
-        if pct >= 0.5 and cnt >= 50_000:
-            noisy.append(f"{name}（{cnt} 条，{pct:.0%} 无词频）")
-    if noisy:
-        print(
-            "  ⚠ 以下来源几乎不携带词频信息，其条目在候选排序里没有区分度，"
-            "只能靠上文 LM 与用户模型：\n      " + "、".join(noisy)
-        )
+        pct = low / cnt if cnt else 0.0
+        print(f"    {name:16} {cnt:9} 条，填充档 {pct:6.1%}")
 
-    # 验证
-    for py, expect in (("ni hao", "你好"), ("zhongguo", None)):
+    for py, expect in (("ni hao", "你好"), ("zhi dao", "知道"), ("zhen de", "真的")):
         rows_ = conn.execute(
             "SELECT word, freq FROM entries WHERE pinyin=? ORDER BY freq DESC LIMIT 3",
             (py,),
         ).fetchall()
         print(f"  验证 pinyin='{py}': {rows_}")
-        if expect:
-            assert any(r[0] == expect for r in rows_), f"缺少 {expect}"
+        assert any(r[0] == expect for r in rows_), f"缺少 {expect}"
     conn.close()
 
 
 def flush(conn, rows):
-    # INSERT OR IGNORE：重复词条保留先导入的（Rime"最上面的权重生效"语义）
     conn.executemany(
         "INSERT OR IGNORE INTO entries (pinyin, word, freq) VALUES (?,?,?)",
         rows,

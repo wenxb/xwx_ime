@@ -240,6 +240,10 @@ fn demote_non_dominant_completions(keys: &mut [PlainKey], ranked: &[Candidate], 
         if can_dominate && mine >= theirs + COMPLETION_DOMINANCE && nasal_completion(inp, c) {
             k.completion = false;
             k.band = 0;
+        } else if best_lexical[slot].is_finite() && c.freq < COMPLETION_BAND_MIN_FREQ {
+            // 已有精确整串命中时，低频/填充尾补全（如 `zhege` 下的 `这跟/这更/这给`）
+            // 退入 band 2，不再挡住高频单字（`这`/`大`/`我`）。
+            k.band = 2;
         } else {
             k.band = 1;
         }
@@ -314,37 +318,19 @@ pub(super) const COVERAGE_PENALTY: f32 = 0.2;
 /// 假设不再成立，故判据改用本函数（⑤⑩②）。
 pub(super) fn effective_layer(
     spelling: SpellingKind,
-    freq: u64,
+    _freq: u64,
     covered: usize,
     inp_len: usize,
     entry_tier_exception: bool,
 ) -> SpellingKind {
-    if entry_tier_exception
-        && spelling == SpellingKind::Abbrev
-        && entry_has_evidence(freq)
-        && covered >= inp_len
-    {
-        SpellingKind::Exact
+    // 简拼/混拼入口下，所有覆盖整串的简拼读法（整词条目与多词链）与容错读法同处 Fuzzy 层，
+    // 按统一对数概率决胜负，既防止低频简拼整词压死高概率容错（`shenem`），
+    // 也防止弱容错压死 0 编辑混合简拼链（`womenxqu`/`taqle`/`womenq`/`jintqu`）。
+    if entry_tier_exception && spelling == SpellingKind::Abbrev && covered >= inp_len {
+        SpellingKind::Fuzzy
     } else {
         spelling
     }
-}
-
-/// 词条是否带**真实证据**：在词库里是**真实条目**，而不是填充档、也不是
-/// 分数驱动的拼装候选。
-///
-/// - `freq == 0` 是「分数驱动」的标记（多词拼装候选与用户造词）——它们不是
-///   词条级证据，收编进 `Exact` 会立刻压住 `Fuzzy` 层的纠错读法。实测
-///   `xaing`：拼装候选「喜爱那个」`freq=0`/分 -31.4 一旦被收编就抢在
-///   「想」(`Fuzzy`，分 -16.2)之前，首位从「想」掉到第 5；
-/// - `1..=FILLER_FREQ_TIER` 是词库里没有真实依据的填充条目（约 70% 的词条），
-///   与 `lookup.rs` 的填充档判据**同一式**。
-///
-/// 这里原先只判 `freq > 0`，于是 `freq = 100` 的填充档词条也享受「词条级
-/// 证据」的待遇：实测 `xain` 的前三名是「喜爱你/心爱你/想爱你」（全是填充档），
-/// 「先」排第 4。
-fn entry_has_evidence(freq: u64) -> bool {
-    freq > FILLER_FREQ_TIER
 }
 
 /// **输入类别判据**「纯缩写」：每个字母都能起一个音节
@@ -426,22 +412,29 @@ pub(super) fn sort_key<'a>(
     // 输入开头(u=0),桶恒 0;简拼层构造上覆盖整串,恒 0;只覆盖
     // 前缀的候选查表。
     let cp_len = c.pinyin.chars().filter(|ch| *ch != ' ').count();
-    let u_min = if c.spelling == SpellingKind::Abbrev || cp_len > inp.len() {
-        0
-    } else if tail_only(inp, c) && inp.len() - cp_len >= MAX_TYPO_GAP {
-        // **吃掉了整段前缀**的读法(`zmgai` → 该,拼音 `gai` 跳过 `zm`):
-        // 它一个前缀字母都没解释,桶就是被跳过的字母数。不这样做,它落在
-        // `umin[cp_len]`(=0,尾巴本身可切分)——与「覆盖整串」的读法同桶,
-        // 靠层序压在简拼读法前面(实测 `zmgai` 的「怎么改」被 `该/改/盖`
-        // 一族挤到第 13)。
-        //
-        // 只跳 1 个字母的不在此列:那是最常见的「多打一个字母」纠错
-        // (`qnihao` → 你好),它按容错读法照常与同层候选比分数。
+    let covers_whole = c.covered >= inp.len();
+    let u_min = if tail_only(inp, c) && inp.len() - cp_len >= MAX_TYPO_GAP {
         u
+    } else if covers_whole || (c.spelling == SpellingKind::Exact && cp_len > inp.len()) {
+        // 整串覆盖候选（含容错纠错 `shanghaai`→上海、`nihaoq`→你好）与精确补全恒归 0 桶，
+        // 修正旧代码按 `umin[cp_len]` 混用输入字节坐标与候选拼音长度坐标的缺陷。
+        0
+    } else if c.covered > 0 && c.covered < inp.len() {
+        if c.spelling == SpellingKind::Abbrev {
+            // 局部简拼前缀按未覆盖字节数排在整串与更长前缀之后，绝不误入 0 桶。
+            (inp.len() - c.covered).max(umin[c.covered])
+        } else {
+            umin[c.covered]
+        }
     } else {
-        umin[cp_len]
+        umin[cp_len.min(inp.len())]
     };
-    let u_local = u.saturating_sub(u_min) as f32;
+    // 覆盖整串的候选（含容错纠错，其编辑代价已计入 c.score）不再重复扣 COVERAGE_PENALTY。
+    let u_local = if covers_whole {
+        0.0
+    } else {
+        u.saturating_sub(u_min) as f32
+    };
     // **尾音节补全标记**(仅 Exact 层):拼音字母数超过输入 ⇒ 尾音节是按更长
     // 音节补全的读法(`liji` 的 `ji`→`jie`/`jiang`),是「猜用户还没打完」。
     // Abbrev 层豁免:简拼读法的弧已付过 `ABBREV_PENALTY`,不确定性与补全
@@ -539,6 +532,7 @@ pub(super) fn merge_layer(
     extra: Vec<Candidate>,
     layer: SpellingKind,
     quota: usize,
+    entry_tier_exception: bool,
 ) -> (usize, Vec<Candidate>) {
     ranked.extend(extra);
     let total = ranked.len();
@@ -548,8 +542,8 @@ pub(super) fn merge_layer(
     let (mut tail, mut head): (Vec<Candidate>, Vec<Candidate>) = ranked
         .into_iter()
         .partition(|c| c.spelling == layer);
-    sort_candidates(inp, &mut head, false);
-    sort_candidates(inp, &mut tail, false);
+    sort_candidates(inp, &mut head, entry_tier_exception);
+    sort_candidates(inp, &mut tail, entry_tier_exception);
     if total > MAX_CANDIDATES {
         // 只有总条数超上限才需要截断。配额是「保底名额」而非「简拼层
         // 封顶」:简拼层取「剩余空位」与配额中较大的那个——
@@ -568,7 +562,7 @@ pub(super) fn merge_layer(
     head.extend(tail);
     // 拼接后整体重排:让排序首键(u_min 桶)跨层生效(见函数级
     // 注释)。sort_by 是稳定排序,重排不改变同键候选的相对次序。
-    sort_candidates(inp, &mut head, false);
+    sort_candidates(inp, &mut head, entry_tier_exception);
     (total, head)
 }
 

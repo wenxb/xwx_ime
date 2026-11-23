@@ -171,76 +171,61 @@ pub fn recognize(input: &str) -> Option<Recognized> {
 mod tests {
     use super::*;
 
-    // —— email ——
-
     #[test]
-    fn email_basic() {
-        assert_eq!(recognize("zhangsan@gmail.com"), Some(Recognized::Email));
-        assert_eq!(recognize("abc@"), Some(Recognized::Email), "@ 后允许为空(librime .*)");
-        assert_eq!(recognize("a@b.c"), Some(Recognized::Email));
-    }
-
-    #[test]
-    fn email_local_part_charset() {
-        assert_eq!(recognize("zhang.san@gmail"), Some(Recognized::Email));
-        assert_eq!(recognize("zhang_san-99@gmail"), Some(Recognized::Email));
-        assert_eq!(recognize("z9@gmail"), Some(Recognized::Email));
-    }
-
-    #[test]
-    fn email_needs_letter_first() {
-        // 首字符非字母:不识别(数字/符号开头)。
-        assert_eq!(recognize("9abc@x"), None);
-        assert_eq!(recognize("@abc"), None);
-        assert_eq!(recognize(""), None);
-    }
-
-    #[test]
-    fn email_at_required() {
-        assert_eq!(recognize("zhangsan"), None, "没有 @ 不是邮箱");
-        assert_eq!(recognize("gmail.com"), None, "b 子句刻意不做:裸域名不识别");
-    }
-
-    // —— url (a) 显式前缀 ——
-
-    #[test]
-    fn url_explicit_prefixes() {
-        for (input, why) in [
-            ("www.example.com", "www. 前缀"),
-            ("http://x.com", "http: 前缀"),
-            ("https://x.com", "https: 前缀"),
-            ("mailto:a@b.c", "mailto: 前缀"),
-            ("ftp.x.com", "ftp. 前缀"),
-            ("ftp://x", "ftp: 前缀"),
-            ("file:/x", "file: 前缀"),
+    fn email_recognition() {
+        for input in [
+            "zhangsan@gmail.com",
+            "abc@",
+            "a@b.c",
+            "zhang.san@gmail",
+            "zhang_san-99@gmail",
+            "z9@gmail",
         ] {
-            assert_eq!(recognize(input), Some(Recognized::Url), "{why}: {input}");
+            assert_eq!(recognize(input), Some(Recognized::Email), "{input}");
         }
     }
 
     #[test]
-    fn url_prefix_alone_is_not_recognized() {
-        // 收窄(与 librime 不同):前缀单独出现不识别,后面要有内容。
-        // 这保证「`www` + `.` 落键瞬间」不被吞成网址——`.` 仍按
-        // 标点/翻页既有规则处理,识别从 `www.e` 才开始(见模块文档)。
-        for bare in ["www.", "http:", "https:", "ftp.", "ftp:", "mailto:", "file:"] {
-            assert_eq!(recognize(bare), None, "前缀单独不识别: {bare}");
+    fn url_recognition() {
+        for input in [
+            "www.example.com",
+            "http://x.com",
+            "https://x.com",
+            "mailto:a@b.c",
+            "ftp.x.com",
+            "ftp://x",
+            "file:/x",
+        ] {
+            assert_eq!(recognize(input), Some(Recognized::Url), "{input}");
         }
     }
 
     #[test]
-    fn www_without_dot_is_pinyin() {
-        // 不退化判据的核心:`www` 单独打(没有后续 `.x`)仍是拼音。
-        assert_eq!(recognize("www"), None);
-        assert_eq!(recognize("abc"), None);
-        assert_eq!(recognize("nihao"), None);
-    }
-
-    #[test]
-    fn url_b_clause_deliberately_dropped() {
-        // `^[a-z]+[.].+$` 不做:`ni.hao` 必须不被吞成网址
-        // (`.` 在中文模式首先是句号/翻页键)。
-        assert_eq!(recognize("ni.hao"), None);
-        assert_eq!(recognize("example.com"), None, "裸域名不识别(代价,已上报)");
+    fn unrecognized_inputs() {
+        for input in [
+            // 非字母开头 / 空串
+            "9abc@x",
+            "@abc",
+            "",
+            // 无 @ / 刻意排除的裸域名
+            "zhangsan",
+            "gmail.com",
+            "ni.hao",
+            "example.com",
+            // 显式前缀单独出现（要求前缀后有内容）
+            "www.",
+            "http:",
+            "https:",
+            "ftp.",
+            "ftp:",
+            "mailto:",
+            "file:",
+            // 普通拼音与不带点的 www
+            "www",
+            "abc",
+            "nihao",
+        ] {
+            assert_eq!(recognize(input), None, "{input:?} 不应被识别");
+        }
     }
 }

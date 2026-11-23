@@ -372,164 +372,109 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serde_roundtrip() {
-        let c = Candidate::new("你好", "ni hao", 42);
+    fn serde_roundtrip_and_spelling_layer_order() {
+        let mut c = Candidate::new("我们", "wo men", 42);
+        c.covered = 5;
         let json = serde_json::to_string(&c).expect("序列化不应失败");
+        assert!(!json.contains("english"), "中文候选不得写出 english 字段: {json}");
         let back: Candidate = serde_json::from_str(&json).expect("反序列化不应失败");
         assert_eq!(c, back);
-    }
 
-    #[test]
-    fn serde_legacy_without_fuzzy_defaults_exact() {
-        // 字段引入前的旧格式没有 `fuzzy`/`spelling`:反序列化应回退为
-        // Exact(精确层),与引入前的语义一致(旧候选全是精确匹配)。
-        let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42}"#;
-        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
-        assert_eq!(c.spelling, SpellingKind::Exact, "缺省 spelling 应为 Exact(精确层)");
-        assert_eq!(c.word, "你好");
-        assert_eq!(c.freq, 42);
-    }
-
-    #[test]
-    fn serde_legacy_fuzzy_true_maps_to_fuzzy_layer() {
-        // 旧格式 `fuzzy: true` 的候选是模糊层:新字段应反序列化为 Fuzzy,
-        // 不能掉回 Exact(否则旧数据里的模糊候选会被错误地提升进精确层)。
-        let legacy = r#"{"word":"里","pinyin":"li","score":-2.0,"freq":10,"fuzzy":true}"#;
-        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
-        assert_eq!(c.spelling, SpellingKind::Fuzzy, "旧 fuzzy:true 应映射为 Fuzzy");
-    }
-
-    #[test]
-    fn serde_legacy_fuzzy_false_maps_to_exact_layer() {
-        let legacy = r#"{"word":"你","pinyin":"ni","score":-1.0,"freq":100,"fuzzy":false}"#;
-        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
-        assert_eq!(c.spelling, SpellingKind::Exact, "旧 fuzzy:false 应映射为 Exact");
-    }
-
-    #[test]
-    fn serde_new_spelling_roundtrips_all_kinds() {
         for (kind, tag) in [
             (SpellingKind::Exact, "exact"),
             (SpellingKind::Fuzzy, "fuzzy"),
             (SpellingKind::Abbrev, "abbrev"),
         ] {
-            let json = format!(
+            let s = format!(
                 r#"{{"word":"词","pinyin":"ci","score":0.0,"freq":1,"spelling":"{tag}"}}"#
             );
-            let c: Candidate = serde_json::from_str(&json).expect("新格式反序列化不应失败");
-            assert_eq!(c.spelling, kind);
+            let parsed: Candidate = serde_json::from_str(&s).expect("新格式反序列化不应失败");
+            assert_eq!(parsed.spelling, kind);
         }
-    }
-
-    #[test]
-    fn serde_legacy_without_echo_defaults_real() {
-        // 字段引入前的旧格式没有 `echo`:反序列化应回退为 false(真实候选),
-        // 与引入前的语义一致(旧候选全是真实候选,没有回声概念)。
-        let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42,"fuzzy":false}"#;
-        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
-        assert!(!c.echo, "缺省 echo 应为 false(真实候选)");
-        assert_eq!(c.word, "你好");
-        assert_eq!(c.freq, 42);
-    }
-
-    #[test]
-    fn serde_legacy_without_covered_defaults_whole_string() {
-        // 字段引入前的旧格式没有 `covered`:反序列化回落 0,而 0 的语义是
-        // 「未知/整串」——旧数据在会话层照旧整串消耗(改动前行为),
-        // 不会退化成「消耗 0 字节」。
-        let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42,"echo":false}"#;
-        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
-        assert_eq!(c.covered, 0, "缺省 covered 应为 0(=未知/整串)");
-    }
-
-    #[test]
-    fn serde_covered_roundtrips() {
-        let mut c = Candidate::new("我们", "wo men", 10);
-        c.covered = 5;
-        let json = serde_json::to_string(&c).expect("序列化不应失败");
-        let back: Candidate = serde_json::from_str(&json).expect("反序列化不应失败");
-        assert_eq!(back.covered, 5);
-    }
-
-    #[test]
-    fn serde_spelling_wins_over_conflicting_legacy_fuzzy() {
-        // 防御:新旧键同时出现且冲突时以新键为准(手写/迁移中的数据)。
-        let mixed = r#"{"word":"词","pinyin":"ci","score":0.0,"freq":1,"fuzzy":true,"spelling":"exact"}"#;
-        let c: Candidate = serde_json::from_str(mixed).expect("混合格式反序列化不应失败");
-        assert_eq!(c.spelling, SpellingKind::Exact, "新键 spelling 应优先");
-    }
-
-    #[test]
-    fn spelling_kind_declaration_order_is_layer_order() {
-        // 严格分层依赖枚举声明序:Exact < Fuzzy < Abbrev(排序时精确层在
-        // 最前)。若有人调整声明顺序,这个测试会先红。
         assert!(SpellingKind::Exact < SpellingKind::Fuzzy);
         assert!(SpellingKind::Fuzzy < SpellingKind::Abbrev);
     }
 
     #[test]
-    fn serde_legacy_without_english_has_no_extra_field() {
-        // C01:旧 JSON 无 english 可读,且新中文候选**不增加空字段**——
-        // 关掉英文时整个 Vec 的序列化必须与旧入口逐字节相同。
-        let legacy = r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42}"#;
-        let c: Candidate = serde_json::from_str(legacy).expect("旧格式反序列化不应失败");
-        assert!(c.english.is_none());
-        let json = serde_json::to_string(&Candidate::new("你好", "ni hao", 42)).expect("序列化");
-        assert!(!json.contains("english"), "中文候选不得写出 english 字段: {json}");
+    fn serde_legacy_compat() {
+        let cases = [
+            (
+                r#"{"word":"你好","pinyin":"ni hao","score":-1.5,"freq":42}"#,
+                SpellingKind::Exact,
+            ),
+            (
+                r#"{"word":"里","pinyin":"li","score":-2.0,"freq":10,"fuzzy":true}"#,
+                SpellingKind::Fuzzy,
+            ),
+            (
+                r#"{"word":"你","pinyin":"ni","score":-1.0,"freq":100,"fuzzy":false}"#,
+                SpellingKind::Exact,
+            ),
+            (
+                r#"{"word":"词","pinyin":"ci","score":0.0,"freq":1,"fuzzy":true,"spelling":"exact"}"#,
+                SpellingKind::Exact,
+            ),
+        ];
+        for (json, expected_spelling) in cases {
+            let c: Candidate = serde_json::from_str(json).expect("旧/混合格式反序列化不应失败");
+            assert_eq!(c.spelling, expected_spelling, "{json}");
+            assert!(!c.echo, "缺省 echo 应为 false: {json}");
+            assert_eq!(c.covered, 0, "缺省 covered 应为 0: {json}");
+            assert!(c.english.is_none(), "缺省 english 应为 None: {json}");
+        }
     }
 
     #[test]
-    fn english_metadata_roundtrips_all_match_kinds() {
-        for (kind, tag) in [
-            (EnglishMatchKind::Exact, "exact"),
-            (EnglishMatchKind::Completion, "completion"),
-            (EnglishMatchKind::NextWord, "next_word"),
+    fn serde_english_metadata_roundtrip() {
+        for (kind, tag, covered, is_next) in [
+            (EnglishMatchKind::Exact, "exact", 5, false),
+            (EnglishMatchKind::Completion, "completion", 4, false),
+            (EnglishMatchKind::NextWord, "next_word", 0, true),
         ] {
-            let covered = if kind == EnglishMatchKind::NextWord { 0 } else { 4 };
             let c = Candidate::new_english("Python", "python", kind, 3.8, covered);
             let json = serde_json::to_string(&c).expect("序列化不应失败");
             assert!(json.contains(&format!("\"match_kind\":\"{tag}\"")), "{json}");
             let back: Candidate = serde_json::from_str(&json).expect("反序列化不应失败");
             assert_eq!(back, c);
             assert!(back.is_english());
+            assert_eq!(back.is_next_word(), is_next);
+            assert_eq!(back.covered, covered);
             assert_eq!(back.english_key(), Some("python"));
-            assert_eq!(back.pinyin, "", "英文候选的 pinyin 必须是空串");
+            assert_eq!(back.pinyin, "");
             assert!(!back.echo);
-            assert_eq!(back.freq, 0, "不伪造中文词频");
+            assert_eq!(back.freq, 0);
         }
     }
 
     #[test]
-    fn english_next_word_has_zero_covered_and_exact_has_input_len() {
-        let nw = Candidate::new_english("you", "you", EnglishMatchKind::NextWord, 1.0, 0);
-        assert!(nw.is_next_word());
-        assert_eq!(nw.covered, 0);
-        let ex = Candidate::new_english("hello", "hello", EnglishMatchKind::Exact, 4.5, 5);
-        assert!(!ex.is_next_word());
-        assert_eq!(ex.covered, 5, "covered 是原始输入字节数,不是补全后单词长度");
-    }
-
-    #[test]
-    fn conflicting_english_data_is_rejected_not_silently_repaired() {
-        // echo + english
-        let bad = r#"{"word":"python","pinyin":"","score":1.0,"freq":0,"echo":true,
-            "english":{"key":"python","match_kind":"exact"}}"#;
-        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "echo+english 必须报错");
-        // pinyin 非空
-        let bad = r#"{"word":"python","pinyin":"py","score":1.0,"freq":0,
-            "english":{"key":"python","match_kind":"exact"}}"#;
-        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "英文候选 pinyin 必须为空");
-        // key 非小写/非法
-        let bad = r#"{"word":"Python","pinyin":"","score":1.0,"freq":0,
-            "english":{"key":"Python","match_kind":"exact"}}"#;
-        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "key 必须是小写英文键");
-        // word 与 key 大小写形式不一致
-        let bad = r#"{"word":"Py thon","pinyin":"","score":1.0,"freq":0,
-            "english":{"key":"python","match_kind":"exact"}}"#;
-        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "word 小写必须等于 key");
-        // NextWord 带 covered
-        let bad = r#"{"word":"you","pinyin":"","score":1.0,"freq":0,"covered":3,
-            "english":{"key":"you","match_kind":"next_word"}}"#;
-        assert!(serde_json::from_str::<Candidate>(bad).is_err(), "NextWord 的 covered 必须是 0");
+    fn serde_rejects_conflicting_english_data() {
+        let invalid = [
+            (
+                "echo+english",
+                r#"{"word":"python","pinyin":"","score":1.0,"freq":0,"echo":true,"english":{"key":"python","match_kind":"exact"}}"#,
+            ),
+            (
+                "non-empty pinyin",
+                r#"{"word":"python","pinyin":"py","score":1.0,"freq":0,"english":{"key":"python","match_kind":"exact"}}"#,
+            ),
+            (
+                "uppercase key",
+                r#"{"word":"Python","pinyin":"","score":1.0,"freq":0,"english":{"key":"Python","match_kind":"exact"}}"#,
+            ),
+            (
+                "word/key mismatch",
+                r#"{"word":"Py thon","pinyin":"","score":1.0,"freq":0,"english":{"key":"python","match_kind":"exact"}}"#,
+            ),
+            (
+                "NextWord nonzero covered",
+                r#"{"word":"you","pinyin":"","score":1.0,"freq":0,"covered":3,"english":{"key":"you","match_kind":"next_word"}}"#,
+            ),
+        ];
+        for (label, bad) in invalid {
+            assert!(
+                serde_json::from_str::<Candidate>(bad).is_err(),
+                "{label} 必须报错"
+            );
+        }
     }
 }

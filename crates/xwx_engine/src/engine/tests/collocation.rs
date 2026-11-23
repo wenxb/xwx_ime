@@ -1,9 +1,15 @@
 use super::*;
 
-fn collocation_engine() -> Option<ImeEngine> {
-    let engine = real_bilingual_engine()?;
+fn fresh_collocation_engine() -> Option<ImeEngine> {
+    let engine = fresh_real_bilingual_engine()?;
     engine.lm.collocation_model()?;
     Some(engine.with_user_lm(UserLM::in_memory()))
+}
+
+fn collocation_lm() -> Option<&'static LmStore> {
+    let engine = real_bilingual_engine()?;
+    engine.lm.collocation_model()?;
+    Some(&engine.lm)
 }
 
 fn filler(word: &str) -> Candidate {
@@ -17,7 +23,7 @@ fn filler(word: &str) -> Candidate {
 
 #[test]
 fn limq_phrase_is_visible_and_commits_in_a_real_session() {
-    let Some(engine) = collocation_engine() else {
+    let Some(engine) = fresh_collocation_engine() else {
         return;
     };
     let engine = Arc::new(engine);
@@ -39,11 +45,11 @@ fn limq_phrase_is_visible_and_commits_in_a_real_session() {
 
 #[test]
 fn internal_collocation_breaks_a_filler_tie_without_changing_scores() {
-    let Some(engine) = collocation_engine() else {
+    let Some(lm) = collocation_lm() else {
         return;
     };
     let mut candidates = [filler("李明启"), filler("里面去"), filler("里面请")];
-    rank::sort_abbrev_candidates("limq", &mut candidates, &engine.lm);
+    rank::sort_abbrev_candidates("limq", &mut candidates, lm);
     assert_eq!(candidates[0].word, "里面去");
     assert_eq!(candidates[1].word, "里面请");
     assert!(candidates
@@ -53,7 +59,7 @@ fn internal_collocation_breaks_a_filler_tie_without_changing_scores() {
 
 #[test]
 fn collocations_cannot_override_primary_score_frequency_layer_or_coverage() {
-    let Some(engine) = collocation_engine() else {
+    let Some(lm) = collocation_lm() else {
         return;
     };
     for boundary in 0..6 {
@@ -69,20 +75,20 @@ fn collocations_cannot_override_primary_score_frequency_layer_or_coverage() {
             _ => unreachable!(),
         }
         let mut candidates = [phrase, name];
-        rank::sort_abbrev_candidates("limq", &mut candidates, &engine.lm);
+        rank::sort_abbrev_candidates("limq", &mut candidates, lm);
         assert_eq!(candidates[0].word, "李明启", "boundary={boundary}");
     }
 }
 
 #[test]
-fn tied_partial_candidates_keep_their_slots_between_whole_candidates() {
-    let Some(engine) = collocation_engine() else {
+fn tied_ineligible_candidates_keep_their_slots_between_whole_candidates() {
+    let Some(lm) = collocation_lm() else {
         return;
     };
-    let mut partial = filler("里面");
-    partial.covered = 3;
-    let mut candidates = [filler("里面去"), partial, filler("李明启")];
-    rank::sort_abbrev_candidates("limq", &mut candidates, &engine.lm);
+    let mut fixed = filler("里面");
+    fixed.echo = true;
+    let mut candidates = [filler("里面去"), fixed, filler("李明启")];
+    rank::sort_abbrev_candidates("limq", &mut candidates, lm);
     assert_eq!(candidates[0].word, "里面去");
     assert_eq!(candidates[1].word, "里面");
     assert_eq!(candidates[2].word, "李明启");
@@ -104,7 +110,7 @@ fn no_character_model_keeps_filler_ties_in_text_order() {
 
 #[test]
 fn exact_three_char_filler_ties_use_internal_collocation() {
-    let Some(engine) = collocation_engine() else {
+    let Some(lm) = collocation_lm() else {
         return;
     };
     let mut a = filler("李明启");
@@ -114,6 +120,6 @@ fn exact_three_char_filler_ties_use_internal_collocation() {
     a.covered = 8;
     b.covered = 8;
     let mut candidates = [a, b];
-    rank::sort_candidates_with_lm("limianqu", &mut candidates, false, &engine.lm);
+    rank::sort_candidates_with_lm("limianqu", &mut candidates, false, lm);
     assert_eq!(candidates[0].word, "里面去");
 }

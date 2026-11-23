@@ -5,6 +5,7 @@ struct SentenceEnd {
     score: f32,
     parent: usize,
     edge: (usize, usize),
+    used_edits: u8,
 }
 
 struct SentenceSearch {
@@ -52,7 +53,7 @@ impl ImeEngine {
                 ctx,
                 lattice,
                 SpellingKind::Exact,
-                ABBREV_PER_WORD_PENALTY,
+                WORD_BOUNDARY_PENALTY,
             );
         }
         // 仅尾边可非字面时，两种搜索的所有中间桶完全相同。
@@ -67,7 +68,7 @@ impl ImeEngine {
                 ctx,
                 lattice,
                 SpellingKind::Exact,
-                ABBREV_PER_WORD_PENALTY,
+                WORD_BOUNDARY_PENALTY,
             )?;
             self.append_literal_sentence(input, ctx, lattice, &mut out)?;
             return Ok(out);
@@ -76,10 +77,15 @@ impl ImeEngine {
             input,
             ctx,
             lattice,
-            ABBREV_CHAIN_NBEST,
-            ABBREV_PER_WORD_PENALTY,
+            SENTENCE_BEAM_WIDTH,
+            WORD_BOUNDARY_PENALTY,
         )?;
-        let paths = sentence_paths(&search.arena, &search.ends, &search.normal, lattice);
+        let paths = sentence_paths(
+            &search.arena,
+            &search.ends,
+            &search.normal[..search.normal.len().min(ABBREV_CHAIN_NBEST)],
+            lattice,
+        );
         let mut out = Self::chain_candidates_from_paths(input, SpellingKind::Exact, paths);
         if super::literal::needs_literal(input, lattice, &out) {
             let literal = literal_ends(&search.ends, lattice, ABBREV_CHAIN_NBEST);
@@ -130,7 +136,11 @@ impl ImeEngine {
                 pinyin: key,
                 score: path.score,
                 freq: 0,
-                spelling,
+                spelling: if path.used_edits > 0 && spelling == SpellingKind::Exact {
+                    SpellingKind::Fuzzy
+                } else {
+                    spelling
+                },
                 echo: false,
                 covered: pinyin.len(),
                 matched_len: 0,
@@ -138,23 +148,6 @@ impl ImeEngine {
             });
         }
         out
-    }
-
-    #[cfg(test)]
-    pub(in crate::engine) fn sentence_beam(
-        &self,
-        input: &str,
-        ctx: &LmContext<'_>,
-        k: usize,
-        lattice: &[Vec<LatticeEdge>],
-        penalty: f32,
-    ) -> Result<(Vec<BeamPath>, Vec<BeamPath>), EngineError> {
-        let search = self.sentence_search(input, ctx, lattice, k, penalty)?;
-        let literal = literal_ends(&search.ends, lattice, k);
-        Ok((
-            sentence_paths(&search.arena, &search.ends, &search.normal, lattice),
-            sentence_paths(&search.arena, &search.ends, &literal, lattice),
-        ))
     }
 
     fn sentence_search(
@@ -174,7 +167,7 @@ impl ImeEngine {
         let log_total = (total as f64).log10();
         arena.push(BeamNode {
             score: 0.0,
-            state: self.lm.state_from_context(ctx),
+            state: Some(self.lm.state_from_context(ctx)),
             edge: None,
             parent: None,
             used_edits: 0,
@@ -190,42 +183,64 @@ impl ImeEngine {
             let dict_scores: Vec<f32> = lattice[pos]
                 .iter()
                 .map(|edge| {
-                    if total > 0 {
-                        ((edge.freq.max(1) as f64).log10() - log_total) as f32
-                    } else {
+                    if edge.gap {
                         0.0
+                    } else {
+                        Self::word_prior_logp(edge.freq, log_total, total)
+                            + self.internal_cohesion_bonus(&edge.word, edge.freq)
                     }
                 })
                 .collect();
             let has_terminal = lattice[pos].iter().any(|e| e.end == len);
             for node in cur {
+                if arena[node].state.is_none() {
+                    let parent_idx = arena[node].parent.expect("非根节点必有父节点");
+                    let (epos, eslot) = arena[node].edge.expect("非根节点必有边");
+                    let edge = &lattice[epos][eslot];
+                    let pstate = arena[parent_idx].state.as_ref().expect("父节点必已物化");
+                    let next_state = if edge.gap {
+                        pstate.clone()
+                    } else {
+                        self.lm.advance_state(pstate, &edge.word)
+                    };
+                    arena[node].state = Some(next_state);
+                }
+                let node_score = arena[node].score;
+                let node_used = arena[node].used_edits;
+                let boundary_cost = if arena[node].edge.is_some() {
+                    per_word_penalty
+                } else {
+                    0.0
+                };
+                let cur_state = arena[node].state.as_ref().expect("刚物化").clone();
+                let scorer = self.lm.prepare(&cur_state);
                 if has_terminal {
-                    // 没有末尾词的位置不准备上文；同一前缀的末尾词共用它。
-                    let scorer = self.lm.prepare(&arena[node].state);
                     for (slot, edge) in lattice[pos]
                         .iter()
                         .enumerate()
                         .filter(|(_, e)| e.end == len)
                     {
-                        let used =
-                            arena[node].used_edits + if edge.gap { 1 } else { edge.edit_count };
+                        let used = node_used + if edge.gap { 1 } else { edge.edit_count };
                         if used > MAX_TYPO_EDITS {
                             continue;
                         }
                         let score = if edge.gap {
-                            arena[node].score - edge.typo_penalty
+                            node_score - edge.typo_penalty
                         } else {
-                            let logp = scorer.score(&edge.word);
-                            arena[node].score + dict_scores[slot] + logp * self.lm_weight
+                            let lm_gain = scorer.score_gain(&edge.word, WANXIANG_GAIN_SCALE);
+                            node_score
+                                + dict_scores[slot]
+                                + lm_gain * self.lm_weight
                                 - edge.fuzzy_penalty
                                 - edge.typo_penalty
-                                - per_word_penalty
+                                - boundary_cost
                         };
                         let idx = ends.len();
                         ends.push(SentenceEnd {
                             score,
                             parent: node,
                             edge: (pos, slot),
+                            used_edits: used,
                         });
                         normal.push(idx);
                         touched_end = true;
@@ -236,18 +251,20 @@ impl ImeEngine {
                     .enumerate()
                     .filter(|(_, e)| e.end != len)
                 {
-                    let used = arena[node].used_edits + edge.edit_count;
+                    let used = node_used + edge.edit_count;
                     if used > MAX_TYPO_EDITS {
                         continue;
                     }
-                    let (logp, state) = self.lm.score(&arena[node].state, &edge.word);
+                    let lm_gain = scorer.score_gain(&edge.word, WANXIANG_GAIN_SCALE);
                     let idx = arena.len();
                     arena.push(BeamNode {
-                        score: arena[node].score + dict_scores[slot] + logp * self.lm_weight
+                        score: node_score
+                            + dict_scores[slot]
+                            + lm_gain * self.lm_weight
                             - edge.fuzzy_penalty
                             - edge.typo_penalty
-                            - per_word_penalty,
-                        state,
+                            - boundary_cost,
+                        state: None,
                         edge: Some((pos, slot)),
                         parent: Some(node),
                         used_edits: used,
@@ -306,6 +323,7 @@ fn sentence_paths(
             BeamPath {
                 score: end.score,
                 words,
+                used_edits: end.used_edits,
             }
         })
         .collect()

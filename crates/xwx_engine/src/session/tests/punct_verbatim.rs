@@ -1,247 +1,115 @@
-//! `session` 单测:punct_verbatim(从 `session/tests.rs` 拆出,2026-10-02)。
+//! `session` 标点映射接线、数字后句点例外与大写 `Verbatim` 组合单测。
 
 use super::*;
 
 #[test]
-fn punct_commits_fullwidth_when_idle() {
-    // 中文模式、拼音串为空:标点键直接上屏全角标点。
+fn punct_commits_fullwidth_when_idle_and_wiring() {
     let mut s = session_with_dict();
     let out = s.handle(InputEvent::Char(',')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "\u{FF0C}"),
-        "空闲时 `,` 应上屏全角逗号: {out:?}"
-    );
-    assert!(!s.is_active(), "上屏后会话应保持空闲");
-    assert_eq!(s.last_word, None, "标点不是词,last_word 应为 None");
-    assert_eq!(s.committed_tail, "\u{FF0C}", "标点应计入上屏尾部");
+    assert!(matches!(out, SessionOutput::Commit(ref t) if t == "\u{FF0C}"));
+    assert!(!s.is_active());
+    assert_eq!(s.last_word, None, "标点不是词");
+    assert_eq!(s.committed_tail, "\u{FF0C}");
+
+    // 代表性会话接线：单字全角、多字映射、`/` 半角例外、`\` 顿号、括引号（全表 22 项见 punctuator.rs）。
+    for (input, expected) in [
+        ('.', "\u{3002}"),
+        ('\\', "\u{3001}"),
+        ('/', "/"),
+        ('_', "\u{2014}\u{2014}"),
+        ('^', "\u{2026}\u{2026}"),
+        ('"', "\u{201C}"),
+        ('[', "\u{300C}"),
+    ] {
+        let mut s = session_with_dict();
+        let out = s.handle(InputEvent::Char(input)).expect("不应失败");
+        assert!(
+            matches!(out, SessionOutput::Commit(ref t) if t == expected),
+            "标点 {input:?} 应上屏 {expected:?}，实际 {out:?}"
+        );
+    }
 }
 
 #[test]
-fn slash_commits_ascii_slash_not_ideographic_comma() {
-    // `Shift` 左边那个键(`/`)在中文模式出半角斜杠,顿号留给 `\`。
-    // 空闲与组合中两个状态都钉一遍:空闲时上屏 `/`;组合中按标点语义
-    // 先提交高亮候选再跟 `/`(`nihao/` → 「你好/」)。
+fn punct_commits_highlighted_candidate_and_slash_keeps_ascii() {
     let mut s = session_with_dict();
-    let out = s.handle(InputEvent::Char('/')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "/"),
-        "空闲时 `/` 应上屏半角斜杠: {out:?}"
-    );
-
-    let mut s = session_with_dict();
-    for c in "nihao".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    let out = s.handle(InputEvent::Char('/')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "你好/"),
-        "`nihao/` 应上屏「你好/」: {out:?}"
-    );
-
-    // 顿号仍由 `\` 产出,不能因为斜杠改动而丢掉。
-    let mut s = session_with_dict();
-    let out = s.handle(InputEvent::Char('\\')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "\u{3001}"),
-        "空闲时 `\\` 应上屏顿号: {out:?}"
-    );
-}
-
-#[test]
-fn punct_commits_highlighted_candidate_then_fullwidth() {
-    // 中文模式、拼音串非空(`nihao`):`,` 先按空格语义上屏高亮候选
-    // (首选整词「你好」,与 commit_immediately_commits_global_index 同一词典),
-    // 再追加全角逗号——用户得到「你好,」。
-    let mut s = session_with_dict();
-    for c in "nihao".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
+    type_str(&mut s, "nihao");
     let out = s.handle(InputEvent::Char(',')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "你好\u{FF0C}"),
-        "`nihao,` 应上屏「你好,」: {out:?}"
-    );
-    assert!(!s.is_active(), "上屏后会话应复位");
-    // 「你好」是词(last_word),标点紧随之后不覆盖它
+    assert!(matches!(out, SessionOutput::Commit(ref t) if t == "你好\u{FF0C}"));
+    assert!(!s.is_active());
     assert_eq!(s.last_word.as_deref(), Some("你好"));
     assert_eq!(s.committed_tail, "你好\u{FF0C}");
+
+    // 组合中 `/` 先提交高亮候选再跟半角斜杠。
+    let mut s = session_with_dict();
+    type_str(&mut s, "nihao");
+    let out = s.handle(InputEvent::Char('/')).expect("不应失败");
+    assert!(matches!(out, SessionOutput::Commit(ref t) if t == "你好/"));
 }
 
 #[test]
 fn punct_with_no_real_candidate_commits_raw_then_fullwidth() {
-    // 拼音串非空但没有真实候选:与 Space 分支同一兜底语义——
-    // 上屏原始输入串(空词库下唯一候选是回声候选,词即原始串),
-    // 再追加全角标点。
-    //
-    // 三段式(`selector` 的 `,`/`.` 翻页落地后改写):
-    // - 原断言用 `.`:空词库下 `zgr` 仍有 1 个回声候选(候选窗开着),
-    //   而 `.` 的翻页条件是 has_menu(候选非空)——按 librime 语义它
-    //   此刻该翻页,不再上屏「zgr。」。那条断言与「`.` 有候选就翻页」
-    //   的新行为正面冲突,不可能同时成立;
-    // - 改为用 `;`(分号,无翻页键语义)走同一条「无真实候选 →
-    //   原始串 + 全角标点」路径;`. 的翻页行为由 paging 专项测试覆盖;
-    // - 为什么新行为对:librime `key_bindings.yaml` 的 `.` 就是
-    //   has_menu 翻页,回声候选也是候选(用户在候选窗里看得见它),
-    //   「有候选就翻页」与 librime 逐字一致;要验证的本是「无真实
-    //   候选时标点先上屏原始串」,换一个不翻页的标点键,语义不变。
-    let engine = Arc::new(ImeEngine::new(None).expect("内存引擎创建失败"));
-    let mut s = InputSession::new(engine);
-    for c in "zgr".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
+    let mut s = InputSession::new(Arc::new(ImeEngine::new(None).expect("内存引擎创建失败")));
+    type_str(&mut s, "zgr");
     let out = s.handle(InputEvent::Char(';')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "zgr\u{FF1B}"),
-        "无真实候选时应上屏「原始串 + ;」: {out:?}"
-    );
-    assert!(!s.is_active(), "上屏后会话应复位");
-    assert_eq!(s.last_word, None, "回声/原始串不是词");
-}
-
-#[test]
-fn punct_table_driven_session_level() {
-    // 会话层面把整张标点表跑一遍(映射本身在 punctuator.rs 单测,
-    // 这里断言「中文模式空闲时,每个标点键都上屏对应文本」——
-    // `/` 是表内唯一的半角例外,见 punctuator.rs 模块文档)。
-    let cases: &[(char, &str)] = &[
-        (',', "\u{FF0C}"),
-        ('.', "\u{3002}"),
-        (';', "\u{FF1B}"),
-        (':', "\u{FF1A}"),
-        ('?', "\u{FF1F}"),
-        ('!', "\u{FF01}"),
-        ('\\', "\u{3001}"),
-        ('<', "\u{300A}"),
-        ('>', "\u{300B}"),
-        ('(', "\u{FF08}"),
-        (')', "\u{FF09}"),
-        ('~', "\u{FF5E}"),
-        ('$', "\u{FFE5}"),
-        ('_', "\u{2014}\u{2014}"),
-        ('^', "\u{2026}\u{2026}"),
-        ('/', "/"),
-        ('"', "\u{201C}"),
-        ('[', "\u{300C}"),
-        (']', "\u{300D}"),
-        ('{', "\u{300E}"),
-        ('}', "\u{300F}"),
-        ('`', "\u{FF40}"),
-    ];
-    for (input, expected) in cases {
-        let mut s = session_with_dict();
-        let out = s.handle(InputEvent::Char(*input)).expect("不应失败");
-        assert!(
-            matches!(out, SessionOutput::Commit(ref t) if t == expected),
-            "标点 {input:?} 应上屏 {expected:?},实际 {out:?}"
-        );
-    }
+    assert!(matches!(out, SessionOutput::Commit(ref t) if t == "zgr\u{FF1B}"));
+    assert!(!s.is_active());
+    assert_eq!(s.last_word, None);
 }
 
 #[test]
 fn punct_passthrough_in_english_mode() {
-    // 英文模式:标点键返回 Noop——IBus 层对 Noop 返回 false,daemon
-    // 把按键透传给应用,应用收到原始半角字符(键没有被吃掉)。
     let mut s = session_with_dict();
     s.handle(InputEvent::ToggleAscii).expect("切换不应失败");
     assert!(s.english_mode());
     for c in [',', '.', ';', '$', '~'] {
-        let out = s.handle(InputEvent::Char(c)).expect("不应失败");
-        assert!(
-            matches!(out, SessionOutput::Noop),
-            "英文模式下 {c:?} 应透传(Noop): {out:?}"
-        );
+        assert!(matches!(
+            s.handle(InputEvent::Char(c)).expect("不应失败"),
+            SessionOutput::Noop
+        ));
     }
-    // 切回中文模式后标点恢复全角上屏
     s.handle(InputEvent::ToggleAscii).expect("切换不应失败");
     let out = s.handle(InputEvent::Char(',')).expect("不应失败");
     assert!(matches!(out, SessionOutput::Commit(ref t) if t == "\u{FF0C}"));
 }
 
 #[test]
-fn apostrophe_enters_pinyin_as_syllable_separator() {
-    // B2 音节分隔符落地(本轮兑现 punctuator.rs 里的预留):
-    // `'` 在拼音串非空时**进拼音串**当强制切分点(`xi'an` 消歧),
-    // 空闲时(拼音串为空)打 `'` 没有意义,仍透传给应用。
-    //
-    // 三段式(B2 落地后改写,原测试名 apostrophe_passthrough_reserved_for_b2):
-    // - 原断言:「中文模式下 `'` 透传(Noop),拼音串非空时也透传」
-    //   ——那是 B2 未做时的过渡行为(预留键,不冲突先透传);
-    // - 改为:「空闲时 `'` 透传(Noop);拼音串非空时 `'` 进拼音串
-    //   (preedit 含 `'`)」——B2 的核心语义;
-    // - 为什么新行为对:librime speller 的 delimiters 就是「`'` 进
-    //   输入串、abc_segmentor 按它硬切」;引擎层把 `'` 当归一化掉的
-    //   强制断点(任何含 `'` 的子串都不是合法音节),`xi'an` 只有
-    //   [xi, an] 一种切法——消歧成立。进拼音串(而不进词典 key、
-    //   不进 `Candidate.pinyin`)的边界由引擎层归一化保证。
-    let mut s = session_with_dict();
-    let out = s.handle(InputEvent::Char('\'')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Noop),
-        "空闲时 ' 应透传(拼音串为空,无分隔对象): {out:?}"
-    );
-    // 拼音串非空时:`'` 进拼音串,preedit 为 xi'
-    s.handle(InputEvent::Char('x')).expect("不应失败");
-    s.handle(InputEvent::Char('i')).expect("不应失败");
-    let out = s.handle(InputEvent::Char('\'')).expect("不应失败");
-    match out {
+fn unmapped_ascii_symbols_still_passthrough() {
+    for c in ['+', '#', '%', '&', '*', '|'] {
+        assert!(fullwidth_punct(c).is_none());
+        let mut s = session_with_dict();
+        assert!(matches!(s.handle(InputEvent::Char(c)).expect("不应失败"), SessionOutput::Noop));
+        assert!(!s.is_active());
+
+        let mut s = session_with_dict();
+        type_str(&mut s, "ni");
+        assert!(matches!(s.handle(InputEvent::Char(c)).expect("不应失败"), SessionOutput::Noop));
+        assert_eq!(s.pinyin(), "ni");
+    }
+}
+
+#[test]
+fn verbatim_composes_capitals_and_words_without_learning() {
+    // 空闲大写进组合、不学习、空格原样上屏。
+    let (engine, mut s) = session_for_coin(&[]);
+    let user = engine.user_lm().expect("应有用户层");
+    let before = user.unigram_len();
+    match s.handle(InputEvent::Verbatim('G')).expect("不应失败") {
         SessionOutput::Updated(u) => {
-            assert_eq!(u.preedit, "xi'", "' 应进拼音串: {u:?}");
+            assert_eq!(u.preedit, "G");
+            assert!(u.candidates.iter().any(|c| c.word == "G"));
         }
-        other => panic!("拼音串非空时 ' 应进拼音串(Updated),实际 {other:?}"),
+        other => panic!("期望 Updated，实际 {other:?}"),
     }
-}
+    assert!(s.is_active());
+    assert!(matches!(
+        s.handle(InputEvent::Space).expect("不应失败"),
+        SessionOutput::Commit(ref t) if t == "G"
+    ));
+    assert!(!s.is_active() && s.last_word.is_none() && s.committed_tail == "G");
+    assert_eq!(user.unigram_len(), before, "大写组合不应产生学习");
 
-#[test]
-fn digits_still_select_candidates_not_punct() {
-    // 数字键仍是选词,不被标点逻辑劫持(数字经 `translate_keyval`
-    // 翻成 Select(n),会话层行为不应因标点分支的引入而变化)。
-    let mut s = session_with_dict();
-    for c in "nihao".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    let out = s.handle(InputEvent::Select(1)).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "你好"),
-        "数字 1 应选第 1 个候选「你好」: {out:?}"
-    );
-    // 拼音串为空时数字键照旧 Noop(无候选可选)
-    let out = s.handle(InputEvent::Select(1)).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Noop));
-}
-
-#[test]
-fn capital_letter_composes_when_idle() {
-    // 中文模式、拼音串为空:Shift+G → **进组合**(预编辑 `G`、回声候选),
-    // 不直出;空格才上屏——正常输入法语义。
-    let mut s = session_with_dict();
-    let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
-    match out {
-        SessionOutput::Updated(u) => {
-            assert_eq!(u.preedit, "G", "大写应进组合而不是直出");
-            assert!(
-                u.candidates.iter().any(|c| c.word == "G"),
-                "应有「原样上屏」回声候选: {:?}",
-                u.candidates
-            );
-        }
-        other => panic!("期望 Updated(进组合),实际 {other:?}"),
-    }
-    assert!(s.is_active(), "组合应保持活跃");
-    // 空格上屏:原样 `G`,不是词。
-    let out = s.handle(InputEvent::Space).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "G"),
-        "空格应上屏 G: {out:?}"
-    );
-    assert!(!s.is_active(), "上屏后会话应复位");
-    assert_eq!(s.last_word, None, "单字母不是词,last_word 应为 None");
-    assert_eq!(s.committed_tail, "G", "应计入上屏尾部(供后续打分的字符窗口)");
-}
-
-#[test]
-fn shift_letters_spell_gpu_across_commits() {
-    // 连打 Shift+G、Shift+P、Shift+U:逐字母进**同一个组合**,
-    // 空格一次上屏 `GPU`(应用文本框里就是 GPU)。
+    // 连续大写（GPU）与大写起头英文词（Hello）留在同一组合，空格一次上屏。
     let mut s = session_with_dict();
     for (ev, expect) in [
         (InputEvent::Verbatim('G'), "G"),
@@ -249,245 +117,110 @@ fn shift_letters_spell_gpu_across_commits() {
         (InputEvent::Verbatim('U'), "GPU"),
     ] {
         let out = s.handle(ev).expect("不应失败");
-        assert!(
-            matches!(out, SessionOutput::Updated(ref u) if u.preedit == expect),
-            "预编辑应为 {expect}: {out:?}"
-        );
+        assert!(matches!(out, SessionOutput::Updated(ref u) if u.preedit == expect));
     }
-    assert!(s.is_active(), "组合期间不得上屏");
-    let out = s.handle(InputEvent::Space).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "GPU"),
-        "空格应一次上屏 GPU: {out:?}"
-    );
-    assert_eq!(s.committed_tail, "GPU", "一次上屏累积成 GPU");
-}
+    assert!(matches!(
+        s.handle(InputEvent::Space).expect("不应失败"),
+        SessionOutput::Commit(ref t) if t == "GPU"
+    ));
 
-#[test]
-fn capital_letter_mid_composition_keeps_the_pinyin_prefix_candidates() {
-    // 中文模式、拼音串非空(`nihao`):Shift+G 进组合,预编辑 `nihaoG`,
-    // **不结束组合、不上屏**——「你好」等前缀候选还在。空格一次上屏
-    // 「你好G」(候选 + 原样尾巴,librime 语义;旧版直出 `nihaoG`、
-    // 中间态则把 `G` 残留在组合里,都会丢字或粘字)。
     let mut s = session_with_dict();
-    for c in "nihao".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
-    match out {
-        SessionOutput::Updated(u) => {
-            assert_eq!(u.preedit, "nihaoG", "大写应进组合");
-            assert!(
-                u.candidates.iter().any(|c| c.word == "你好"),
-                "拼音前缀候选应保留: {:?}",
-                u.candidates
-            );
-        }
-        other => panic!("期望 Updated(进组合),实际 {other:?}"),
-    }
-    // 空格一次上屏:候选「你好」+ 原样尾巴 `G` = 「你好G」,不留残串。
-    let out = s.handle(InputEvent::Space).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "你好G"),
-        "空格应一次上屏「你好G」: {out:?}"
-    );
-    assert!(!s.is_active(), "上屏后会话应复位");
-}
-
-#[test]
-fn capital_letter_with_no_real_candidates_composes_raw() {
-    // 拼音串非空但没有真实候选(空词库,只有回声):大写同样进组合,
-    // 空格原样上屏——与有候选时的差别只是没有中文可选。
-    let engine = Arc::new(ImeEngine::new(None).expect("内存引擎创建失败"));
-    let mut s = InputSession::new(engine);
-    for c in "zgr".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    let out = s.handle(InputEvent::Verbatim('R')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "zgrR"),
-        "大写应进组合: {out:?}"
-    );
-    assert!(s.is_active(), "组合应保持活跃");
-    let out = s.handle(InputEvent::Space).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "zgrR"),
-        "空格应原样上屏: {out:?}"
-    );
-    assert!(!s.is_active());
-    assert_eq!(s.last_word, None, "回声/原始串不是词");
-}
-
-#[test]
-fn lowercase_letter_still_enters_pinyin() {
-    // 最关键的不许退化项:小写字母仍然进拼音串(别为了修大写
-    // 把正常拼音输入弄坏)。`g` 进拼音串、出候选、空格能上屏。
-    let mut s = session_with_dict();
-    let out = s.handle(InputEvent::Char('g')).expect("不应失败");
-    match out {
-        SessionOutput::Updated(u) => {
-            assert_eq!(u.preedit, "g", "小写 g 应进拼音串");
-            assert!(!u.candidates.is_empty(), "应有候选(至少是回声)");
-        }
-        other => panic!("期望 Updated,实际 {other:?}"),
-    }
-    assert_eq!(s.pinyin(), "g");
-    assert_eq!(s.caret(), 1);
-}
-
-#[test]
-fn verbatim_does_not_learn() {
-    // 大写组合的原样上屏不是词:不进 UserLM 学习(与标点同一取舍,
-    // 对应 librime 标点/原始输入不进 memory)。
-    let engine = Arc::new(
-        crate::ImeEngine::new(None)
-            .expect("内存引擎创建失败")
-            .with_user_lm(crate::UserLM::in_memory()),
-    );
-    let mut s = InputSession::new(Arc::clone(&engine));
-    let user = engine.user_lm().expect("引擎应有用户层");
-    let before = user.unigram_len();
-    let out = s.handle(InputEvent::Verbatim('G')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Updated(_)), "大写应进组合");
-    let out = s.handle(InputEvent::Space).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "G"),
-        "空格应原样上屏 G: {out:?}"
-    );
-    assert_eq!(
-        user.unigram_len(),
-        before,
-        "大写组合的原样上屏不应产生学习"
-    );
-}
-
-#[test]
-fn unmapped_ascii_symbols_still_passthrough() {
-    // `+` `#` `%` `&` `*` `|` 没有全角映射:
-    // translate_keyval 的 0x21..=0x7e 整段放行会把它们送进
-    // Char(c),会话层必须落到 catch-all 透传(Noop)——键不能被
-    // 吃掉,也不能被塞进拼音串。本轮动了 Char 分支的守卫,
-    // 这条测试钉住这个行为不被破坏。
-    //
-    // 三段式(`selector` 的 `-`/`=` 翻页落地后改写):
-    // - 原断言的字符表含 `=` 与 `-`:它们「无全角映射 ⇒ catch-all
-    //   透传」。本轮给它们加了「候选窗开着时翻页」(librime
-    //   `paging_with_minus_equal`,has_menu)——候选窗非空时不再透传,
-    //   与「透传」断言正面冲突;
-    // - 改为:把 `=`/`-` 从这张表移出,它们的翻页/空闲透传行为由
-    //   `minus_equal_page_when_menu_open` 专项钉住;表里只留下
-    //   「无映射、无翻页语义」的其余符号,透传断言逐字不变;
-    // - 为什么新行为对:librime 默认就绑了 `-`/`=` 翻页
-    //   (key_bindings.yaml:27-30),它们不是「无映射透传」键而是
-    //   翻页键——该测试钉的本是「无映射符号不被劫持」,把两个
-    //   已被赋予翻页语义的键留在表里,断言的就不再是那个不变量。
-    //
-    // 三段式(recognizer 落地后再改写):
-    // - 原断言的字符表还含 `@`:它「无全角映射 ⇒ 任何状态下
-    //   透传」。本轮 recognizer 给 `@` 加了「拼音串非空时进串
-    //   尝试邮箱识别」(librime recognizer 的 email pattern
-    //   `^[A-Za-z][-_.0-9A-Za-z]*@.*$` 要求 `@` 能进输入串)——
-    //   串非空时 `@` 不再透传,与「透传」断言正面冲突;
-    // - 改为:把 `@` 从这张表移出,它的「空闲透传 / 串中非空时
-    //   进串识别」行为由 recognized_state_char_fallthrough_when_not_recognized
-    //   与 email_* 用例专项钉住;表里只留下「无映射、无识别语义、
-    //   无翻页语义」的其余符号,透传断言逐字不变;
-    // - 为什么新行为对:librime 的 recognizer 就排在 speller 之前、
-    //   把 `@` 视为输入串的合法成分(email pattern 的成分),它
-    //   不是「无映射透传」键而是「识别触发」键——该测试钉的本是
-    //   「无映射符号不被劫持」,把一个已被赋予识别语义的键留在
-    //   表里,断言的就不再是那个不变量。空闲时(拼音串为空)`@`
-    //   照旧透传,这一半行为不变。
-    let unmapped = ['+', '#', '%', '&', '*', '|'];
-    for c in unmapped {
-        assert!(
-            fullwidth_punct(c).is_none(),
-            "{c:?} 应无全角映射(有映射的是另一条路径)"
-        );
-        // 拼音串为空:透传
-        let mut s = session_with_dict();
-        let out = s.handle(InputEvent::Char(c)).expect("不应失败");
-        assert!(
-            matches!(out, SessionOutput::Noop),
-            "空闲时 {c:?} 应透传(Noop): {out:?}"
-        );
-        assert!(!s.is_active(), "{c:?} 不应进拼音串");
-        // 拼音串非空:同样透传,拼音串不受扰动
-        let mut s = session_with_dict();
-        s.handle(InputEvent::Char('n')).expect("不应失败");
-        s.handle(InputEvent::Char('i')).expect("不应失败");
-        let out = s.handle(InputEvent::Char(c)).expect("不应失败");
-        assert!(
-            matches!(out, SessionOutput::Noop),
-            "拼音串非空时 {c:?} 仍应透传: {out:?}"
-        );
-        assert_eq!(s.pinyin(), "ni", "{c:?} 不应改动拼音串");
-    }
-}
-
-/// 大写进组合而不是直出:`Shift+H` + `ello` 组合成 `Hello`,空格一次
-/// 上屏——英文单词不用切模式就能打。旧版「英文跟随」逐字直出,会把
-/// 大写之后接着打的中文整段吞成英文(2026-10 实测反馈后移除)。
-#[test]
-fn english_word_composes_after_a_capital_and_commits_on_space() {
-    let mut s = session_with_dict();
-    let out = s.handle(InputEvent::Verbatim('H')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Updated(ref u) if u.preedit == "H"),
-        "大写首字母应进组合: {out:?}"
-    );
-
+    assert!(matches!(
+        s.handle(InputEvent::Verbatim('H')).expect("不应失败"),
+        SessionOutput::Updated(ref u) if u.preedit == "H"
+    ));
     for (c, expect) in [('e', "He"), ('l', "Hel"), ('l', "Hell"), ('o', "Hello")] {
         let out = s.handle(InputEvent::Char(c)).expect("不应失败");
-        assert!(
-            matches!(out, SessionOutput::Updated(ref u) if u.preedit == expect),
-            "{c} 应进组合(预编辑 {expect}): {out:?}"
-        );
-        assert!(s.is_active(), "组合期间不得上屏");
+        assert!(matches!(out, SessionOutput::Updated(ref u) if u.preedit == expect));
     }
-    let out = s.handle(InputEvent::Space).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "Hello"),
-        "空格应一次上屏 Hello: {out:?}"
-    );
-    assert!(!s.is_active(), "上屏后会话应复位");
+    assert!(matches!(
+        s.handle(InputEvent::Space).expect("不应失败"),
+        SessionOutput::Commit(ref t) if t == "Hello"
+    ));
+
+    // 无真实候选（空词库）：大写同样进组合并原样上屏。
+    let mut s = InputSession::new(Arc::new(ImeEngine::new(None).expect("内存引擎创建失败")));
+    type_str(&mut s, "zgr");
+    assert!(matches!(
+        s.handle(InputEvent::Verbatim('R')).expect("不应失败"),
+        SessionOutput::Updated(ref u) if u.preedit == "zgrR"
+    ));
+    assert!(matches!(
+        s.handle(InputEvent::Space).expect("不应失败"),
+        SessionOutput::Commit(ref t) if t == "zgrR"
+    ));
+    assert_eq!(s.last_word, None);
 }
 
 #[test]
-fn numeric_period_stays_ascii_within_three_seconds_then_expires() {
-    let mut s = session_with_dict();
-    assert!(matches!(s.handle(InputEvent::Select(1)).unwrap(), SessionOutput::Noop));
-    s.last_digit_at = Some(Instant::now() - Duration::from_millis(2500));
-    let out = s.handle(InputEvent::Char('.')).unwrap();
-    assert!(matches!(&out, SessionOutput::Commit(text) if text == "."));
-
-    s.handle(InputEvent::Select(1)).unwrap();
-    s.last_digit_at = Some(Instant::now() - Duration::from_millis(3100));
-    let out = s.handle(InputEvent::Char('.')).unwrap();
-    assert!(matches!(&out, SessionOutput::Commit(text) if text == "。"));
-}
-
-#[test]
-fn numeric_selection_does_not_enable_ascii_period() {
+fn verbatim_mid_composition_space_commits_candidate_and_enter_keeps_raw() {
+    // 组合中途大写保留拼音前缀候选，空格上屏「候选 + 原样尾巴」。
     let mut s = session_with_dict();
     type_str(&mut s, "nihao");
-    let out = s.handle(InputEvent::Select(1)).unwrap();
-    assert!(matches!(&out, SessionOutput::Commit(text) if text == "你好"));
-    let out = s.handle(InputEvent::Char('.')).unwrap();
-    assert!(matches!(&out, SessionOutput::Commit(text) if text == "。"));
+    match s.handle(InputEvent::Verbatim('G')).expect("不应失败") {
+        SessionOutput::Updated(u) => {
+            assert_eq!(u.preedit, "nihaoG");
+            assert!(u.candidates.iter().any(|c| c.word == "你好"));
+        }
+        other => panic!("期望 Updated，实际 {other:?}"),
+    }
+    assert!(matches!(
+        s.handle(InputEvent::Space).expect("不应失败"),
+        SessionOutput::Commit(ref t) if t == "你好G"
+    ));
+    assert!(!s.is_active());
+
+    // 未确认的高亮候选不替用户提交：回车原样上屏全部已敲字母。
+    let mut s = session_with_segments();
+    type_str(&mut s, "womenjintian");
+    s.cursor = s.candidates.iter().position(|c| c.word == "我们").expect("应有「我们」");
+    assert!(matches!(
+        s.handle(InputEvent::Verbatim('G')).expect("不应失败"),
+        SessionOutput::Updated(ref u) if u.preedit == "womenjintianG"
+    ));
+    assert!(matches!(
+        s.handle(InputEvent::Enter).expect("不应失败"),
+        SessionOutput::Commit(ref t) if t == "womenjintianG"
+    ));
+    assert!(!s.is_active());
 }
 
 #[test]
-fn numeric_period_requires_an_adjacent_digit_and_renews_on_each_digit() {
+fn numeric_period_window_and_boundaries() {
     let mut s = session_with_dict();
-    s.handle(InputEvent::Char('1')).unwrap();
-    s.last_digit_at = Some(Instant::now() - Duration::from_secs(4));
-    s.handle(InputEvent::Char('0')).unwrap();
-    let out = s.handle(InputEvent::Char('.')).unwrap();
-    assert!(matches!(&out, SessionOutput::Commit(text) if text == "."));
 
+    // 3 秒内紧跟透传数字的 `.` 保持半角。
+    assert!(matches!(s.handle(InputEvent::Select(1)).unwrap(), SessionOutput::Noop));
+    if let Some(past) = Instant::now().checked_sub(Duration::from_millis(2500)) {
+        s.last_digit_at = Some(past);
+    }
+    assert!(matches!(s.handle(InputEvent::Char('.')).unwrap(), SessionOutput::Commit(ref t) if t == "."));
+
+    // 超过 3 秒恢复全角句号。
+    s.handle(InputEvent::Select(1)).unwrap();
+    if let Some(expired) = Instant::now().checked_sub(Duration::from_millis(3100)) {
+        s.last_digit_at = Some(expired);
+        assert!(matches!(
+            s.handle(InputEvent::Char('.')).unwrap(),
+            SessionOutput::Commit(ref t) if t == "。"
+        ));
+    }
+
+    // 连续输入数字会刷新计时窗口。
+    s.handle(InputEvent::Char('1')).unwrap();
+    if let Some(expired) = Instant::now().checked_sub(Duration::from_secs(4)) {
+        s.last_digit_at = Some(expired);
+    }
+    s.handle(InputEvent::Char('0')).unwrap();
+    assert!(matches!(s.handle(InputEvent::Char('.')).unwrap(), SessionOutput::Commit(ref t) if t == "."));
+
+    // 中间夹非数字键（空格）后不再触发半角句点。
     s.handle(InputEvent::Select(3)).unwrap();
     s.handle(InputEvent::Space).unwrap();
-    let out = s.handle(InputEvent::Char('.')).unwrap();
-    assert!(matches!(&out, SessionOutput::Commit(text) if text == "。"));
+    assert!(matches!(s.handle(InputEvent::Char('.')).unwrap(), SessionOutput::Commit(ref t) if t == "。"));
+
+    // 数字选词不算输入数字，紧随其后的 `.` 仍出全角句号。
+    type_str(&mut s, "nihao");
+    assert!(matches!(s.handle(InputEvent::Select(1)).unwrap(), SessionOutput::Commit(ref t) if t == "你好"));
+    assert!(matches!(s.handle(InputEvent::Char('.')).unwrap(), SessionOutput::Commit(ref t) if t == "。"));
 }

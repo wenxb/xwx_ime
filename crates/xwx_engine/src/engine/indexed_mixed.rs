@@ -72,7 +72,6 @@ pub(super) fn merge_indexed_mixed(
     let log10_total = (total as f64).log10();
     let state = engine.lm.state_from_context(ctx);
     let scorer = engine.lm.prepare(&state);
-    let floor = engine.lm.floor_log10();
     // 去重:同一个 (词, 拼音) 已在表里就不再进第二份——兜底路/精确路与索引
     // 供给有重叠(如 `defe` 的「德风」来自补全边,而它同时是一条混合读法),
     // 重复项会白占候选位。
@@ -92,9 +91,12 @@ pub(super) fn merge_indexed_mixed(
             continue;
         }
         let mut c = src.clone();
-        let dict_logp = ((c.freq.max(1) as f64).log10() - log10_total) as f32;
-        let lm = scorer.score(&c.word);
-        c.score = dict_logp + (lm - floor) * engine.lm_weight;
+        let dict_logp = ImeEngine::word_prior_logp(c.freq, log10_total, total);
+        let lm_gain = scorer.score_gain(&c.word, WANXIANG_GAIN_SCALE);
+        c.score = dict_logp
+            + lm_gain * engine.lm_weight
+            + engine.internal_cohesion_bonus(&c.word, c.freq)
+            - ImeEngine::abbrev_syllable_penalty(pinyin, &c.pinyin);
         c.spelling = SpellingKind::Abbrev;
         c.covered = pinyin.len();
         ranked.push(c);

@@ -230,7 +230,7 @@ const MAX_TYPO_READINGS_PER_WINDOW: usize = 3;
 /// （见 `lookup_candidates`），所以它不影响「打对的输入逐字节不变」这条结构
 /// 保证；该值只决定**同为简拼的候选之间**谁排前（`womenjtqbj` 的
 /// 「我们今天去北京」vs 其他全首字母读法）。
-const ABBREV_PENALTY: f32 = 0.5;
+const ABBREV_PENALTY: f32 = 0.45;
 
 /// 尾音节补全候选**越过精确命中**所需的证据优势（log10）。
 ///
@@ -315,18 +315,36 @@ const MIN_ABBREV_INPUT_LEN: usize = 4;
 /// 字母，与纯缩写类的 ≥2 同一逻辑量级（⑤⑩⑮：通道删除的迁入前置之一）。
 const MIN_ABBREV_TAIL_CLASS_LEN: usize = 3;
 
-/// 整串读法一次交几条候选（n-best）。
-const ABBREV_CHAIN_NBEST: usize = 4;
+/// 整串读法一次最多输出的候选数（n-best）。
+const ABBREV_CHAIN_NBEST: usize = 8;
+/// 全拼整句 beam 中间层宽度（与最终输出条数解耦，避免第 5 名以后的常用首词被过早剪掉）。
+const SENTENCE_BEAM_WIDTH: usize = 10;
+/// 简拼整串 beam 中间层宽度。
+const ABBREV_BEAM_WIDTH: usize = 8;
 
-/// 整串读法里**每个词**的加性扣分（log10 量纲）。
-///
-/// 逐词 log 概率相加天生偏爱「多个超高频短词」的长链：实测 `womenjtqbj`
-/// 会解成「我满额那就同去吧唧」(`wo man e | na jiu | tong qu | ba ji`)，
-/// 因为 那就/同去 这类高频词的 log 概率比 我们今天/去北京 高，而词数多并不
-/// 被惩罚。真实句子的先验是「词数越多越不可能」，上游也用 entry credibility
-/// 表达同一件事（librime 的 `Grammar::Evaluate` 里 entry_weight 就是这条）。
-/// 1.2 ≈ 词数与词频之间的换算尺度，实测能把这批读法压回真实读法之后。
-const ABBREV_PER_WORD_PENALTY: f32 = 1.2;
+/// 万象 `.gram` 跨词搭配增益的标定系数（联合频次相对 `-11.61` 兜底线的折算，防止双词碎片压过真实整词）。
+const WANXIANG_GAIN_SCALE: f32 = 0.55;
+/// 全拼多词切分的词边界惩罚（log10 量纲，仅第 2 词起扣，保证单词与多词同刻度）。
+const WORD_BOUNDARY_PENALTY: f32 = 0.95;
+/// 简拼链的词边界惩罚（比全拼略高，抑制 2 词拼装压过真实 3~4 字整词）。
+const ABBREV_PER_WORD_PENALTY: f32 = 1.15;
+/// 简拼弧强行拆破合法完整音节（如 `shu`→`s+hu`、`gai`→`g+ai`、`hou`→`h+o`）的额外惩罚。
+const SYLLABLE_SPLIT_PENALTY: f32 = 1.8;
+/// 独立声母位高频单字简拼边（如 `womenq`/`qzheli`）的通道惩罚、最低词频与每位置保留上限。
+const SINGLE_CHAR_ABBREV_PENALTY: f32 = 0.20;
+const SINGLE_CHAR_ABBREV_MIN_FREQ: u64 = 50_000;
+const SINGLE_CHAR_ABBREV_TOP_K: usize = 12;
+/// 吞掉串尾/串首非叠字母单键的额外惩罚（防止把前简/后简声母当成误敲删除）。
+const TRAILING_GAP_EXTRA_PENALTY: f32 = 1.13;
+const LEADING_GAP_EXTRA_PENALTY: f32 = 1.50;
+/// 词内凝聚度权重（仅填充档多字词使用，避免与词典标定词频重复计分）。
+const INTERNAL_COLLOC_WEIGHT: f32 = 0.30;
+/// 无真实频次的填充档词条（`freq == FILLER_FREQ_TIER`）在真实大词库统一对数先验中的折减（log10）。
+const FILLER_PRIOR_PENALTY: f32 = 1.35;
+/// 用户自造词（`freq == 0` 格边）的先验等价词频，避免在带上下文折减时被填充词压死。
+const USER_COINED_PRIOR_FREQ: u64 = 500;
+/// 存在精确整串词时，尾补全留在 `band = 1` 所需的最低词频（低于此值的低频/填充补全退入 `band = 2`）。
+const COMPLETION_BAND_MIN_FREQ: u64 = 1_000;
 
 /// 词库源数据的**最低档词频**：`freq == 100` 是「未知/极低频」的约定值——
 /// 抽样 233,025 条里 164,371 条（≈70%）落在这一档，其余是 1/2/3/5…；
@@ -497,13 +515,9 @@ struct LatticeEdge {
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug)]
 struct BeamPath {
-    /// 累计分 = Σ(log10(freq/总词频) + lm_weight × log10 P(word | 路径上文))。
-    ///
-    /// 两项同量纲（都是对数概率，负值）才可加：词频项对数化后，短语
-    /// 不再被百万级原始词频淹没（第 4 步量级失衡修复的核心）。
     score: f32,
-    /// 路径已选词的顺序。
     words: Vec<WordSpot>,
+    used_edits: u8,
 }
 
 /// beam 搜索节点：arena 里的一条路径节点，`parent` 指向上一步。
@@ -515,8 +529,8 @@ struct BeamNode {
     /// 累计分 = Σ(log10(freq/总词频) + lm_weight × log10 P(word | 路径上文))
     ///          - Σ(各边 fuzzy_penalty)(模糊惩罚已揉进分数,非负)。
     score: f32,
-    /// 沿路径推进的 LM 状态。
-    state: LmState,
+    /// 沿路径推进的 LM 状态（延迟物化：仅进入下一位置扩展的 top-K 节点才构造）。
+    state: Option<LmState>,
     /// 本步选的格边（起点位置, 桶内下标）；根节点为 `None`。
     ///
     /// 边（词/拼音/词频）留在格子里，扩展时只记下标，不复制字符串——

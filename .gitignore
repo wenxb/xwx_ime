@@ -67,6 +67,3 @@ tools/spike_abbrev/*.bin
 AGENTS.md
 .dsh-worktrees/
 tools/typing_sim/data/
-# 误生成的 pnpm 空壳(无依赖,Rust 仓库没有 JS 工具链),保留本地不入库。
-package.json
-pnpm-lock.yaml

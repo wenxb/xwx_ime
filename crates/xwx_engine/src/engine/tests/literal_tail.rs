@@ -36,7 +36,7 @@ fn open_syllable_sentences_precede_nasal_guesses() {
 
 #[test]
 fn real_literal_tail_is_preserved_with_context_and_session() {
-    let Some(engine) = real_bilingual_engine() else { return };
+    let Some(engine) = fresh_real_bilingual_engine() else { return };
     for tail in ["", "输入法", "以后"] {
         let ctx = LmContext { tail, last_word: (!tail.is_empty()).then_some(tail) };
         let cands = engine.lookup_candidates("haihuika", &ctx).unwrap();

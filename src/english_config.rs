@@ -49,18 +49,18 @@ pub(crate) fn english_user_file_name() -> &'static str {
     }
 }
 
-/// 只读英文词库路径：显式 > 用户数据目录 > 系统数据目录。
-///
-/// 三者都不存在时返回**用户路径**，由调用方按「缺文件」处理并告警——
-/// 与中文词库 [`crate::lm_path::resolve_data_path`] 同一口径。
-pub(crate) fn resolve_english_dict_in(explicit: Option<&str>, xdg_data_home: &Path) -> PathBuf {
+/// 只读英文资源路径解析：显式 > 用户数据目录 > 系统数据目录；都不存在返回用户路径。
+fn resolve_readonly_in(
+    explicit: Option<&str>,
+    xdg_data_home: &Path,
+    system_dir: &Path,
+    file_name: &str,
+) -> PathBuf {
     if let Some(p) = explicit {
-        // 显式路径**原样尊重**，即使不存在也不偷偷换别的文件：否则用户
-        // 排查不出自己指定的路径为何没生效。
         return PathBuf::from(p);
     }
-    let user = xdg_data_home.join("xwx").join("english.bin");
-    let system = PathBuf::from(SYSTEM_DATA_DIR).join("english.bin");
+    let user = xdg_data_home.join("xwx").join(file_name);
+    let system = system_dir.join(file_name);
     if user.is_file() {
         user
     } else if system.is_file() {
@@ -70,20 +70,19 @@ pub(crate) fn resolve_english_dict_in(explicit: Option<&str>, xdg_data_home: &Pa
     }
 }
 
+/// 只读英文词库路径：显式 > 用户数据目录 > 系统数据目录。
+pub(crate) fn resolve_english_dict_in(explicit: Option<&str>, xdg_data_home: &Path) -> PathBuf {
+    resolve_readonly_in(explicit, xdg_data_home, Path::new(SYSTEM_DATA_DIR), "english.bin")
+}
+
 /// M2 静态二元数据路径：与词库同规则（用户目录优先，其次系统目录）。
 pub(crate) fn resolve_english_bigram_in(explicit: Option<&str>, xdg_data_home: &Path) -> PathBuf {
-    if let Some(p) = explicit {
-        return PathBuf::from(p);
-    }
-    let user = xdg_data_home.join("xwx").join("english_bigram.bin");
-    let system = PathBuf::from(SYSTEM_DATA_DIR).join("english_bigram.bin");
-    if user.is_file() {
-        user
-    } else if system.is_file() {
-        system
-    } else {
-        user
-    }
+    resolve_readonly_in(
+        explicit,
+        xdg_data_home,
+        Path::new(SYSTEM_DATA_DIR),
+        "english_bigram.bin",
+    )
 }
 
 /// **可写**英文用户文件路径：显式 > 用户数据目录。
@@ -164,83 +163,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bool_literals_are_recognized_case_insensitively() {
+    fn parse_bool_env_handles_literals_unset_and_invalid() {
         for v in ["1", "true", "TRUE", "On", "yes", " yes "] {
             assert_eq!(parse_bool_env(Some(v), false), (true, true), "{v}");
         }
         for v in ["0", "false", "FALSE", "Off", "no", " no "] {
             assert_eq!(parse_bool_env(Some(v), true), (false, true), "{v}");
         }
-    }
-
-    #[test]
-    fn unset_returns_default_and_counts_as_recognized() {
         assert_eq!(parse_bool_env(None, true), (true, true));
-        assert_eq!(parse_bool_env(None, false), (false, true), "未设置不是错误");
-    }
-
-    #[test]
-    fn unrecognized_value_falls_back_and_is_flagged() {
-        // `off` 是认得的；`of`/空串/路径字符串不是。不能把文件路径偷偷
-        // 解释成特殊文件模式——这正是「是否认得」要单独回报的原因。
+        assert_eq!(parse_bool_env(None, false), (false, true));
         for v in ["", "  ", "of", "2", "/tmp/english.bin", "enabled"] {
-            let (val, ok) = parse_bool_env(Some(v), false);
-            assert!(!ok, "{v:?} 不应被当成合法布尔值");
-            assert!(!val, "不认得时回落到缺省");
+            assert_eq!(parse_bool_env(Some(v), false), (false, false), "{v:?}");
         }
     }
 
     #[test]
-    fn explicit_dict_path_is_returned_verbatim_even_if_missing() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let got = resolve_english_dict_in(Some("/nonexistent/custom.bin"), tmp.path());
-        assert_eq!(got, PathBuf::from("/nonexistent/custom.bin"));
-    }
-
-    #[test]
-    fn dict_path_prefers_user_then_system() {
+    fn path_resolution_priority_is_hermetic() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let xdg = tmp.path().join("xdg");
-        let dir = xdg.join("xwx");
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        // 都不存在 ⇒ 用户路径
-        assert_eq!(resolve_english_dict_in(None, &xdg), dir.join("english.bin"));
-        // 用户文件存在 ⇒ 用户路径
-        std::fs::write(dir.join("english.bin"), b"x").expect("写");
-        assert_eq!(resolve_english_dict_in(None, &xdg), dir.join("english.bin"));
-    }
+        let user_dir = xdg.join("xwx");
+        let sys_dir = tmp.path().join("sys");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::create_dir_all(&sys_dir).unwrap();
 
-    #[test]
-    fn bigram_path_prefers_user_then_system() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let xdg = tmp.path().join("xdg");
-        std::fs::create_dir_all(xdg.join("xwx")).expect("mkdir");
+        for file in ["english.bin", "english_bigram.bin"] {
+            // 显式路径原样尊重（即使不存在）
+            assert_eq!(
+                resolve_readonly_in(Some("/nonexistent/custom.bin"), &xdg, &sys_dir, file),
+                PathBuf::from("/nonexistent/custom.bin")
+            );
+            // 都不存在 → 用户路径；仅系统存在 → 系统路径；用户也存在 → 用户优先
+            assert_eq!(resolve_readonly_in(None, &xdg, &sys_dir, file), user_dir.join(file));
+            std::fs::write(sys_dir.join(file), b"s").unwrap();
+            assert_eq!(resolve_readonly_in(None, &xdg, &sys_dir, file), sys_dir.join(file));
+            std::fs::write(user_dir.join(file), b"u").unwrap();
+            assert_eq!(resolve_readonly_in(None, &xdg, &sys_dir, file), user_dir.join(file));
+        }
+        // 可写用户路径只认显式或用户目录，永不回落系统目录
+        let writable = resolve_english_user_in(None, &xdg, "user_english.txt");
+        assert_eq!(writable, user_dir.join("user_english.txt"));
+        assert!(!writable.starts_with(SYSTEM_DATA_DIR));
         assert_eq!(
-            resolve_english_bigram_in(None, &xdg),
-            xdg.join("xwx").join("english_bigram.bin")
+            resolve_english_user_in(Some("/tmp/e.txt"), &xdg, "user_english.txt"),
+            PathBuf::from("/tmp/e.txt")
         );
-    }
-
-    #[test]
-    fn writable_user_path_never_falls_back_to_system_dir() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let xdg = tmp.path().join("xdg");
-        let got = resolve_english_user_in(None, &xdg, "user_english.txt");
-        assert_eq!(got, xdg.join("xwx").join("user_english.txt"));
-        assert!(
-            !got.starts_with(SYSTEM_DATA_DIR),
-            "可写路径绝不能落到只读系统目录"
-        );
-        let explicit = resolve_english_user_in(Some("/tmp/e.txt"), &xdg, "user_english.txt");
-        assert_eq!(explicit, PathBuf::from("/tmp/e.txt"));
     }
 
     #[test]
     fn english_user_file_name_is_profile_separated() {
         assert_ne!(
             xwx_engine::ENGLISH_USER_LM_FILE_NAME,
-            xwx_engine::ENGLISH_USER_LM_DEV_FILE_NAME,
-            "开发文件名与真实文件名不能相同，否则隔离形同虚设"
+            xwx_engine::ENGLISH_USER_LM_DEV_FILE_NAME
         );
         let expected = if cfg!(debug_assertions) {
             xwx_engine::ENGLISH_USER_LM_DEV_FILE_NAME
@@ -248,10 +221,6 @@ mod tests {
             xwx_engine::ENGLISH_USER_LM_FILE_NAME
         };
         assert_eq!(english_user_file_name(), expected);
-        assert_eq!(
-            expected.ends_with(".dev.txt"),
-            cfg!(debug_assertions),
-            "debug 构建必须用 .dev 文件名"
-        );
+        assert_eq!(expected.ends_with(".dev.txt"), cfg!(debug_assertions));
     }
 }

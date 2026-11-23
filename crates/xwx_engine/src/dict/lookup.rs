@@ -114,13 +114,16 @@ impl MmapDict {
         // 只查字面串会漏掉它——实测 `shh` 的候选里根本没有「时候」。
         let mut out: Vec<Candidate> = Vec::new();
         let mut index = crate::candidate_index::CandidateIndex::default();
-        for read in super::abbrev::abbrev_variant_reads(abbrev) {
-            // **折叠校验（⑤⑩⑥）**：「去 h」变体声称用户把 zh/ch/sh 当整体声母
-            // 敲，对应音节必须真的以该声母开头。不放行它，`sh` 会经折叠变体
-            // `s` 命中**一切 s 开头的音节**——三(san)/色(se)/死(si) 与 是(shi)
-            // 的 key 都是 `s`，`matched_len`（key 长度）分不出二者；只有这里
-            // （知道每个候选是哪个变体命中的）能校验，引擎侧放不了。
+        let mut reads = super::abbrev::abbrev_variant_reads(abbrev);
+        // 长变体（如 `gzh` 3 音节）优先于短折叠变体（`gz` 2 音节），且各变体独立收集后再按词频截断，
+        // 避免短折叠变体提前打满 500 条把精确多音节词条（如 `gzh`→公众号）整体饿死。
+        reads.sort_by(|a, b| b.query.len().cmp(&a.query.len()).then_with(|| a.query.cmp(&b.query)));
+        let letters = abbrev.len();
+        for read in reads {
             for c in idx.lookup_prefix(&read.query)? {
+                if c.pinyin.split(' ').count() > letters {
+                    continue;
+                }
                 if !read.digraphs.is_empty()
                     && !syllables_carry_digraphs(&c.pinyin, &read.digraphs)
                 {
@@ -130,18 +133,16 @@ impl MmapDict {
                     if c.freq > out[i].freq {
                         out[i] = c;
                     }
-                } else if out.len() < MAX_LOOKUP_RESULTS as usize {
+                } else {
                     index.insert(out.len(), &c);
                     out.push(c);
                 }
             }
         }
-        // **一字一字母**(2026-10-02):副索引按 key 前缀匹配,`wsm` 会连带命中
-        // key 更长的 `wsmy`(为什么要/为什么会……实测 356 条里 276 条如此),
-        // 候选比输入字母还多字,按用户口径排除。判据用候选自带的**全拼音节数**
-        // 而不是 key 长度:key 里 `zh`/`ch`/`sh` 可能是两个字母一个音节。
-        let letters = abbrev.len();
-        out.retain(|c| c.pinyin.split(' ').count() <= letters);
+        if out.len() > MAX_LOOKUP_RESULTS as usize {
+            out.sort_by(|a, b| b.freq.cmp(&a.freq).then_with(|| a.word.cmp(&b.word)));
+            out.truncate(MAX_LOOKUP_RESULTS as usize);
+        }
         Ok(out)
     }
 

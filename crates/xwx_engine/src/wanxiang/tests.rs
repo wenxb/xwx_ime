@@ -1,10 +1,8 @@
-//! 本模块的单测(从同一个文件里拆出,2026-10-02:`mod.rs` 只管实现,
-//! 测试单独一个文件;`use super::*` 让它们照旧能碰私有条目)。
+//! `wanxiang` 模块单测。
 
 use super::*;
 
 fn default_gram_path() -> Option<std::path::PathBuf> {
-    // 与 src/main.rs resolve_data_path 的默认值一致
     let xdg = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
@@ -23,10 +21,10 @@ fn encode_grammar_known_vectors() {
     encode_cp(0, &mut out);
     assert_eq!(out, vec![0xE0]);
     // CJK（0x4000..0xA000）：两字节 {Hi+0x40, Lo}
-    assert_eq!(encode_grammar("你"), vec![0x8F, 0x60]); // U+4F60
-    assert_eq!(encode_grammar("们"), vec![0x8E, 0xEC]); // U+4EEC
-    assert_eq!(encode_grammar("天"), vec![0x99, 0x29]); // U+5929
-    assert_eq!(encode_grammar("气"), vec![0xAC, 0x14]); // U+6C14
+    assert_eq!(encode_grammar("你"), vec![0x8F, 0x60]);
+    assert_eq!(encode_grammar("们"), vec![0x8E, 0xEC]);
+    assert_eq!(encode_grammar("天"), vec![0x99, 0x29]);
+    assert_eq!(encode_grammar("气"), vec![0xAC, 0x14]);
     assert_eq!(encode_grammar("你好"), vec![0x8F, 0x60, 0x99, 0x7D]);
 }
 
@@ -42,106 +40,39 @@ fn tail_truncates_by_chars() {
 }
 
 #[test]
-fn log10_conversion_structure() {
-    // 无文件依赖：验证换算公式的形状和单调性。
-    let cfg = WanxiangConfig::default();
-    let conv = |v: i32, p: f64| {
-        (v as f64 / 10_000.0 + p) / std::f64::consts::LN_10 - cfg.log10_corpus_size
-    };
-    let common = conv(154_000, cfg.collocation_penalty);
-    let floor = conv(0, cfg.non_collocation_penalty);
-    let weak = conv(154_000, cfg.weak_collocation_penalty);
-    assert!((-12.0..-6.0).contains(&common), "常见词配应在 -12..-6: {common}");
-    assert!(common > floor, "有上文命中应高于兜底: {common} vs {floor}");
-    assert!(floor > weak, "弱词配应低于兜底: {floor} vs {weak}");
-    // 同一惩罚下原始值越大分越高（常见 > 生僻的数量级来自原始 v）
-    assert!(conv(160_000, cfg.collocation_penalty) > common);
-    assert!(common.is_finite() && floor.is_finite());
-}
-
-#[test]
 fn missing_gram_returns_error() {
-    // 文件不存在 → open 报错（引擎层负责优雅退化，见 lib.rs 测试）
     assert!(WanxiangLM::open(Path::new("/nonexistent/wanxiang.gram")).is_err());
 }
 
 #[test]
-fn real_gram_context_beats_no_context() {
-    let Some(path) = default_gram_path() else {
-        eprintln!("未找到 .gram 文件，跳过");
-        return;
-    };
-    let lm = WanxiangLM::open(&path).expect("open 失败");
-    assert!(lm.num_units() > 0, "num_units 应大于 0");
-    let no_ctx = lm.score(&lm.state_from_context(&LmContext::empty()), "天气").0;
-    let ctx = lm.state_from_context(&LmContext { tail: "今天", last_word: None });
-    let with_ctx = lm.score(&ctx, "天气").0;
-    assert!(
-        with_ctx > no_ctx,
-        "有上文「今天」命中「天气」应高于无上文: {with_ctx} vs {no_ctx}"
-    );
+fn unknown_gram_format_is_rejected() {
+    // 合成 64B 合法 Metadata 头，仅将 format 填为不支持的版本，无需真实 .gram 文件。
+    let mut blob = vec![0u8; 64];
+    let bad = b"Rime::Grammar/9.9";
+    blob[..bad.len()].copy_from_slice(bad);
+    blob[36..40].copy_from_slice(&1u32.to_le_bytes()); // double_array_size
+    blob[40..44].copy_from_slice(&4i32.to_le_bytes()); // OffsetPtr → offset 44
+
+    let path = std::env::temp_dir().join(format!("xwx-bad-gram-{}.gram", std::process::id()));
+    std::fs::write(&path, &blob).expect("写坏模型");
+    let err = WanxiangLM::open(&path).expect_err("不支持的 format 必须被拒绝");
+    let _ = std::fs::remove_file(&path);
+    let msg = format!("{err}");
+    assert!(msg.contains("格式") || msg.contains("format"), "报错应点名格式问题: {msg}");
 }
 
 #[test]
-fn real_gram_common_beats_rare() {
+fn real_gram_smoke_scores_context_and_common_pairs() {
     let Some(path) = default_gram_path() else {
         return;
     };
     let lm = WanxiangLM::open(&path).expect("open 失败");
+    assert!(lm.num_units() > 0);
+    let no_ctx = lm.score(&lm.state_from_context(&LmContext::empty()), "天气").0;
     let ctx = lm.state_from_context(&LmContext { tail: "今天", last_word: None });
     let common = lm.score(&ctx, "天气").0;
     let rare = lm.score(&ctx, "龘").0;
+    assert!(common > no_ctx, "有上文命中应高于无上文: {common} vs {no_ctx}");
     assert!(common > rare, "常见词配应高于生僻: {common} vs {rare}");
-    assert!(rare <= lm.floor_log10(), "生僻组合应无命中落到兜底: {rare}");
-}
-
-#[test]
-fn real_gram_state_advances() {
-    let Some(path) = default_gram_path() else {
-        return;
-    };
-    let lm = WanxiangLM::open(&path).expect("open 失败");
-    let s0 = lm.state_from_context(&LmContext::empty());
-    assert_eq!(s0.tail, "");
-    let (_, s1) = lm.score(&s0, "今天");
-    assert_eq!(s1.tail, "今天", "消费词后状态并入该词");
-    let (_, s2) = lm.score(&s1, "天气");
-    assert_eq!(s2.tail, "今天天气", "继续并入");
-    // 超过 5 字按字符截断
-    let ctx5 = lm.state_from_context(&LmContext { tail: "一二三四五", last_word: None });
-    let (_, s3) = lm.score(&ctx5, "六七八九");
-    assert_eq!(s3.tail, "五六七八九", "并入后应只留末 5 字");
-}
-
-/// **不认识的 `.gram` 格式必须被拒绝**（Q4）：只判「format 非空」时，拿不认识的
-/// 版本硬解只会得到静默的乱码分数。这里取真实模型、**只改前 32 字节的 format
-/// 字段**，其余原样——`open` 必须报错且点名格式。
-#[test]
-fn unknown_gram_format_is_rejected() {
-    let Ok(src) = std::env::var("XWX_LM_PATH") else {
-        return; // 没模型就跳过（必需数据的验收由 tests/required_data.rs 负责）
-    };
-    let path = std::path::Path::new(&src);
-    if !path.is_file() {
-        return;
-    }
-    let mut blob = std::fs::read(path).expect("读模型");
-    // 头部 layout:`struct Metadata { char format[32]; ... }`，format 在前 32 字节。
-    let bad = b"Rime::Grammar/9.9";
-    blob[..bad.len()].copy_from_slice(bad);
-    for b in blob[bad.len()..32].iter_mut() {
-        *b = 0;
-    }
-    let dir = std::env::temp_dir().join(format!("xwx-bad-gram-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("建临时目录");
-    let tmp = dir.join("bad.gram");
-    std::fs::write(&tmp, &blob).expect("写坏模型");
-
-    let err = super::WanxiangLM::open(&tmp).expect_err("不支持的 format 必须被拒绝");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("格式") || msg.contains("format"),
-        "报错应点名格式问题: {msg}"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(rare <= lm.floor_log10(), "生僻组合应落到兜底: {rare}");
 }

@@ -61,7 +61,7 @@ impl ImeEngine {
             ctx,
             &literal,
             SpellingKind::Exact,
-            ABBREV_PER_WORD_PENALTY,
+            WORD_BOUNDARY_PENALTY,
         )? {
             if !sentences
                 .iter()

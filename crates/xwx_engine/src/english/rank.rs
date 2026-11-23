@@ -204,140 +204,91 @@ mod tests {
     }
 
     #[test]
-    fn conditional_base_matches_the_hand_computed_formula() {
-        // 手算例：z=4.72、c=7_852_480、T=2_718_215_040（真实 `hello looking` 量级）
-        //   p0 = 10^(4.72-9) = 5.2481e-5
-        //   p  = 0.8×0.00288772 + 0.2×5.2481e-5 = 0.00232067
-        //   lexical = 9 + log10(0.00232067) = 6.36578
+    fn conditional_base_formula_bounds_and_unseen_pairs() {
+        // 手算例：z=4.72, c=7_852_480, T=2_718_215_040 → lexical ≈ 6.36578
         let got = conditional_base(472, 7_852_480, 2_718_215_040).expect("有行");
         assert!((got - 6.36578).abs() < 1e-3, "lexical={got}");
-        // 同一对词把 T 放大十倍：lexical 必须**下降**（证据被稀释）
-        let thinner = conditional_base(472, 7_852_480, 27_182_150_400).expect("有行");
-        assert!(thinner < got, "T 变大必须让条件分下降: {thinner} vs {got}");
-    }
+        assert!(conditional_base(472, 7_852_480, 27_182_150_400).unwrap() < got);
 
-    #[test]
-    fn conditional_base_is_finite_for_unseen_pairs_and_when_there_is_no_row() {
-        // c = 0：不能是负无穷，只能是 z - log10(5) ≈ z - 0.699
-        let got = conditional_base(472, 0, 1_000_000).expect("有行");
-        assert!(got.is_finite());
-        assert!((got - (4.72 - 0.69897)).abs() < 1e-4, "未收录词对={got}");
-        // 没有这一行：退回 None（调用方用 z），不做指数/对数往返
+        // c = 0 有限（z - log10(5)）；无行（T = 0）退回 None
+        let unseen = conditional_base(472, 0, 1_000_000).expect("有行");
+        assert!(unseen.is_finite() && (unseen - (4.72 - 0.69897)).abs() < 1e-4);
         assert_eq!(conditional_base(472, 0, 0), None);
-    }
 
-    #[test]
-    fn conditional_base_never_exceeds_the_observed_distribution() {
-        // p ≤ 0.8 + 0.2×10^(z-9) ≤ 1（z ≤ 9 由格式保证），所以 lexical ≤ 9。
+        // 上界 ≤ 9：满分布 c=T,z=9 顶到 9；强成对证据压过更高裸词频
         for (q, c, t) in [(900u16, 1_000_000u64, 1_000_000u64), (900, 1, 1_000_000), (500, 999, 1_000)] {
-            let got = conditional_base(q, c, t).expect("有行");
-            assert!(got <= 9.0 + 1e-4, "lexical 不得超过 9: q={q} c={c} T={t} → {got}");
+            assert!(conditional_base(q, c, t).unwrap() <= 9.0 + 1e-4);
         }
-        // c = T 且 z = 9（p0 = 1）时正好顶到 9
-        let top = conditional_base(900, 1_000_000, 1_000_000).expect("有行");
-        assert!((top - 9.0).abs() < 1e-4, "{top}");
-        // c = T 但 z 较低：p = 0.8 + 0.2×10^-4，lexical ≈ 9 + log10(0.80002)
-        let mid = conditional_base(500, 1_000_000, 1_000_000).expect("有行");
-        assert!((mid - (9.0 + 0.80002f64.log10()) as f32).abs() < 1e-3, "{mid}");
-    }
-
-    #[test]
-    fn conditional_base_makes_a_strong_pair_beat_a_stronger_unpaired_word() {
-        // 这是 M2 存在的理由：`thank → you`(T 很大) 的 lexical 必须高过
-        // 一个静态频率更高、但没有该 prev 行的词退化成 z 的结果。
-        let paired = conditional_base(500, 733_376_704, 800_000_000).expect("有行");
-        let unpaired_z = 5.60f32; // 假设另一个词的 z 更高
-        assert!(
-            paired > unpaired_z,
-            "成对证据必须能压过更高的裸词频: {paired} vs {unpaired_z}"
-        );
+        assert!((conditional_base(900, 1_000_000, 1_000_000).unwrap() - 9.0).abs() < 1e-4);
+        let mid = conditional_base(500, 1_000_000, 1_000_000).unwrap();
+        assert!((mid - (9.0 + 0.80002f64.log10()) as f32).abs() < 1e-3);
+        assert!(conditional_base(500, 733_376_704, 800_000_000).unwrap() > 5.60);
     }
 
     #[test]
     fn zero_input_never_applies_a_length_penalty() {
-        // `for`（z=7.01、计数 124206912/T）与 `to`（z=7.43、计数 80852032/T）：
-        // 组合态里 3 字母的 for 会被 extra 惩罚，零输入预测**不能**。
         let mut f = hit("for", 701, EnglishMatchKind::NextWord, 0, 0);
         f.static_base = conditional_base(701, 124_206_912, 1_000_000_000);
         let mut t = hit("to", 743, EnglishMatchKind::NextWord, 0, 0);
         t.static_base = conditional_base(743, 80_852_032, 1_000_000_000);
-        assert!(
-            english_score(&f, InputLen::None) > english_score(&t, InputLen::None),
-            "零输入里计数更高的 for 必须排在 to 前面"
-        );
-        // 组合态（`Chars(0)` 的旧语义）下 extra = 整个词长：`for` 比 `to`
-        // 多一个字，领先幅度**正好**被削掉 0.15——这就是两种情形必须
-        // 分开的原因，也是「传 0 而不是 None」会踩的坑。
+        assert!(english_score(&f, InputLen::None) > english_score(&t, InputLen::None));
+        // InputLen::Chars(0) 会对多出 1 字节的 for 额外扣 0.15
         let margin_none = english_score(&f, InputLen::None) - english_score(&t, InputLen::None);
-        let margin_chars =
-            english_score(&f, InputLen::Chars(0)) - english_score(&t, InputLen::Chars(0));
-        assert!(
-            (margin_none - margin_chars - 0.15).abs() < 1e-5,
-            "长度惩罚必须恰好差 0.15：none={margin_none} chars={margin_chars}"
-        );
+        let margin_chars = english_score(&f, InputLen::Chars(0)) - english_score(&t, InputLen::Chars(0));
+        assert!((margin_none - margin_chars - 0.15).abs() < 1e-5);
     }
 
     #[test]
-    fn pyth_completion_matches_hand_computed_score() {
-        // 手算例（数据分册/引擎分册）：Python q=410，输入 pyth
-        // extra = 6 - 4 = 2，S = 4.10 - 0.15×2 = 3.80
-        let h = hit("python", 410, EnglishMatchKind::Completion, 0, 0);
-        assert!((english_score(&h, InputLen::Chars(4)) - 3.80).abs() < 1e-6);
-    }
-
-    #[test]
-    fn hello_exact_matches_hand_computed_score() {
-        // hello q=450，输入 hello，u=b=0 ⇒ S = 4.50
-        let h = hit("hello", 450, EnglishMatchKind::Exact, 0, 0);
-        assert!((english_score(&h, InputLen::Chars(5)) - 4.50).abs() < 1e-6);
-    }
-
-    #[test]
-    fn zero_counts_add_exactly_zero() {
+    fn linear_score_zero_counts_learning_monotonic_and_finite() {
         assert_eq!(unigram_gain(0), 0.0);
         assert_eq!(bigram_gain(0), 0.0);
-        let h = hit("hello", 450, EnglishMatchKind::Exact, 0, 0);
-        assert_eq!(english_score(&h, InputLen::Chars(5)), 4.5);
-    }
+        let py = hit("python", 410, EnglishMatchKind::Completion, 0, 0);
+        assert!((english_score(&py, InputLen::Chars(4)) - 3.80).abs() < 1e-6);
+        let hi = hit("hello", 450, EnglishMatchKind::Exact, 0, 0);
+        assert_eq!(english_score(&hi, InputLen::Chars(5)), 4.5);
 
-    #[test]
-    fn learning_a_word_never_lowers_its_score() {
         let mut prev = 0.0f32;
         for u in 0..50u32 {
-            let h = hit("hello", 450, EnglishMatchKind::Exact, u, u);
-            let s = english_score(&h, InputLen::Chars(5));
+            let s = english_score(&hit("hello", 450, EnglishMatchKind::Exact, u, u), InputLen::Chars(5));
             assert!(s >= prev, "u={u}: {s} < {prev}");
             prev = s;
+        }
+        for (q, u, b, len) in [(0u16, 0u32, 0u32, 48usize), (900, 1000, 1000, 1), (900, u32::MAX, u32::MAX, 0)] {
+            let h = hit("abcdefgh", q, EnglishMatchKind::Completion, u, b);
+            assert!(english_score(&h, InputLen::Chars(len)).is_finite());
         }
     }
 
     #[test]
-    fn exact_sort_key_beats_higher_score_completion() {
-        // C04：精确优先于更高频补全——`hello` 精确排在某高频补全之前。
-        let hits = vec![
-            hit("helloworld", 899, EnglishMatchKind::Completion, 0, 0),
-            hit("hello", 100, EnglishMatchKind::Exact, 0, 0),
-        ];
-        let out = rank_english(hits, InputLen::Chars(5), &EnglishContext::empty()).candidates(5);
+    fn exact_priority_tie_breaks_and_cap_eight() {
+        // 精确优先于更高频补全
+        let out = rank_english(
+            vec![
+                hit("helloworld", 899, EnglishMatchKind::Completion, 0, 0),
+                hit("hello", 100, EnglishMatchKind::Exact, 0, 0),
+            ],
+            InputLen::Chars(5),
+            &EnglishContext::empty(),
+        )
+        .candidates(5);
         assert_eq!(out[0].word, "hello");
         assert_eq!(out[0].english_key(), Some("hello"));
-    }
 
-    #[test]
-    fn ties_break_by_extra_then_zipf_then_key() {
-        // 同 S：短 extra 先；同 extra：zipf 高先；全同：key 字节序升序
-        let hits = vec![
-            hit("abcde", 500, EnglishMatchKind::Completion, 0, 0),
-            hit("abc", 500, EnglishMatchKind::Completion, 0, 0),
-            hit("abce", 500, EnglishMatchKind::Completion, 0, 0),
-        ];
-        let out = rank_english(hits, InputLen::Chars(3), &EnglishContext::empty()).candidates(3);
-        let keys: Vec<&str> = out.iter().filter_map(|c| c.english_key()).collect();
+        // 同 S：短 extra 先；同 extra：zipf 高先；全同：key 升序
+        let tied = rank_english(
+            vec![
+                hit("abcde", 500, EnglishMatchKind::Completion, 0, 0),
+                hit("abc", 500, EnglishMatchKind::Completion, 0, 0),
+                hit("abce", 500, EnglishMatchKind::Completion, 0, 0),
+            ],
+            InputLen::Chars(3),
+            &EnglishContext::empty(),
+        )
+        .candidates(3);
+        let keys: Vec<&str> = tied.iter().filter_map(|c| c.english_key()).collect();
         assert_eq!(keys, ["abc", "abce", "abcde"]);
-    }
 
-    #[test]
-    fn display_limit_is_eight_and_order_is_deterministic() {
+        // 截断上限 8 且确定性
         let hits: Vec<EnglishHit> = (0..40)
             .map(|i| {
                 let k = format!("w{}{}", (b'a' + (i / 26) as u8) as char, (b'a' + (i % 26) as u8) as char);
@@ -348,16 +299,5 @@ mod tests {
         let b = rank_english(hits, InputLen::Chars(1), &EnglishContext::empty());
         assert_eq!(a.hits.len(), ENGLISH_DISPLAY_LIMIT);
         assert_eq!(a.hits, b.hits);
-    }
-
-    #[test]
-    fn scores_are_always_finite() {
-        for (q, u, b, len) in [(0u16, 0u32, 0u32, 48usize), (900, 1000, 1000, 1), (900, u32::MAX, u32::MAX, 0)] {
-            let h = hit("abcdefgh", q, EnglishMatchKind::Completion, u, b);
-            assert!(
-                english_score(&h, InputLen::Chars(len)).is_finite(),
-                "q={q} u={u} b={b}"
-            );
-        }
     }
 }

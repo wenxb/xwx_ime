@@ -510,6 +510,25 @@ impl WanxiangLM {
     }
 
 
+    /// 仅推进字符窗口状态，不做 DAWG 查询（供 beam 剪枝后延迟物化状态）。
+    pub(crate) fn advance(&self, state: &WanxiangState, word: &str) -> WanxiangState {
+        let n = window_chars(&self.config);
+        let total = state.tail.chars().count() + word.chars().count();
+        let next_tail = if total <= n {
+            let mut s = String::with_capacity(state.tail.len() + word.len());
+            s.push_str(&state.tail);
+            s.push_str(word);
+            s
+        } else {
+            state
+                .tail
+                .chars()
+                .chain(word.chars())
+                .skip(total - n)
+                .collect()
+        };
+        WanxiangState { tail: next_tail }
+    }
 }
 
 /// 万象的上文状态：上文末 ≤5 字（空串 = 无上文）。
@@ -537,23 +556,7 @@ impl LanguageModel for WanxiangLM {
 
     fn score(&self, state: &Self::State, word: &str) -> (f32, Self::State) {
         let logp = self.score_word(&state.tail, word);
-        // 新状态 = 上文并入 word 后再截到末 ≤5 字（按 char，不按字节）。
-        let n = window_chars(&self.config);
-        let total = state.tail.chars().count() + word.chars().count();
-        let next_tail = if total <= n {
-            let mut s = String::with_capacity(state.tail.len() + word.len());
-            s.push_str(&state.tail);
-            s.push_str(word);
-            s
-        } else {
-            state
-                .tail
-                .chars()
-                .chain(word.chars())
-                .skip(total - n)
-                .collect()
-        };
-        (logp, WanxiangState { tail: next_tail })
+        (logp, self.advance(state, word))
     }
 
     /// 只要分数:不拼那个「上文并入 word 再截断」的新查询键(后向 DP 与

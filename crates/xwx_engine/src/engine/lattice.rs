@@ -62,11 +62,7 @@ impl ImeEngine {
         Some(out)
     }
 
-    /// 词串的合计分：`Σ log10(freq_i/总词频) + lm_weight × [floor + Σ(logp_i - floor)]`。
-    ///
-    /// **基线每候选只付一次**（`floor +`），不按词复付——按词复付正是
-    /// 「单词条目 vs 多词组合」score 不可比的原因（实测 `chuzaina`：
-    /// 组合「出+在+哪」因此低于单词条「杵在那」）。
+    /// 词串的统一口径得分（与 beam 解码同式：词先验 + 零中心 LM 增益 + 词内凝聚度 - 词边界罚分）。
     pub(super) fn chain_score(
         &self,
         ctx: &LmContext<'_>,
@@ -75,27 +71,26 @@ impl ImeEngine {
     ) -> f32 {
         let total_freq = self.dict.total_freq().unwrap_or(0);
         let log10_total = (total_freq as f64).log10();
-        let floor = self.lm.floor_log10();
         let mut st = self.lm.state_from_context(ctx);
-        let mut logp_sum = 0.0f32;
-        let mut evidence = 0.0f32;
+        let mut score = 0.0f32;
         let mut rest = word;
-        for (syllables, freq) in spans {
-            // 每个音节对应一个汉字：按音节数从候选词面切出这一段。
-            let mut cut = rest.char_indices().nth(*syllables).map(|(i, _)| i);
-            if cut.is_none() {
-                cut = Some(rest.len());
-            }
-            let (piece, tail) = rest.split_at(cut.unwrap_or(rest.len()));
+        for (idx, (syllables, freq)) in spans.iter().enumerate() {
+            let cut = rest
+                .char_indices()
+                .nth(*syllables)
+                .map_or(rest.len(), |(i, _)| i);
+            let (piece, tail) = rest.split_at(cut);
             rest = tail;
-            let (s, next) = self.lm.score(&st, piece);
-            evidence += s - floor;
-            st = next;
-            if total_freq > 0 {
-                logp_sum += ((*freq).max(1) as f64).log10() as f32 - log10_total as f32;
-            }
+            let lm_gain = self
+                .lm
+                .score_gain_with_context(&st, None, piece, WANXIANG_GAIN_SCALE);
+            st = self.lm.advance_state(&st, piece);
+            score += Self::word_prior_logp(*freq, log10_total, total_freq)
+                + lm_gain * self.lm_weight
+                + self.internal_cohesion_bonus(piece, *freq)
+                - if idx > 0 { WORD_BOUNDARY_PENALTY } else { 0.0 };
         }
-        logp_sum + (floor + evidence) * self.lm_weight
+        score
     }
 
     /// 窗口里是否含元音(`v` 记 ü,也算)。
@@ -320,8 +315,6 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
         let len = pinyin.len();
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
-        // LM 近似的起点状态:无上文。`ctx` 仅供首词(位置 0)精确打分,
-        // 后缀位置统一用 initial(见函数级注释的近似说明)。
         let _ = ctx;
         let initial = self.lm.initial_state();
 
@@ -378,15 +371,20 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
                             let s = if edge.gap {
                                 -edge.typo_penalty
                             } else {
-                                let logp = self.lm.score_only(&initial, &edge.word);
-                                let dict_logp = if total_freq > 0 {
-                                    ((edge.freq.max(1) as f64).log10() - log10_total) as f32
-                                } else {
-                                    0.0
-                                };
-                                dict_logp + logp * self.lm_weight
+                                let lm_gain = self.lm.score_gain_with_context(
+                                    &initial,
+                                    None,
+                                    &edge.word,
+                                    WANXIANG_GAIN_SCALE,
+                                );
+                                let dict_logp =
+                                    Self::word_prior_logp(edge.freq, log10_total, total_freq);
+                                dict_logp
+                                    + lm_gain * self.lm_weight
+                                    + self.internal_cohesion_bonus(&edge.word, edge.freq)
                                     - edge.fuzzy_penalty
                                     - edge.typo_penalty
+                                    - WORD_BOUNDARY_PENALTY
                             };
                             edge_scores[pos][slot] = s;
                             s

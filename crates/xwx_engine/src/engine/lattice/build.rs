@@ -177,13 +177,14 @@ impl ImeEngine {
                 if !seen_whole.insert(c.word.clone()) {
                     continue;
                 }
+                let abbrev_pen = Self::abbrev_syllable_penalty(pinyin, &c.pinyin);
                 lattice[0].push(LatticeEdge {
                     end: pinyin.len(),
                     word: c.word,
                     pinyin: c.pinyin,
                     freq: c.freq,
                     fuzzy_penalty: 0.0,
-                    typo_penalty: 0.0,
+                    typo_penalty: abbrev_pen,
                     edit_count: 0,
                     gap: false,
                     abbrev: true,
@@ -256,6 +257,9 @@ impl ImeEngine {
                     user_entries, bounds, tolerant, stalls, 0, 0.0, false, abbrev, false,
                     &mut key_buf, Some(0),
                 )?;
+                self.add_single_char_abbrev_edges(
+                    pinyin, start, bounds, &mut lattice, &mut cache,
+                )?;
                 // 这一步到达的位置 = 从 `start` 建出的所有边的终点，它们才需要
                 // 继续枚举（下一个词的起点）。
                 for edge in &lattice[start] {
@@ -281,4 +285,119 @@ impl ImeEngine {
         Ok(lattice)
     }
 
+    /// 独立声母位（句首单声母+多音节尾 `njintian`/`kzhege`/`qzheli`、串尾单声母 `womenq`/`jintq`
+    /// 或中段声母+完整音节 `womenxqu`/`womenqbeijing`）补充 top-K 高频单字简拼边，不消耗 DFS 预算。
+    fn add_single_char_abbrev_edges(
+        &self,
+        pinyin: &str,
+        start: usize,
+        bounds: Option<&[usize]>,
+        lattice: &mut [Vec<LatticeEdge>],
+        cache: &mut HashMap<String, Vec<Candidate>>,
+    ) -> Result<(), EngineError> {
+        let n = pinyin.len();
+        if start >= n {
+            return Ok(());
+        }
+        let max_len = (n - start).min(segmenter::MAX_SYLLABLE_LEN);
+        let graph = self.dict.syllable_graph();
+        let starts_full_syllable = |p: usize| {
+            let rem = (n - p).min(segmenter::MAX_SYLLABLE_LEN);
+            (2..=rem).any(|l| {
+                !Self::syllable_crosses_boundary(p, l, bounds)
+                    && segmenter::syllable_at(pinyin, p, l).is_some()
+            })
+        };
+        for len in [1usize, 2usize] {
+            let end = start + len;
+            if end > n || Self::syllable_crosses_boundary(start, len, bounds) {
+                continue;
+            }
+            if start == 0
+                && (end == n
+                    || self
+                        .segmenter
+                        .is_syllable(segmenter::canonical_syllable(&pinyin[end..])))
+            {
+                continue;
+            }
+            let slice = &pinyin[start..end];
+            if len == 1 {
+                if self.segmenter.is_syllable(slice) {
+                    continue;
+                }
+                let splits = (2..=max_len).any(|l| {
+                    !Self::syllable_crosses_boundary(start, l, bounds)
+                        && (segmenter::syllable_at(pinyin, start, l).is_some()
+                            || (l == 2 && matches!(&pinyin[start..start + 2], "zh" | "ch" | "sh")))
+                });
+                if splits {
+                    continue;
+                }
+            } else {
+                if !matches!(slice, "zh" | "ch" | "sh") {
+                    continue;
+                }
+                let splits = (3..=max_len).any(|l| {
+                    !Self::syllable_crosses_boundary(start, l, bounds)
+                        && segmenter::syllable_at(pinyin, start, l).is_some()
+                });
+                if splits {
+                    continue;
+                }
+            }
+            if end < n && !starts_full_syllable(end) {
+                continue;
+            }
+            let mut top: Vec<(u64, String, &'static str)> = Vec::new();
+            let extra_er = (len == 1 && slice == "r").then_some("er");
+            for &syl in segmenter::abbrev_syllables(slice).iter().chain(extra_er.iter()) {
+                if !cache.contains_key(syl) {
+                    let cands = if let Some(g) = graph {
+                        match g.child(0, syl)?.and_then(|c| g.node(c).ok()) {
+                            Some(info) if info.exact => {
+                                self.dict.lookup_at(syl, info.entry_off as usize)?
+                            }
+                            _ => Vec::new(),
+                        }
+                    } else {
+                        self.dict.lookup(syl)?
+                    };
+                    cache.insert(syl.to_owned(), cands);
+                }
+                for c in &cache[syl] {
+                    if c.freq < SINGLE_CHAR_ABBREV_MIN_FREQ {
+                        break;
+                    }
+                    top.push((c.freq, c.word.clone(), syl));
+                    if top.len() >= SINGLE_CHAR_ABBREV_TOP_K * 4 {
+                        break;
+                    }
+                }
+            }
+            top.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            let mut emitted = 0usize;
+            for (freq, word, syl) in top {
+                if emitted >= SINGLE_CHAR_ABBREV_TOP_K {
+                    break;
+                }
+                if lattice[start].iter().any(|e| e.end == end && e.word == word) {
+                    continue;
+                }
+                lattice[start].push(LatticeEdge {
+                    end,
+                    word,
+                    pinyin: syl.to_owned(),
+                    freq,
+                    fuzzy_penalty: 0.0,
+                    typo_penalty: ABBREV_PENALTY + SINGLE_CHAR_ABBREV_PENALTY,
+                    edit_count: 0,
+                    gap: false,
+                    abbrev: true,
+                });
+                emitted += 1;
+            }
+        }
+        Ok(())
+    }
 }

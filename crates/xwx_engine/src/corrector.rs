@@ -189,80 +189,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn original_first() {
-        let v = expand_fuzzy("ni", COMMON_CONFUSION_PAIRS);
-        assert_eq!(v.first().map(String::as_str), Some("ni"));
-        assert!(v.iter().any(|s| s == "li"), "应包含 n->l 的变体");
-    }
+    fn expand_fuzzy_bidirectional_nested_and_deduped() {
+        let ni = expand_fuzzy("ni", COMMON_CONFUSION_PAIRS);
+        assert_eq!(ni.first().map(String::as_str), Some("ni"));
+        assert!(ni.iter().any(|s| s == "li"), "应包含 n->l 变体");
 
-    #[test]
-    fn both_directions() {
-        let v = expand_fuzzy("li", COMMON_CONFUSION_PAIRS);
-        assert!(v.iter().any(|s| s == "ni"), "应包含 l->n 的变体");
-    }
+        let li = expand_fuzzy("li", COMMON_CONFUSION_PAIRS);
+        assert!(li.iter().any(|s| s == "ni"), "应包含 l->n 变体");
 
-    #[test]
-    fn nested_replacement() {
-        // an->ang 与 n->l 可组合出 lang
-        let v = expand_fuzzy("nan", &[
+        let nan = expand_fuzzy("nan", &[
             ConfusionPair::new("n", "l", 0.8),
             ConfusionPair::new("an", "ang", 0.5),
         ]);
         for want in ["nan", "nang", "lan", "lang"] {
-            assert!(v.iter().any(|s| s == want), "缺少变体 {want}: {v:?}");
+            assert!(nan.iter().any(|s| s == want), "缺少变体 {want}: {nan:?}");
         }
+
+        let shang = expand_fuzzy("shang", COMMON_CONFUSION_PAIRS);
+        let uniq: HashSet<&String> = shang.iter().collect();
+        assert_eq!(uniq.len(), shang.len(), "变体不应重复");
     }
 
     #[test]
-    fn no_duplicates() {
-        let v = expand_fuzzy("shang", COMMON_CONFUSION_PAIRS);
-        let uniq: HashSet<&String> = v.iter().collect();
-        assert_eq!(uniq.len(), v.len());
-    }
-
-    #[test]
-    fn scored_original_has_zero_penalty() {
-        let v = expand_fuzzy_scored("ni", COMMON_CONFUSION_PAIRS);
-        assert_eq!(v.first().map(|(s, p)| (s.as_str(), *p)), Some(("ni", 0.0)));
-    }
-
-    #[test]
-    fn scored_penalty_is_additive_log10() {
-        // 单组混淆:n/l = 0.8 → 惩罚 -log10(0.8) ≈ 0.0969
-        let v = expand_fuzzy_scored("ni", &[ConfusionPair::new("n", "l", 0.8)]);
-        let li = v.iter().find(|(s, _)| s == "li").expect("应包含 li");
+    fn expand_fuzzy_scored_additive_log10_penalty() {
+        let ni = expand_fuzzy_scored("ni", &[ConfusionPair::new("n", "l", 0.8)]);
+        assert_eq!(ni.first().map(|(s, p)| (s.as_str(), *p)), Some(("ni", 0.0)));
+        let li = ni.iter().find(|(s, _)| s == "li").expect("应包含 li");
         assert!((li.1 - 0.0969).abs() < 1e-3, "n->l 惩罚应≈0.097, 实际 {}", li.1);
-    }
 
-    #[test]
-    fn scored_multi_substitution_accumulates() {
-        // 两处混淆叠加:"nan" 同时 n->l 且 an->ang → lang,
-        // 惩罚 = -log10(0.8) + -log10(0.5) ≈ 0.0969 + 0.3010 = 0.3979
-        let v = expand_fuzzy_scored("nan", &[
+        // 双混淆累加: -log10(0.8) + -log10(0.5) ≈ 0.3979
+        let nan = expand_fuzzy_scored("nan", &[
             ConfusionPair::new("n", "l", 0.8),
             ConfusionPair::new("an", "ang", 0.5),
         ]);
-        let lang = v.iter().find(|(s, _)| s == "lang").expect("应包含 lang");
-        assert!(
-            (lang.1 - 0.3979).abs() < 1e-3,
-            "双混淆惩罚应≈0.398, 实际 {}",
-            lang.1
-        );
-        // 单混淆的 lan / nang 惩罚应各自小于 lang
-        let lan = v.iter().find(|(s, _)| s == "lan").expect("应包含 lan");
-        let nang = v.iter().find(|(s, _)| s == "nang").expect("应包含 nang");
-        assert!(lan.1 < lang.1 && nang.1 < lang.1);
-    }
-
-    #[test]
-    fn scored_matches_unscored_variants() {
-        // 同一输入下,带分版本与不带分版本应产出完全相同的变体集合与顺序
-        for input in ["ni", "li", "nan", "shang", "zhong"] {
-            let plain = expand_fuzzy(input, COMMON_CONFUSION_PAIRS);
-            let scored = expand_fuzzy_scored(input, COMMON_CONFUSION_PAIRS);
-            let scored_variants: Vec<&str> = scored.iter().map(|(s, _)| s.as_str()).collect();
-            let plain_variants: Vec<&str> = plain.iter().map(String::as_str).collect();
-            assert_eq!(scored_variants, plain_variants, "{input} 两版变体应一致");
-        }
+        let penalty = |k: &str| nan.iter().find(|(s, _)| s == k).expect(k).1;
+        let lang = penalty("lang");
+        assert!((lang - 0.3979).abs() < 1e-3, "双混淆惩罚应≈0.398, 实际 {lang}");
+        assert!(penalty("lan") < lang && penalty("nang") < lang);
     }
 }

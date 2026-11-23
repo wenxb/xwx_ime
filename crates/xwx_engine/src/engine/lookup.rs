@@ -215,7 +215,9 @@ impl ImeEngine {
             && bounds.is_none()
             && doubled.is_empty()
             && pinyin.len() <= 12;
-        if (!exactly_reachable && !spells_whole && !lattice_supplies_mixed)
+        if (!exactly_reachable
+            && !spells_whole
+            && (!lattice_supplies_mixed || super::rank::has_non_initial_letter(pinyin)))
             || reachable_mixed_fallback
         {
             super::indexed_mixed::merge_indexed_mixed(
@@ -227,7 +229,8 @@ impl ImeEngine {
                 reachable_mixed_fallback,
             )?;
         }
-        super::rank::sort_candidates_with_lm(pinyin, &mut ranked, false, &self.lm);
+        let abbrev_layer_unified = !reachable && self.dict.has_abbrev();
+        super::rank::sort_candidates_with_lm(pinyin, &mut ranked, abbrev_layer_unified, &self.lm);
         ranked.truncate(MAX_CANDIDATES);
 
         // **第二个门槛(分数)**:已经有一个「覆盖整串」的读法、而且它比容错
@@ -307,9 +310,11 @@ impl ImeEngine {
                     let fresh: Vec<Candidate> = tolerant
                         .into_iter()
                         .filter(|c| {
-                            !ranked
-                                .iter()
-                                .any(|e| e.word == c.word && e.pinyin == c.pinyin)
+                            !ranked.iter().any(|e| {
+                                e.word == c.word
+                                    && e.pinyin == c.pinyin
+                                    && (bounds.is_some() || e.covered >= c.covered)
+                            })
                         })
                         .collect();
                     if !fresh.is_empty() {
@@ -319,6 +324,7 @@ impl ImeEngine {
                             fresh,
                             SpellingKind::Fuzzy,
                             TOLERANT_QUOTA,
+                            abbrev_layer_unified,
                         );
                         ranked = merged;
                     }
@@ -382,13 +388,10 @@ impl ImeEngine {
             && (pure_abbrev
                 || leading_abbrev
                 || (tail_class_head_is_syllable
-                    && (!tolerant_explains || self.ends_one_letter_short(pinyin))
+                    && (!tolerant_explains
+                        || self.ends_one_letter_short(pinyin)
+                        || self.has_mid_abbrev_shape(pinyin))
                     && pinyin.len() >= MIN_ABBREV_TAIL_CLASS_LEN))
-            // **三类统一「只看精确路」**（⑤⑦⑥ 对前两类的裁决推广到第三类）：
-            // 容错/兜底层的整串读法（含回声）都没有否决权——`yiwanc` 的容错
-            // 猜读（c→g 替换出「以往」，covered=整串）曾把第三类的 `!covered_whole`
-            // 顶死，简拼格不建，`yi wan cheng` 混拼读法无供给。判据看容错合并前
-            // 的精确路，不看合并后的池子。
             && !exact_covers_whole;
         super::trace::note(|| {
             format!(
@@ -397,16 +400,6 @@ impl ImeEngine {
             )
         });
         if needs_abbrev {
-            // **层序破例**（⑤⑧②）：「整串命中词条的简拼读法」按精确档参与
-            // 层序比较。原只对纯缩写/开头缩写两类开；`yiwanc` 表明第三类有同一场
-            // 对局——容错猜读（c→g 出「以往」，Fuzzy 整串）按层序压住简拼整串
-            // 词条「已完成」，首屏看不到。三类统一放行；收编的防洪堤不变：
-            // 只收编**带真实词条证据**的整串读法（`entry_has_evidence`，
-            // freq=0 的拼装链候选不收编，`xaing` 的教训）。
-            // **第三类（残缺尾/容错类）的格化（⑤⑩⑬ W1c）**：needs_abbrev 里
-            // 既非纯缩写也非开头缩写的剩余类（首音节合法 + 尾部残缺，如
-            // meiy/beijin/nihaoq）也建条目边并按词条口径重算——旧通道删除
-            // （第 8 步）前的最后一块迁入。
             let third_abbrev = !pure_abbrev && !leading_abbrev;
             let grid_scope = demote_scope || third_abbrev;
             let abbrev_lattice = super::trace::timed("建简拼格", || {
@@ -418,13 +411,6 @@ impl ImeEngine {
                     abbrev_patterns,
                 )
             })?;
-            // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
-            // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），所以整串
-            // 读法必须自己重建（见 `best_chain_candidate`）。
-            // 「覆盖整串」要的是**整条路径**，不是某条边：格里的候选语义是
-            // 「第一个词 + 该词终点的最优补全分」（分段上屏的基础），整串读法
-            // 由带 LM 状态的 beam 自己重建（见 `best_chain_candidate`）。
-            // 重算证据按查询算一次，链候选与条目边共用。
             let ev = if super::DEMOTE_OLD_ABBREV_CHANNEL && grid_scope {
                 Some(self.entry_evidence(ctx)?)
             } else {
@@ -438,40 +424,29 @@ impl ImeEngine {
                 SpellingKind::Abbrev,
                 ABBREV_PER_WORD_PENALTY,
             )? {
-                // **整串命中词条 ⇒ 按词条口径重算分数**（与旧通道同式，见
-                // [`Self::fill_entry_evidence`]）：beam 的分是逐词先验 + 每弧惩罚的累加，
-                // 不反映词条词频（实测 `ztai`：状态 freq=503366 被「这台」64585 压到 #3）。
-                //
-                // **链候选与整串条目边都要过这一道**：原先只作用于链候选，于是同一片
-                // 整串条目读法里「走链进来的」按词条口径计分、「走条目边进来的」仍带
-                // beam 的逐弧累加分，两者差一个量级——`shh` 的 似乎(−4.18) 压过
-                // 时候(−16.79)，而时候的词频更高；`zmg` 的 怎么改 也因此从 45 名掉到
-                // 68 名（keystrokes −0.001，⑤⑩④ 当时按「放开线」处理）。合到一处后
-                // 两处同式，`zmg` 回到 45 名、keystrokes 回到 0.877（⑤⑩⑥）。
                 let rescored = ev.is_some() && c.covered >= pinyin.len();
                 self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
                 Self::push_rescored(&mut ranked, &mut push_index, c, rescored);
             }
-            // **词级简拼候选**：在简拼格上跑与精确路**同一个**抽取
-            // （位置 0 的边 + 该边终点的最优补全分，见 `lattice_candidates`），
-            // 得到的是 `去北京`/`我今天` 这类**单词条读法**，覆盖是「这个词
-            // 吃掉多少字母」（分段上屏要的语义），而不是整串。
-            // 旧通道（`lookup_abbrev`/`lookup_mixed`）仍照常给整串候选，
-            // 两者按 (word, pinyin) 去重后一起排序——这一步只**加**候选、
-            // 不改任何既有候选的分与序，回退点就是删掉这段。
             for mut c in self.lattice_candidates(pinyin, ctx, &abbrev_lattice)? {
-                c.spelling = SpellingKind::Abbrev;
-                // 整串条目边走进来的读法同样过「词条口径重算」这一道（同
-                // [`Self::fill_entry_evidence`]，见上）。这条边的 `covered` 就是
-                // 整串长度，故 `fill_entry_evidence` 内部的整串判据必定成立。
+                if c.covered < pinyin.len() {
+                    // 局部前缀只保留精确全拼前缀（如 `womenjt`→我们、`shuruf`→输入），
+                    // 或纯缩写/开头缩写且未拆破音节的真前缀；彻底拦截 `我哦/紫红/似乎/海鸥/口岸` 类伪双首字母污染。
+                    if c.spelling != SpellingKind::Exact {
+                        if !pure_abbrev && !leading_abbrev {
+                            continue;
+                        }
+                        if Self::prefix_splits_syllable(pinyin, c.covered) {
+                            continue;
+                        }
+                    }
+                } else {
+                    c.spelling = SpellingKind::Abbrev;
+                }
                 let rescored = ev.is_some() && c.covered >= pinyin.len();
                 self.fill_entry_evidence(pinyin, &mut c, ev.as_ref())?;
                 Self::push_rescored(&mut ranked, &mut push_index, c, rescored);
             }
-            // —— 阶段 B：简拼纠错（证据闸 + 渐进披露，见 `abbrev_correct.rs`）——
-            // 触发闸/分数闸/合并整体在 `try_abbrev_correction`（`inline(never)`
-            // 冷路径，见其文档：纠错代码体留在热函数里即便一次都不执行也会
-            // 改变 hot 布局，实测 zgr/zhongg 端到端慢 ~10%）。
             self.try_abbrev_correction(
                 pinyin,
                 ctx,
@@ -480,60 +455,41 @@ impl ImeEngine {
                 ev.as_ref(),
                 user_snapshot.as_ref(),
             )?;
-            {
-                {
-                    super::rank::sort_abbrev_candidates(pinyin, &mut ranked, &self.lm);
-                    ranked.truncate(MAX_CANDIDATES);
-                    // **整串块置顶**(上游同构,不是调参):libime 的 n-best
-                    // 整句候选占候选表 index 0..n-1,librime 的整句候选在它
-                    // 自己的 Translation 流内排首位。这里按结构把**整个整串
-                    // 块**提到最前,不能靠分数:整句/词条串分与只覆盖前缀的
-                    // 词不同量纲,比分数必然输给只覆盖前缀的词(实测「我们今天」
-                    // 压过「我们今天去北京」)。
-                    //
-                    // **不用阈值**:上游判的都是「覆盖」这个布尔事实(librime
-                    // 的 `seg.end == input.length()`、微软的「能否构成覆盖整串
-                    // 的完整解析」、libpinyin 无条件前插 n-best 句子),分数只
-                    // 决定谁排第几。这条分支本来就只在「精确格解不出整串」时
-                    // 才走到,不存在「本来有更好答案却被整句顶掉」的情况。
-                    //
-                    // 块置顶而不是只提第一个:`mqweizhi` 的「勉强为之」(#1)与
-                    // 「目前为止」(#76)同为整串简拼词条,中间隔着尾音节单字墙
-                    // (为/位/微…,容错空词弧读法),只提第一个会让第二个整串
-                    // 读法首屏看不到。稳定分区保持既有分数序;整串块本已连续
-                    // 的输入(zhongg/meiy/yiwanc 等冻结集全体)此操作是 no-op。
-                    super::trace::note(|| {
-                        let t: Vec<String> = ranked
-                            .iter()
-                            .take(5)
-                            .map(|c| format!("{}|freq={}|cov={}|{:?}|{:.4}", c.word, c.freq, c.covered, c.spelling, c.score))
-                            .collect();
-                        format!("简拼段前五: {}", t.join("  "))
-                    });
-                    // 稳定分区:整串候选(covered=整串)整体前移,块内次序由上面的排序决定。
-                    let (whole, rest): (Vec<Candidate>, Vec<Candidate>) =
-                        ranked.drain(..).partition(|c| c.covered >= pinyin.len());
-                    ranked = whole;
-                    ranked.extend(rest);
-                }
-            }
+            super::rank::sort_abbrev_candidates(pinyin, &mut ranked, &self.lm);
+            ranked = super::recall::fold_display_candidates(ranked);
+            ranked.truncate(MAX_CANDIDATES);
+            super::trace::note(|| {
+                let t: Vec<String> = ranked
+                    .iter()
+                    .take(5)
+                    .map(|c| {
+                        format!(
+                            "{}|freq={}|cov={}|{:?}|{:.4}",
+                            c.word, c.freq, c.covered, c.spelling, c.score
+                        )
+                    })
+                    .collect();
+                format!("简拼段前五: {}", t.join("  "))
+            });
+            // 整串候选（含 `covered == 0` 的兜底整串展开）整体前移，其后紧跟真实前缀词。
+            let (whole, rest): (Vec<Candidate>, Vec<Candidate>) = ranked
+                .drain(..)
+                .partition(|c| c.covered == 0 || c.covered >= pinyin.len());
+            ranked = whole;
+            ranked.extend(rest);
         }
 
-        // **整句候选（全拼）**：上游 `script_translator.cc:497-508` 的判据——
-        // 「≥2 个音节 **且没有恰好覆盖整串的词条**」就生成整句，再由
-        // `PrepareCandidate`（同文件 :524-531）把它放进候选流首位。
-        //
-        // 这里用同一套带状态 beam 在**精确格**上取整串最优路径：`daishixian`
-        // 这类「要多条词条拼起来才成句」的输入，旧实现首屏只有
-        // 「带/代/待/呆/袋/戴」——整串读法根本没被产出，不是排序问题。
-        //
-        // 只在**精确格能覆盖整串**且当前没有整串候选时做：打一半的输入不走
-        // 这里（简拼/容错各有自己的门槛），打对的短词也不受影响（那本来就是
-        // 一条词条覆盖整串，`has_reliable_phrase` 为真）。
-        if reachable && pinyin.len() >= MIN_ABBREV_INPUT_LEN {
-            // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
+        if (reachable || (tolerant_explains && !needs_abbrev))
+            && pinyin.len() >= MIN_ABBREV_INPUT_LEN
+        {
             let sentence_lattice = tolerant_lattice_opt.as_ref().unwrap_or(&lattice);
-            self.append_and_promote_sentence(pinyin, ctx, sentence_lattice, &mut ranked)?;
+            self.append_and_promote_sentence(
+                pinyin,
+                ctx,
+                sentence_lattice,
+                !doubled.is_empty(),
+                &mut ranked,
+            )?;
         }
 
         // **剩余串的出路(第 ③ 期)**:候选里没有任何条目覆盖整串 ⇒ 这一串
@@ -591,5 +547,23 @@ impl ImeEngine {
             )
         });
         Ok(super::recall::fold_display_candidates(ranked))
+    }
+
+    /// 局部前缀端点 `cov` 是否落在一个完整音节内部（如 `zhonggr` 在 `cov=2` 处切破 `zhong`）。
+    fn prefix_splits_syllable(pinyin: &str, cov: usize) -> bool {
+        let n = pinyin.len();
+        if cov == 0 || cov >= n {
+            return false;
+        }
+        let s_min = cov.saturating_sub(segmenter::MAX_SYLLABLE_LEN - 1);
+        for s in s_min..cov {
+            let e_max = (s + segmenter::MAX_SYLLABLE_LEN).min(n);
+            for e in (cov + 1)..=e_max {
+                if segmenter::syllable_at(pinyin, s, e - s).is_some() {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }

@@ -241,7 +241,6 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// 在临时目录里搭一个 `$XDG_DATA_HOME/xwx/`,返回 TempDir 保活。
     fn setup_xdg(files: &[&str]) -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let xdg = tmp.path().join("xdg");
@@ -254,42 +253,78 @@ mod tests {
     }
 
     #[test]
-    fn explicit_path_returned_verbatim_even_if_missing() {
-        let (_tmp, xdg) = setup_xdg(&["wanxiang-lts-zh-hans.gram", "bigram.txt"]);
-        let choice = resolve_lm_path_in(Some("/nonexistent/custom.gram"), &xdg);
-        assert_eq!(choice.path, PathBuf::from("/nonexistent/custom.gram"));
-        assert_eq!(choice.source, LmSource::Explicit);
+    fn resolve_lm_path_priority_and_gram_selection() {
+        // 显式路径即使不存在也原样尊重
+        let (_t0, xdg0) = setup_xdg(&["wanxiang-lts-zh-hans.gram", "bigram.txt"]);
+        let exp = resolve_lm_path_in(Some("/nonexistent/custom.gram"), &xdg0);
+        assert_eq!(exp.path, PathBuf::from("/nonexistent/custom.gram"));
+        assert_eq!(exp.source, LmSource::Explicit);
+
+        // 优先简体万象 > 任意 .gram > 多个 .gram 按字典序首位
+        for (files, want) in [
+            (
+                &["wanxiang-lts-zh-hans.gram", "wanxiang-lts-zh-hant.gram", "bigram.txt"][..],
+                "wanxiang-lts-zh-hans.gram",
+            ),
+            (&["wanxiang-lts-zh-hant.gram", "bigram.txt"][..], "wanxiang-lts-zh-hant.gram"),
+            (
+                &["zzz-custom.gram", "aaa-custom.gram", "mmm-custom.gram", "bigram.txt"][..],
+                "aaa-custom.gram",
+            ),
+        ] {
+            let (_t, xdg) = setup_xdg(files);
+            let choice = resolve_lm_path_in(None, &xdg);
+            assert_eq!(choice.path, xdg.join("xwx").join(want));
+            assert_eq!(choice.source, LmSource::ProbedGram);
+        }
     }
 
     #[test]
-    fn unset_prefers_wanxiang_hans_gram() {
-        let (_tmp, xdg) = setup_xdg(&[
-            "wanxiang-lts-zh-hans.gram",
-            "wanxiang-lts-zh-hant.gram",
-            "bigram.txt",
-        ]);
-        let choice = resolve_lm_path_in(None, &xdg);
-        assert_eq!(
-            choice.path,
-            xdg.join("xwx").join("wanxiang-lts-zh-hans.gram")
-        );
-        assert_eq!(choice.source, LmSource::ProbedGram);
+    fn resolve_lm_path_fallbacks_system_dir_and_ignores_subdirs() {
+        // 无 .gram / 空目录 / xwx 目录不存在 / 仅子目录有 .gram → 回落 bigram.txt
+        let (_t1, xdg1) = setup_xdg(&["bigram.txt", "dict.bin"]);
+        let sub = xdg1.join("xwx").join("subdir");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("nested.gram"), b"").unwrap();
+        let (_t2, xdg2) = setup_xdg(&[]);
+        let t3 = tempfile::tempdir().unwrap();
+        let xdg3 = t3.path().join("xdg");
+        for xdg in [&xdg1, &xdg2, &xdg3] {
+            let c = resolve_lm_path_in(None, xdg);
+            assert_eq!(c.path, xdg.join("xwx").join("bigram.txt"));
+            assert_eq!(c.source, LmSource::FallbackBigramTxt);
+        }
+
+        // system_dir 回退：用户目录空时命中系统目录；用户目录有则优先用户目录
+        let sys_tmp = tempfile::tempdir().unwrap();
+        let sys_gram = sys_tmp.path().join("wanxiang-lts-zh-hans.gram");
+        fs::write(&sys_gram, b"").unwrap();
+        let c = resolve_lm_path_with_system(None, &xdg2, Some(sys_tmp.path()));
+        assert_eq!(c.path, sys_gram);
+        assert_eq!(c.source, LmSource::ProbedGram);
+
+        let user_gram = xdg2.join("xwx").join("custom.gram");
+        fs::write(&user_gram, b"").unwrap();
+        let c = resolve_lm_path_with_system(None, &xdg2, Some(sys_tmp.path()));
+        assert_eq!(c.path, user_gram);
+        assert_eq!(c.source, LmSource::ProbedGram);
+    }
+
+    #[test]
+    fn pick_existing_prefers_user_then_system_then_user_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user.bin");
+        let system = tmp.path().join("system.bin");
+        assert_eq!(pick_existing(user.clone(), system.clone()), user);
+        fs::write(&system, b"x").unwrap();
+        assert_eq!(pick_existing(user.clone(), system.clone()), system);
+        fs::write(&user, b"x").unwrap();
+        assert_eq!(pick_existing(user.clone(), system.clone()), user);
     }
 
     #[test]
     fn debug_builds_default_to_the_dev_user_model_file() {
-        // 开发期隔离:debug 构建的**默认**用户模型文件名必须是 `.dev` 那个,
-        // release 必须是真实文件名——否则 `just dev` 打的字会混进真实用户
-        // 模型(计数/造词/屏蔽表三段同文件,污染后很难清)。
-        //
-        // 一条测试在同一个 profile 下只能验自己那一半,所以两边都断:
-        // 当前 profile 的期望值 + 「两个常量必须不同」(防止有人把它们改成
-        // 同一个名字,让整个隔离静默失效)。
-        assert_ne!(
-            xwx_engine::USER_LM_DEV_FILE_NAME,
-            xwx_engine::USER_LM_FILE_NAME,
-            "开发文件名与真实文件名不能相同,否则隔离形同虚设"
-        );
+        assert_ne!(xwx_engine::USER_LM_DEV_FILE_NAME, xwx_engine::USER_LM_FILE_NAME);
         let expected = if cfg!(debug_assertions) {
             xwx_engine::USER_LM_DEV_FILE_NAME
         } else {
@@ -297,94 +332,5 @@ mod tests {
         };
         assert_eq!(user_lm_file_name(), expected);
         assert_eq!(expected.ends_with(".dev.txt"), cfg!(debug_assertions));
-    }
-
-    #[test]
-    fn unset_falls_back_to_any_gram_when_no_hans() {
-        let (_tmp, xdg) = setup_xdg(&["wanxiang-lts-zh-hant.gram", "bigram.txt"]);
-        let choice = resolve_lm_path_in(None, &xdg);
-        assert_eq!(
-            choice.path,
-            xdg.join("xwx").join("wanxiang-lts-zh-hant.gram")
-        );
-        assert_eq!(choice.source, LmSource::ProbedGram);
-    }
-
-    #[test]
-    fn unset_multiple_grams_picks_first_by_name_deterministically() {
-        // 多个 .gram 时按文件名字典序取第一个,不依赖目录遍历顺序
-        let (_tmp, xdg) = setup_xdg(&[
-            "zzz-custom.gram",
-            "aaa-custom.gram",
-            "mmm-custom.gram",
-            "bigram.txt",
-        ]);
-        let choice = resolve_lm_path_in(None, &xdg);
-        assert_eq!(choice.path, xdg.join("xwx").join("aaa-custom.gram"));
-        assert_eq!(choice.source, LmSource::ProbedGram);
-    }
-
-    #[test]
-    fn unset_no_gram_falls_back_to_bigram_txt() {
-        let (_tmp, xdg) = setup_xdg(&["bigram.txt", "dict.bin"]);
-        let choice = resolve_lm_path_in(None, &xdg);
-        assert_eq!(choice.path, xdg.join("xwx").join("bigram.txt"));
-        assert_eq!(choice.source, LmSource::FallbackBigramTxt);
-    }
-
-    #[test]
-    fn unset_empty_dir_still_returns_bigram_txt_path() {
-        // 目录是空的(或不存在)时也返回 bigram.txt 路径,
-        // 由调用方的 is_file() 检查走"未找到"分支
-        let (_tmp, xdg) = setup_xdg(&[]);
-        let choice = resolve_lm_path_in(None, &xdg);
-        assert_eq!(choice.path, xdg.join("xwx").join("bigram.txt"));
-        assert_eq!(choice.source, LmSource::FallbackBigramTxt);
-    }
-
-    #[test]
-    fn unset_missing_xwx_dir_falls_back_to_bigram_txt() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let xdg = tmp.path().join("xdg"); // xdg/xwx 不存在
-        let choice = resolve_lm_path_in(None, &xdg);
-        assert_eq!(choice.path, xdg.join("xwx").join("bigram.txt"));
-        assert_eq!(choice.source, LmSource::FallbackBigramTxt);
-    }
-
-    #[test]
-    fn gram_files_in_subdirs_are_ignored() {
-        // 只扫描顶层,不递归子目录
-        let (_tmp, xdg) = setup_xdg(&["bigram.txt"]);
-        let sub = xdg.join("xwx").join("subdir");
-        fs::create_dir_all(&sub).expect("mkdir sub");
-        fs::write(sub.join("nested.gram"), b"").expect("touch nested");
-        let choice = resolve_lm_path_in(None, &xdg);
-        assert_eq!(choice.path, xdg.join("xwx").join("bigram.txt"));
-        assert_eq!(choice.source, LmSource::FallbackBigramTxt);
-    }
-}
-
-#[cfg(test)]
-mod fallback_tests {
-    use super::*;
-
-    /// 用户目录里有就用用户的；没有就用系统的；都没有仍返回用户路径
-    /// （保持调用方原有的「缺文件→告警」路径）。
-    #[test]
-    fn data_path_prefers_user_then_system_then_user_default() {
-        let dir = std::env::temp_dir().join(format!("xwx-lmpath-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("建临时目录");
-        let user = dir.join("user.bin");
-        let system = dir.join("system.bin");
-
-        // 都没有 ⇒ 返回用户路径
-        assert_eq!(pick_existing(user.clone(), system.clone()), user);
-        // 只有系统 ⇒ 返回系统
-        std::fs::write(&system, b"x").expect("写");
-        assert_eq!(pick_existing(user.clone(), system.clone()), system);
-        // 用户也有 ⇒ 用户优先
-        std::fs::write(&user, b"x").expect("写");
-        assert_eq!(pick_existing(user.clone(), system.clone()), user);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

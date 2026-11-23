@@ -246,40 +246,18 @@ fn syl_matches_cons(syl: &str, c: Cons) -> bool {
 }
 
 #[cfg(test)]
-fn cons_ok(pinyin: &str, cons: &[Cons]) -> bool {
-    let mut n = 0usize;
-    for syl in pinyin.split(' ') {
-        let Some(&c) = cons.get(n) else {
-            return false;
-        };
-        n += 1;
-        if !syl_matches_cons(syl, c) {
-            return false;
-        }
-    }
-    n == cons.len()
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn cons_check_rejects_wrong_syllable_count() {
-        // 音节数必须等于片段数：多一位/少一位都不算匹配。
-        assert!(!cons_ok("dong shi zhang", &[Cons::Init, Cons::Init]));
-        assert!(!cons_ok("dong shi", &[Cons::Init, Cons::Init, Cons::Init]));
-        assert!(cons_ok("dong shi zhang", &[Cons::Init, Cons::Init, Cons::Init]));
-    }
-
-    #[test]
-    fn cons_check_digraph_and_full() {
-        assert!(cons_ok("dong shi zhang", &[Cons::Init, Cons::Digraph(b's'), Cons::Full("zhang")]));
-        // 折叠写法不该被双声母约束放行。
-        assert!(!cons_ok("dong si zhang", &[Cons::Init, Cons::Digraph(b's'), Cons::Full("zhang")]));
-        // 完整音节位要求逐字节相等。
-        assert!(!cons_ok("dong shi zhang", &[Cons::Init, Cons::Init, Cons::Full("zhan")]));
+    fn syl_matches_cons_checks_init_digraph_and_full() {
+        assert!(syl_matches_cons("dong", Cons::Init));
+        assert!(syl_matches_cons("shi", Cons::Digraph(b's')));
+        assert!(!syl_matches_cons("si", Cons::Digraph(b's')));
+        assert!(!syl_matches_cons("s", Cons::Digraph(b's')));
+        assert!(syl_matches_cons("zhang", Cons::Full("zhang")));
+        assert!(!syl_matches_cons("zhan", Cons::Full("zhang")));
         // üe 归一化（`lue`/`lve`）走共享匹配口径。
-        assert!(cons_ok("nue", &[Cons::Full("nve")]));
+        assert!(syl_matches_cons("nue", Cons::Full("nve")));
     }
 }

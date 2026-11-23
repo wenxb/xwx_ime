@@ -3,9 +3,12 @@
 //! 这里**不验证构建端**（那是 `scripts/tests/test_english*.py` 的事），
 //! 只验证「读出来的东西与一个独立全扫描实现一致」以及「坏文件全部报错」。
 
+use super::bigram::EnglishBigram;
 use super::dict::{static_score_centi, EnglishDict};
-use super::format::{HEADER_LEN, PREFIX_RECORD_LEN, PREFIX_TOP_LIMIT, WORD_RECORD_LEN};
-use super::synth::{alpha_key, build, patch_u16, patch_u32, patch_u64, W};
+use super::format::{EnglishError, HEADER_LEN, PREFIX_RECORD_LEN, PREFIX_TOP_LIMIT, WORD_RECORD_LEN};
+use super::synth::{
+    alpha_key, build, build_bigram, patch_u16, patch_u32, patch_u64, BigramEdgeSpec, W,
+};
 
 /// 独立 oracle：直接对词表做一次全扫描，不复用 reader 的任何排序代码。
 fn oracle_prefix_top(words: &[W], prefix: &str) -> Vec<(i32, String)> {
@@ -268,4 +271,86 @@ fn static_score_centi_never_underflows() {
     assert_eq!(static_score_centi(450, 5, 5), 450, "hello 精确补全无 extra");
     assert_eq!(static_score_centi(0, 48, 1), -705, "极短 q 也不回绕");
     assert_eq!(static_score_centi(900, 1, 48), 900, "前缀比词长时不加分");
+}
+
+const BIGRAM_EDGES: &[BigramEdgeSpec] = &[
+    BigramEdgeSpec { prev: "developer", next: "development", count: 90_000 },
+    BigramEdgeSpec { prev: "hello", next: "world", count: 7_852_585 },
+    BigramEdgeSpec { prev: "hello", next: "there", count: 120_000 },
+];
+
+fn corrupt_bigram(edit: impl FnOnce(&mut Vec<u8>)) -> EnglishError {
+    let mut bytes = build_bigram(BIGRAM_EDGES);
+    edit(&mut bytes);
+    EnglishBigram::from_bytes(bytes).expect_err("坏文件必须被拒绝")
+}
+
+#[test]
+fn bigram_corrupt_header_files_are_rejected_with_a_reason() {
+    let bytes = build_bigram(BIGRAM_EDGES);
+    assert!(EnglishBigram::from_bytes(bytes.clone()).is_ok());
+
+    let e = EnglishBigram::from_bytes(bytes[..40].to_vec()).expect_err("过短必须被拒绝");
+    assert!(format!("{e}").contains("过短"), "{e}");
+
+    assert!(format!("{}", corrupt_bigram(|b| b[0] = b'Y')).contains("魔数"));
+    assert!(format!("{}", corrupt_bigram(|b| b[8] = 9)).contains("版本"));
+    assert!(format!("{}", corrupt_bigram(|b| b[12] = 32)).contains("header_len"));
+    assert!(format!("{}", corrupt_bigram(|b| b[56] = 1)).contains("reserved"));
+    assert!(format!("{}", corrupt_bigram(|b| b[24] = 72)).contains("紧接头部"));
+    let e = corrupt_bigram(|b| {
+        let n = b.len() as u64 + 8;
+        patch_u64(b, 48, n);
+    });
+    assert!(format!("{e}").contains("file_len"), "{e}");
+}
+
+#[test]
+fn bigram_structural_edits_that_break_invariants_are_caught() {
+    // 区段重叠：edges_offset 落在 contexts 区中间（64..112）
+    let msg = format!("{}", corrupt_bigram(|b| patch_u64(b, 32, 80)));
+    assert!(msg.contains("区段顺序") || msg.contains("不一致"), "{msg}");
+
+    // context.observed_total = 0 / context.reserved ≠ 0
+    let e = corrupt_bigram(|b| {
+        let ctx_off = u64::from_le_bytes(b[24..32].try_into().unwrap()) as usize;
+        patch_u64(b, ctx_off + 16, 0);
+    });
+    assert!(format!("{e}").contains("observed_total"), "{e}");
+
+    let e = corrupt_bigram(|b| {
+        let ctx_off = u64::from_le_bytes(b[24..32].try_into().unwrap()) as usize;
+        b[ctx_off + 12] = 1;
+    });
+    assert!(format!("{e}").contains("reserved"), "{e}");
+
+    // edge.count = 0 / edge.count 超过 observed_total
+    let e = corrupt_bigram(|b| {
+        let edge_off = u64::from_le_bytes(b[32..40].try_into().unwrap()) as usize;
+        patch_u64(b, edge_off + 8, 0);
+    });
+    assert!(format!("{e}").contains("count"), "{e}");
+
+    let e = corrupt_bigram(|b| {
+        let edge_off = u64::from_le_bytes(b[32..40].try_into().unwrap()) as usize;
+        patch_u64(b, edge_off + 8, u64::MAX);
+    });
+    assert!(format!("{e}").contains("observed_total"), "{e}");
+
+    // 行内顺序破坏：把 hello（第 2 条 context）首边 count 降到比次边还小
+    let e = corrupt_bigram(|b| {
+        let ctx_off = u64::from_le_bytes(b[24..32].try_into().unwrap()) as usize;
+        let hello = ctx_off + 24;
+        let edge_start = u32::from_le_bytes(b[hello + 8..hello + 12].try_into().unwrap()) as usize;
+        let edge_off = u64::from_le_bytes(b[32..40].try_into().unwrap()) as usize;
+        patch_u64(b, edge_off + edge_start * 16 + 8, 1);
+    });
+    assert!(format!("{e}").contains("顺序"), "{e}");
+
+    // 字符串引用越界
+    let e = corrupt_bigram(|b| {
+        let ctx_off = u64::from_le_bytes(b[24..32].try_into().unwrap()) as usize;
+        patch_u32(b, ctx_off, u32::MAX);
+    });
+    assert!(format!("{e}").contains("越界"), "{e}");
 }

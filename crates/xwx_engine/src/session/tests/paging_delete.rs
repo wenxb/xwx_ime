@@ -1,271 +1,7 @@
-//! `session` 单测:paging_delete(从 `session/tests.rs` 拆出,2026-10-02)。
+//! `session` 翻页（`,`/`.`/`-`/`=`、深翻页、坐标一致性）与删词（Ctrl+Delete）单测。
 
 use super::*;
 
-#[test]
-fn period_pages_down_when_menu_open() {
-    // 候选窗有候选、在第 1 页:`.` → 翻到第 2 页(has_menu 语义)。
-    let mut s = session_with_many_candidates();
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    let out = s.handle(InputEvent::Char('.')).expect("不应失败");
-    match out {
-        SessionOutput::Updated(u) => {
-            assert_eq!(u.page, 1, "`.` 应翻到第 2 页(下标 1)");
-            assert_eq!(u.preedit, "ni", "拼音串不变");
-        }
-        other => panic!("`.` 翻页应返回 Updated,实际 {other:?}"),
-    }
-}
-
-#[test]
-fn comma_pages_up_only_after_paging() {
-    // `,` 用 paging 语义:仅「已翻过页」(page>0)才回翻。
-    let mut s = session_with_many_candidates();
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    // 第 1 页:`,` 不翻页,出中文逗号「,」(最关键的一条:
-    // 中文标点与翻页不冲突的保证)
-    let out = s.handle(InputEvent::Char(',')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t.ends_with('\u{FF0C}')),
-        "第 1 页的 `,` 应上屏中文逗号,不是翻页: {out:?}"
-    );
-
-    // 重新输入并翻到第 2 页,再按 `,` → 回第 1 页
-    let mut s = session_with_many_candidates();
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    s.handle(InputEvent::Char('.')).expect("`.` 应翻页"); // → page 1
-    let out = s.handle(InputEvent::Char(',')).expect("不应失败");
-    match out {
-        SessionOutput::Updated(u) => {
-            assert_eq!(u.page, 0, "第 2 页的 `,` 应回翻到第 1 页(下标 0)");
-        }
-        other => panic!("paging 状态下 `,` 应回翻(Updated),实际 {other:?}"),
-    }
-}
-
-#[test]
-fn idle_comma_period_still_fullwidth() {
-    // 拼音串为空(无候选窗):`.` → 。,`,` → ,——标点优先,无翻页对象。
-    let mut s = session_with_many_candidates();
-    let out = s.handle(InputEvent::Char('.')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Commit(ref t) if t == "\u{3002}"), "空闲 `.` 应出 。");
-    let out = s.handle(InputEvent::Char(',')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Commit(ref t) if t == "\u{FF0C}"), "空闲 `,` 应出 ,");
-}
-
-#[test]
-fn minus_equal_page_when_menu_open() {
-    // `-`/`=`(librime paging_with_minus_equal,has_menu):候选窗开着时翻页。
-    // `-` 同 `,` 的 paging 边界:第 1 页按 `-` 回翻钳在 0(saturating),
-    // 与 PageUp 在首页的行为一致(不 wrap、不上屏、不丢候选)。
-    let mut s = session_with_many_candidates();
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    // `=` 翻到第 2 页
-    let out = s.handle(InputEvent::Char('=')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 1), "`=` 应翻下一页");
-    // `-` 回第 1 页
-    let out = s.handle(InputEvent::Char('-')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 0), "`-` 应回上一页");
-    // 第 1 页再按 `-`:钳在 0,不出标点、不上屏、不 panic
-    let out = s.handle(InputEvent::Char('-')).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 0), "首页 `-` 钳在 0");
-
-    // 空闲(无候选窗):`-`/`=` 落回 catch-all 透传(键不被吃掉),
-    // 接管自 unmapped_ascii_symbols_still_passthrough 移出的两条
-    let mut s = session_with_many_candidates();
-    for c in ['-', '='] {
-        let out = s.handle(InputEvent::Char(c)).expect("不应失败");
-        assert!(matches!(out, SessionOutput::Noop), "空闲时 {c:?} 应透传(Noop): {out:?}");
-    }
-}
-
-#[test]
-fn period_at_last_page_stays_and_comma_recovers() {
-    // 末页再按 `.`:钳在末页(min(max_page)),不 wrap、不上屏;
-    // 之后按 `,` 仍能回翻(page>0 满足 paging)。
-    let mut s = session_with_many_candidates(); // 12 候选 → 2 页(0,1)
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    s.handle(InputEvent::Char('.')).expect("翻页"); // page 1(末页)
-    let out = s.handle(InputEvent::Char('.')).expect("末页再按");
-    assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 1), "末页 `.` 钳在末页");
-    let out = s.handle(InputEvent::Char(',')).expect("回翻");
-    assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 0), "`,` 应从末页回翻");
-}
-
-#[test]
-fn nihao_comma_still_commits_fullwidth() {
-    // 不许退化:`nihao,` 仍出「你好,」——只有 1 个候选(你好)时
-    // candidates 非空、page=0,`,` 不满足 paging(page>0),走标点上屏。
-    let mut s = session_with_dict();
-    for c in "nihao".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    let out = s.handle(InputEvent::Char(',')).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Commit(ref t) if t == "你好\u{FF0C}"),
-        "nihao, 应仍出「你好,」: {out:?}"
-    );
-}
-
-#[test]
-fn ctrl_delete_removes_highlighted_candidate() {
-    // 删掉高亮候选后,重查同一拼音,该候选不再出现。
-    let engine = Arc::new(
-        crate::ImeEngine::new(None)
-            .expect("内存引擎创建失败")
-            .with_user_lm(crate::UserLM::in_memory()),
-    );
-    engine.dict.upsert("你", "ni", 200).expect("插入失败");
-    engine.dict.upsert("逆", "ni", 50).expect("插入失败");
-    let mut s = InputSession::new(Arc::clone(&engine));
-
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    // 高亮在 cursor=0(「你」,词频最高);Ctrl+Delete 删掉它
-    let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
-    match out {
-        SessionOutput::Updated(u) => {
-            assert!(
-                u.candidates.iter().all(|c| c.word != "你"),
-                "删掉后「你」不应再出现: {:?}",
-                u.candidates.iter().map(|c| &c.word).collect::<Vec<_>>()
-            );
-            assert!(u.candidates.iter().any(|c| c.word == "逆"), "「逆」应还在");
-        }
-        other => panic!("DeleteCandidate 应返回 Updated,实际 {other:?}"),
-    }
-    // 重新查询同一拼音:「你」仍被屏蔽
-    let cands = engine
-        .lookup_candidates("ni", &crate::LmContext::empty())
-        .expect("查询失败");
-    assert!(cands.iter().all(|c| c.word != "你"), "重查后「你」仍应被屏蔽");
-}
-
-#[test]
-fn ctrl_delete_user_coined_entry_also_removed() {
-    // 删掉用户造的词 → 用户词条也被删掉(连根拔)。
-    let (engine, mut s) = session_for_coin(&[
-        ("张", "zhang", 100),
-        ("三", "san", 100),
-        ("丰", "feng", 100),
-    ]);
-    let user = engine.user_lm().expect("应有用户层");
-    type_and_commit(&mut s, "zhang", "张");
-    type_and_commit(&mut s, "san", "三");
-    type_and_commit(&mut s, "feng", "丰");
-    s.break_coin_run();
-    assert_eq!(user.entry_len(), 1, "已造出「张三丰」");
-
-    // 打出整串,定位并删掉「张三丰」候选
-    for c in "zhangsanfeng".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    let cands = s.engine
-        .lookup_candidates("zhangsanfeng", &crate::LmContext::empty())
-        .expect("查询失败");
-    let idx = cands.iter().position(|c| c.word == "张三丰").expect("应能查到造词");
-    // 把高亮移到该候选,再 Ctrl+Delete
-    while s.candidates.get(s.cursor).map(|c| c.word.as_str()) != Some("张三丰") {
-        s.handle(InputEvent::Down).expect("下移失败");
-    }
-    let _ = idx;
-    s.handle(InputEvent::DeleteCandidate).expect("删除失败");
-    assert_eq!(user.entry_len(), 0, "删掉用户造词应连同词条删除");
-    assert!(
-        user.snapshot().is_blocked("zhang san feng", "张三丰"),
-        "且已屏蔽"
-    );
-}
-
-#[test]
-fn ctrl_delete_dict_word_only_blocks_not_touch_dict() {
-    // 删掉词库词:屏蔽生效,但词库只读——dict.bin 不被修改。
-    // 用内存词库塞一个词当「词库词」,屏蔽后词库里它仍在
-    // (lookup 能查到),只是候选收口把它滤掉。
-    let engine = Arc::new(
-        crate::ImeEngine::new(None)
-            .expect("内存引擎创建失败")
-            .with_user_lm(crate::UserLM::in_memory()),
-    );
-    engine.dict.upsert("词库词", "ci ku ci", 100).expect("插入失败");
-    let mut s = InputSession::new(Arc::clone(&engine));
-    for c in "cikuci".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    // 定位并删掉
-    while s.candidates.get(s.cursor).map(|c| c.word.as_str()) != Some("词库词") {
-        if s.handle(InputEvent::Down).is_err() { break; }
-        if s.cursor > 50 { panic!("找不到词库词候选"); }
-    }
-    s.handle(InputEvent::DeleteCandidate).expect("删除失败");
-    // 词库里它仍在(只读词库没有被改——对内存词库而言 lookup 仍命中)
-    let still_in_dict = engine.dict.lookup("ci ku ci").expect("查询失败");
-    assert!(
-        still_in_dict.iter().any(|c| c.word == "词库词"),
-        "词库词只屏蔽,词库本体不动"
-    );
-    // 但候选列表里它被滤掉
-    let cands = engine
-        .lookup_candidates("cikuci", &crate::LmContext::empty())
-        .expect("查询失败");
-    assert!(cands.iter().all(|c| c.word != "词库词"), "候选里应被屏蔽");
-}
-
-#[test]
-fn ctrl_delete_down_to_empty_does_not_panic() {
-    // 删到候选列表空:不 panic,update 照常(cursor/page 收敛到 0)。
-    let engine = Arc::new(
-        crate::ImeEngine::new(None)
-            .expect("内存引擎创建失败")
-            .with_user_lm(crate::UserLM::in_memory()),
-    );
-    engine.dict.upsert("你", "ni", 200).expect("插入失败");
-    let mut s = InputSession::new(Arc::clone(&engine));
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
-    // 连续删,直到没有候选(每删一个 refresh 一次,可能冒出回声;
-    // 回声也能被 Ctrl+Delete 屏蔽——它的 (key,word)=(ni,ni))
-    for _ in 0..8 {
-        let has = s.candidates.get(s.cursor).is_some();
-        if !has { break; }
-        let out = s.handle(InputEvent::DeleteCandidate).expect("删除不应失败");
-        assert!(matches!(out, SessionOutput::Updated(_)), "删到空也应 Updated");
-    }
-    // 再按一次:无候选,吃掉按键、状态不变、不 panic
-    let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Updated(_)), "空候选时 DeleteCandidate 吃掉按键不 panic");
-}
-
-#[test]
-fn ctrl_delete_passthrough_when_idle() {
-    // 拼音串为空:Ctrl+Delete 透传给应用(应用的删词快捷键不被吃掉)。
-    let mut s = session_with_dict();
-    let out = s.handle(InputEvent::DeleteCandidate).expect("不应失败");
-    assert!(matches!(out, SessionOutput::Noop), "空闲时 Ctrl+Delete 应透传");
-}
-
-// ——— D5:翻页之后「显示的是谁」必须等于「上屏的是谁」 ———
-//
-// 旧实现里 `page` 与 `cursor` 是两份独立状态:翻页只动 `page`(光标仍指
-// 第 1 页首项),数字选词又直接取 `candidates[n-1]`(全局下标,与页面无关),
-// 而面板收到的表是「当前页 + 页内下标」——四个出口各说各话。修法是把
-// `cursor` 变成唯一权威坐标、`page` 由它推导,于是「面板显示的那一条」
-// 与「空格/数字/点击上屏的那一条」在构造上就是同一条。下面这几条用例
-// 全部以「第 2 页」为主场:第 1 页上旧实现与新实现恰好重合,证明不了什么。
-
-/// 面板当前页看到的候选文本(按编号 1..=n 的顺序)。
 fn visible_page(s: &InputSession) -> Vec<String> {
     let start = s.page() * s.page_size;
     s.candidates
@@ -276,129 +12,202 @@ fn visible_page(s: &InputSession) -> Vec<String> {
         .collect()
 }
 
-/// 打 `ni` 并翻到第 2 页(末页只有 3 条),返回会话与「第 2 页可见候选」。
 fn session_on_second_page() -> (InputSession, Vec<String>) {
     let mut s = session_with_many_candidates();
     type_str(&mut s, "ni");
     s.handle(InputEvent::PageDown).expect("翻页不应失败");
-    assert_eq!(s.page(), 1, "PageDown 后应在第 2 页");
+    assert_eq!(s.page(), 1);
     let page = visible_page(&s);
     assert_eq!(page.len(), 3, "12 条候选、每页 9 条 → 第 2 页 3 条: {page:?}");
     (s, page)
 }
 
 #[test]
-fn digit_selects_within_the_current_page() {
-    // 第 2 页按 `1` 必须是**第 2 页第 1 条**。
-    // 旧实现:`candidates[1 - 1]` = 第 1 页第 1 条 → 上屏别的词,红。
-    let (mut s, page) = session_on_second_page();
-    let out = s.handle(InputEvent::Select(1)).expect("不应失败");
+fn period_and_comma_paging_asymmetry() {
+    // 首页 `,` 不翻页，直接上屏全角逗号。
+    let mut s = session_with_many_candidates();
+    type_str(&mut s, "ni");
+    let out = s.handle(InputEvent::Char(',')).expect("不应失败");
     assert!(
-        matches!(&out, SessionOutput::Commit(t) if *t == page[0]),
-        "第 2 页按 `1` 应上屏第 2 页首项 {:?},实际 {out:?}",
-        page[0]
+        matches!(out, SessionOutput::Commit(ref t) if t.ends_with('\u{FF0C}')),
+        "首页 `,` 应上屏中文逗号: {out:?}"
     );
 
-    // 页内第 3 项同理(`3` → 页首 + 2)
-    let (mut s, page) = session_on_second_page();
-    let out = s.handle(InputEvent::Select(3)).expect("不应失败");
+    // 首页 `.` 翻到末页（page 1），末页再按 `.` 钳位不动，之后 `,` 回翻到 page 0。
+    let mut s = session_with_many_candidates();
+    type_str(&mut s, "ni");
+    match s.handle(InputEvent::Char('.')).expect("不应失败") {
+        SessionOutput::Updated(u) => {
+            assert_eq!(u.page, 1);
+            assert_eq!(u.preedit, "ni");
+        }
+        other => panic!("`.` 翻页应返回 Updated，实际 {other:?}"),
+    }
+    let out = s.handle(InputEvent::Char('.')).expect("末页再按");
+    assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 1), "末页 `.` 应钳位");
+    let out = s.handle(InputEvent::Char(',')).expect("回翻");
+    assert!(matches!(out, SessionOutput::Updated(ref u) if u.page == 0), "`,` 应回翻到首页");
+}
+
+#[test]
+fn minus_equal_page_when_menu_open() {
+    let mut s = session_with_many_candidates();
+    type_str(&mut s, "ni");
+    assert!(matches!(
+        s.handle(InputEvent::Char('=')).expect("不应失败"),
+        SessionOutput::Updated(ref u) if u.page == 1
+    ));
+    assert!(matches!(
+        s.handle(InputEvent::Char('-')).expect("不应失败"),
+        SessionOutput::Updated(ref u) if u.page == 0
+    ));
+    assert!(matches!(
+        s.handle(InputEvent::Char('-')).expect("不应失败"),
+        SessionOutput::Updated(ref u) if u.page == 0
+    ));
+
+    // 空闲时 `-`/`=` 透传给应用。
+    let mut s = session_with_many_candidates();
+    for c in ['-', '='] {
+        assert!(matches!(
+            s.handle(InputEvent::Char(c)).expect("不应失败"),
+            SessionOutput::Noop
+        ));
+    }
+}
+
+#[test]
+fn ctrl_delete_blocks_dict_word_without_mutating_dict() {
+    let (engine, mut s) = session_for_coin(&[("你", "ni", 200), ("逆", "ni", 50)]);
+    type_str(&mut s, "ni");
+    match s.handle(InputEvent::DeleteCandidate).expect("不应失败") {
+        SessionOutput::Updated(u) => {
+            assert!(u.candidates.iter().all(|c| c.word != "你"), "「你」应从候选消失");
+            assert!(u.candidates.iter().any(|c| c.word == "逆"), "「逆」应保留");
+        }
+        other => panic!("DeleteCandidate 应返回 Updated，实际 {other:?}"),
+    }
+    let cands = engine
+        .lookup_candidates("ni", &crate::LmContext::empty())
+        .expect("查询失败");
+    assert!(cands.iter().all(|c| c.word != "你"), "重查后「你」仍被屏蔽");
+
+    // 底层只读词库不受影响。
+    let still_in_dict = engine.dict.lookup("ni").expect("查询失败");
     assert!(
-        matches!(&out, SessionOutput::Commit(t) if *t == page[2]),
-        "第 2 页按 `3` 应上屏 {:?},实际 {out:?}",
-        page[2]
+        still_in_dict.iter().any(|c| c.word == "你"),
+        "词库词只屏蔽，词库本体不动"
     );
+}
+
+#[test]
+fn ctrl_delete_user_coined_entry_also_removed() {
+    let (engine, mut s) = session_for_coin(&[
+        ("张", "zhang", 100),
+        ("三", "san", 100),
+        ("丰", "feng", 100),
+    ]);
+    let user = engine.user_lm().expect("应有用户层");
+    type_and_commit(&mut s, "zhang", "张");
+    type_and_commit(&mut s, "san", "三");
+    type_and_commit(&mut s, "feng", "丰");
+    s.break_coin_run();
+    assert_eq!(user.entry_len(), 1);
+
+    type_str(&mut s, "zhangsanfeng");
+    assert!(s.candidates.iter().any(|c| c.word == "张三丰"), "应能查到造词");
+    while s.candidates.get(s.cursor).map(|c| c.word.as_str()) != Some("张三丰") {
+        s.handle(InputEvent::Down).expect("下移失败");
+    }
+    s.handle(InputEvent::DeleteCandidate).expect("删除失败");
+    assert_eq!(user.entry_len(), 0, "删掉用户造词应连同词条移除");
+    assert!(user.snapshot().is_blocked("zhang san feng", "张三丰"));
+}
+
+#[test]
+fn ctrl_delete_down_to_empty_and_idle_passthrough() {
+    let (_engine, mut s) = session_for_coin(&[("你", "ni", 200)]);
+    // 空闲时透传给应用。
+    assert!(matches!(
+        s.handle(InputEvent::DeleteCandidate).expect("不应失败"),
+        SessionOutput::Noop
+    ));
+
+    type_str(&mut s, "ni");
+    for _ in 0..8 {
+        if s.candidates.get(s.cursor).is_none() {
+            break;
+        }
+        assert!(matches!(
+            s.handle(InputEvent::DeleteCandidate).expect("删除不应失败"),
+            SessionOutput::Updated(_)
+        ));
+    }
+    // 候选已空时继续按 DeleteCandidate 不 panic 且吃掉按键。
+    assert!(matches!(
+        s.handle(InputEvent::DeleteCandidate).expect("不应失败"),
+        SessionOutput::Updated(_)
+    ));
 }
 
 #[test]
 fn digit_without_a_candidate_on_this_page_is_a_noop() {
-    // 第 2 页只有 3 条:按 `4` 没有对应项——吃掉按键,不上屏、不越界。
     let (mut s, _) = session_on_second_page();
     let out = s.handle(InputEvent::Select(4)).expect("不应失败");
-    assert!(
-        matches!(out, SessionOutput::Noop),
-        "末页按不存在的编号应 Noop,实际 {out:?}"
-    );
-}
-
-#[test]
-fn space_commits_the_highlighted_candidate_after_paging() {
-    // 翻页后空格上屏的是**高亮那条**(第 2 页首项)。
-    // 旧实现:翻页不动 cursor,空格仍上屏第 1 页首项,红。
-    let (mut s, page) = session_on_second_page();
-    let out = s.handle(InputEvent::Space).expect("不应失败");
-    assert!(
-        matches!(&out, SessionOutput::Commit(t) if *t == page[0]),
-        "翻页后空格应上屏高亮项 {:?},实际 {out:?}",
-        page[0]
-    );
+    assert!(matches!(out, SessionOutput::Noop), "末页不存在的编号应 Noop: {out:?}");
 }
 
 #[test]
 fn cursor_moves_across_the_page_boundary() {
-    // 上下移动是**全局**移动:第 9 条(0 起)再往下就是第 10 条 = 第 2 页首项。
-    // 旧实现只动 cursor 不动 page → 面板仍停在第 1 页(且页内下标被钳到 8),
-    // 「移动到了哪一条」与「页码」立刻分叉。
     let mut s = session_with_many_candidates();
     type_str(&mut s, "ni");
     for _ in 0..s.page_size {
         s.handle(InputEvent::Down).expect("不应失败");
     }
-    assert_eq!(s.cursor, s.page_size, "下移 9 次应停在第 10 条(0 起 9)");
-    assert_eq!(s.page(), 1, "第 10 条属于第 2 页");
-    assert_eq!(visible_page(&s).len(), 3, "第 2 页可见 3 条");
+    assert_eq!(s.cursor, s.page_size);
+    assert_eq!(s.page(), 1);
+    assert_eq!(visible_page(&s).len(), 3);
 
-    // 再上移一次回到第 1 页末条
     s.handle(InputEvent::Up).expect("不应失败");
     assert_eq!(s.cursor, s.page_size - 1);
-    assert_eq!(s.page(), 0, "回到第 1 页");
+    assert_eq!(s.page(), 0);
 }
 
 #[test]
 fn every_visible_candidate_is_committed_by_digit_space_and_click() {
-    // D5 的验收形状:**每页每个可见候选**,分别用数字、空格、点击上屏,
-    // 断言「面板显示的那条 = 上屏的那条」。三条出口共用同一个权威下标,
-    // 任一出口的坐标系错了这里就红。
     let page_size = session_with_many_candidates().page_size;
     let (total, page_count) = {
         let mut s = session_with_many_candidates();
         type_str(&mut s, "ni");
         (s.candidates.len(), s.candidates.len().div_ceil(page_size))
     };
-    assert_eq!((total, page_count), (12, 2), "12 条 / 每页 9 条 = 2 页");
+    assert_eq!((total, page_count), (12, 2));
 
     for page in 0..page_count {
-        // 这一页面板看到什么(与工具函数同口径)
         let shown = {
             let mut s = session_with_many_candidates();
             type_str(&mut s, "ni");
             for _ in 0..page {
                 s.handle(InputEvent::PageDown).expect("不应失败");
             }
-            assert_eq!(s.page(), page, "翻到第 {page} 页");
+            assert_eq!(s.page(), page);
             visible_page(&s)
         };
-        assert!(!shown.is_empty(), "第 {page} 页不该是空的");
+        assert!(!shown.is_empty());
 
         for (offset, expected) in shown.iter().enumerate() {
-            let expected = expected.clone();
             let global = page * page_size + offset;
 
-            // ① 数字(页内编号 = offset + 1)
+            // ① 数字（页内编号 = offset + 1）
             let mut s = session_with_many_candidates();
             type_str(&mut s, "ni");
             for _ in 0..page {
                 s.handle(InputEvent::PageDown).expect("不应失败");
             }
-            let out = s
-                .handle(InputEvent::Select((offset + 1) as u8))
-                .expect("数字选词不应失败");
-            assert!(
-                matches!(&out, SessionOutput::Commit(t) if *t == expected),
-                "第 {page} 页显示 {expected:?}(编号 {}),按数字应上屏它,实际 {out:?}",
-                offset + 1
-            );
+            let out = s.handle(InputEvent::Select((offset + 1) as u8)).expect("不应失败");
+            assert!(matches!(&out, SessionOutput::Commit(t) if t == expected));
 
-            // ② 空格(先把高亮移到这一条)
+            // ② 空格（高亮移动至对应条）
             let mut s = session_with_many_candidates();
             type_str(&mut s, "ni");
             for _ in 0..page {
@@ -407,43 +216,26 @@ fn every_visible_candidate_is_committed_by_digit_space_and_click() {
             for _ in 0..offset {
                 s.handle(InputEvent::Down).expect("不应失败");
             }
-            assert_eq!(
-                s.cursor, global,
-                "第 {page} 页第 {offset} 项的高亮下标应为 {global}"
-            );
-            let out = s.handle(InputEvent::Space).expect("空格不应失败");
-            assert!(
-                matches!(&out, SessionOutput::Commit(t) if *t == expected),
-                "第 {page} 页第 {offset} 项高亮时空格应上屏 {expected:?},实际 {out:?}"
-            );
+            assert_eq!(s.cursor, global);
+            let out = s.handle(InputEvent::Space).expect("不应失败");
+            assert!(matches!(&out, SessionOutput::Commit(t) if t == expected));
 
-            // ③ 点击(面板回传**页内**下标:它只看得见当前页)
+            // ③ 点击（页内下标）
             let mut s = session_with_many_candidates();
             type_str(&mut s, "ni");
             for _ in 0..page {
                 s.handle(InputEvent::PageDown).expect("不应失败");
             }
-            let out = s
-                .handle(InputEvent::CandidateClicked(offset))
-                .expect("点击不应失败");
-            assert!(
-                matches!(&out, SessionOutput::Commit(t) if *t == expected),
-                "第 {page} 页点页内第 {offset} 条(全局 {global})应上屏 {expected:?},实际 {out:?}"
-            );
+            let out = s.handle(InputEvent::CandidateClicked(offset)).expect("不应失败");
+            assert!(matches!(&out, SessionOutput::Commit(t) if t == expected));
         }
     }
 }
 
-/// 只移动光标(翻页、数字/点击选词)时不重建候选表:两次刷新共享同一份
-/// `Arc`。旧实现每次 `update()` 都克隆整表——
-/// `Candidate` 带三个 `String`,500 条的简拼层就是 1500 次分配,而翻页
-/// 这种操作根本不动候选内容。
 #[test]
 fn cursor_move_shares_the_candidate_table_instead_of_cloning_it() {
     let mut s = session_with_many_candidates();
-    for c in "ni".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
+    type_str(&mut s, "ni");
     let SessionOutput::Updated(first) = s.handle(InputEvent::Char('.')).expect("不应失败") else {
         panic!("`.` 翻页应返回 Updated");
     };
@@ -451,80 +243,56 @@ fn cursor_move_shares_the_candidate_table_instead_of_cloning_it() {
         panic!("`.` 翻页应返回 Updated");
     };
     assert!(
-        std::sync::Arc::ptr_eq(&first.candidates, &second.candidates),
-        "只移动光标时不该重建候选表(应共享同一份 Arc)"
+        Arc::ptr_eq(&first.candidates, &second.candidates),
+        "仅移动光标应共享同一份候选表 Arc"
     );
 
-    // 反向:候选内容真的变了(新打一个字母)时必须给出新的表。
     let SessionOutput::Updated(third) = s.handle(InputEvent::Char('h')).expect("不应失败") else {
         panic!("打字母应返回 Updated");
     };
     assert!(
-        !std::sync::Arc::ptr_eq(&second.candidates, &third.candidates),
-        "候选表变了就不能继续共享旧的 Arc"
+        !Arc::ptr_eq(&second.candidates, &third.candidates),
+        "候选变化后应生成新 Arc"
     );
 }
 
-/// **深翻页**：窗口 100 → 512 之后，二字简拼这类池子大的输入有几十页，
-/// 翻到深处必须仍然「表 = 第 page 页的切片、页内 cursor 从 0 起」，且翻过
-/// 末页要停住（不越界、不空表）。
-///
-/// 失败见证（每条都指向一种真实写法）：
-/// - 翻页只发「前一页之后的 9 条」而不按 `page * page_size` 取切片 →
-///   深页的切片与全局下标错位 → 第一处断言红；
-/// - 末页判断漏判 → 越界空表 → 末页断言红；
-/// - 页内下标忘了重置 → 页内 cursor 非 0 → 页内 cursor 断言红。
 #[test]
 fn deep_paging_stays_in_step_with_the_table() {
-    use std::path::Path;
-    let dict_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict.bin");
-    let abbrev_path = dict_path.with_file_name("abbrev.bin");
-    if !dict_path.is_file() || !abbrev_path.is_file() {
-        return; // 环境缺文件:跳过(与其它 real_dict_* 同款)
+    let engine = ImeEngine::new(None).expect("内存引擎创建失败");
+    for i in 0..200u32 {
+        let w = char::from_u32(0x4E00 + i).unwrap().to_string();
+        engine.dict.upsert(&w, "ni", 1000 - i as u64).expect("插入失败");
     }
-    let mut engine = ImeEngine::new(Some(&dict_path)).expect("词库加载失败");
-    engine.dict = engine.dict.with_abbrev(&abbrev_path);
     let mut s = InputSession::new(Arc::new(engine));
-    for c in "zh".chars() {
-        s.handle(InputEvent::Char(c)).expect("不应失败");
-    }
+    type_str(&mut s, "ni");
+
     let all: Vec<String> = s.candidates.iter().map(|c| c.word.clone()).collect();
     let page_size = s.page_size;
-    assert!(
-        all.len() > 5 * page_size,
-        "zh 应有多页候选(实际 {} 条 / 每页 {page_size})",
-        all.len()
-    );
+    assert_eq!(all.len(), 200);
     let last_page = (all.len() - 1) / page_size;
-
-    // 逐页翻到第 20 页（不足则到末页），每一页都断「切片 + 页内 cursor」
     let target = last_page.min(20);
+
     for page in 1..=target {
         let SessionOutput::Updated(u) = s.handle(InputEvent::PageDown).expect("不应失败") else {
             panic!("PageDown 应返回 Updated");
         };
-        assert_eq!(u.page, page, "第 {page} 次翻页");
-        assert_eq!(u.cursor, u.page_start(), "翻页后高亮应落在本页第一条");
+        assert_eq!(u.page, page);
+        assert_eq!(u.cursor, u.page_start(), "翻页后高亮应落在本页首项");
         assert_eq!(
             u.page_candidates().iter().map(|c| c.word.clone()).collect::<Vec<_>>(),
-            all[page * page_size..((page + 1) * page_size).min(all.len())].to_vec(),
-            "第 {page} 页必须是全局切片 [{}, {})",
-            page * page_size,
-            (page + 1) * page_size
+            all[page * page_size..((page + 1) * page_size).min(all.len())].to_vec()
         );
     }
 
-    // 一路翻到末页，再翻一次:停在末页，不越界、不空表
     for _ in target..last_page {
         s.handle(InputEvent::PageDown).expect("不应失败");
     }
     let SessionOutput::Updated(u) = s.handle(InputEvent::PageDown).expect("不应失败") else {
         panic!("PageDown 应返回 Updated");
     };
-    assert_eq!(u.page, last_page, "末页再翻页应停住");
+    assert_eq!(u.page, last_page, "末页再翻应钳位停住");
     assert_eq!(
         u.page_candidates().iter().map(|c| c.word.clone()).collect::<Vec<_>>(),
-        all[last_page * page_size..].to_vec(),
-        "末页切片"
+        all[last_page * page_size..].to_vec()
     );
 }

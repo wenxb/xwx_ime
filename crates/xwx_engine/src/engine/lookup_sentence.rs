@@ -15,21 +15,46 @@ impl ImeEngine {
         pinyin: &str,
         ctx: &LmContext<'_>,
         sentence_lattice: &[Vec<LatticeEdge>],
+        has_doubled: bool,
         ranked: &mut Vec<Candidate>,
     ) -> Result<(), EngineError> {
-        // **含纠错的格优先**：整句要在与上游同构的图上取（见上面的说明）。
+        // 已有可靠精确整串词条（非填充档、无叠字母错拼）时，跳过多词组合整句，
+        // 避免 `gongzuo` 塞进 `供作/共作/共做`、`zhege` 塞进 `着个` 挤掉首屏常用单字。
+        let has_reliable_exact_whole = !has_doubled
+            && sentence_lattice[0].iter().any(|e| {
+                e.end == pinyin.len()
+                    && e.freq > FILLER_FREQ_TIER
+                    && !e.abbrev
+                    && !e.gap
+                    && e.edit_count == 0
+                    && e.fuzzy_penalty == 0.0
+            });
         let mut sentence_keys: Vec<(String, String, f32)> = Vec::new();
-        let sentences = if sentence_lattice[0].iter().any(|e| e.end == pinyin.len())
+        let sentences = if has_reliable_exact_whole {
+            Vec::new()
+        } else if sentence_lattice[0].iter().any(|e| e.end == pinyin.len())
             || !pinyin.as_bytes().last().is_some_and(|b| b"aeiouvngr".contains(b))
         {
             self.best_chain_candidates(
-                pinyin, ctx, sentence_lattice, SpellingKind::Exact, ABBREV_PER_WORD_PENALTY,
+                pinyin, ctx, sentence_lattice, SpellingKind::Exact, WORD_BOUNDARY_PENALTY,
             )?
         } else {
             self.sentence_candidates(pinyin, ctx, sentence_lattice)?
         };
         for c in sentences {
-            if !ranked.iter().any(|e| e.word == c.word && e.pinyin == c.pinyin) {
+            if let Some(existing) = ranked
+                .iter_mut()
+                .find(|e| e.word == c.word && e.pinyin == c.pinyin && e.covered >= c.covered)
+            {
+                // 词库填充档（freq=100）或偏低词条分不该压死组合整句分（如 `nihaoshijie`→你好世界）。
+                if c.score > existing.score {
+                    existing.score = c.score;
+                    if existing.freq <= FILLER_FREQ_TIER {
+                        existing.freq = 0;
+                    }
+                    sentence_keys.push((existing.word.clone(), existing.pinyin.clone(), existing.score));
+                }
+            } else {
                 sentence_keys.push((c.word.clone(), c.pinyin.clone(), c.score));
                 ranked.push(c);
             }
@@ -124,6 +149,21 @@ impl ImeEngine {
             if wins {
                 let c = ranked.remove(idx);
                 ranked.insert(0, c);
+            }
+        }
+        // 含叠字母错拼（如 `zhongguoo`→中国、`shanghaai`→上海）时，若容错整串读法的
+        // 统一对数分显著强于精确碎片拼接（`中国哦`），以真实分数决胜负（`nanning`/`gongguan` 等合法词不受影响）。
+        if has_doubled {
+            let best_fuzzy = ranked
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.covered >= pinyin.len() && c.spelling == SpellingKind::Fuzzy)
+                .max_by(|(_, a), (_, b)| a.score.total_cmp(&b.score));
+            if let (Some((fidx, fcand)), Some(top)) = (best_fuzzy, ranked.first()) {
+                if fidx != 0 && fcand.score > top.score {
+                    let c = ranked.remove(fidx);
+                    ranked.insert(0, c);
+                }
             }
         }
         Ok(())

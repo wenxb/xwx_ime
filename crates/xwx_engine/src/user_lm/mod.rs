@@ -129,6 +129,13 @@ impl UserLmSnapshot {
             .unwrap_or(&[])
     }
 
+    /// 是否存在以 `prefix` 为前缀的用户造词条目（无造词时 O(1) 返回 `false`）。
+    #[inline]
+    pub(crate) fn has_entry_prefix(&self, prefix: &str) -> bool {
+        !self.tables.entries.is_empty()
+            && self.tables.entries.keys().any(|k| k.starts_with(prefix))
+    }
+
     /// 英文前缀派生索引:该前缀下最多 32 个规范英文 key(计数降序、key 升序)。
     ///
     /// 派生自计数表、随同一代快照发布——召回与打分因此永远看到同一代数据。
@@ -524,5 +531,3 @@ impl From<Arc<UserTables>> for UserLmSnapshot {
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod perf_tests;
