@@ -38,6 +38,7 @@ pub(super) fn merge_indexed_mixed(
     ranked: &mut Vec<Candidate>,
     cached_patterns: &mut Option<Vec<Candidate>>,
     only_evidence: bool,
+    user_entries: Option<&crate::user_lm::UserLmSnapshot>,
 ) -> Result<bool, EngineError> {
     let DictStore::Mmap(d) = &engine.dict else {
         return Ok(false);
@@ -48,17 +49,12 @@ pub(super) fn merge_indexed_mixed(
     let indexed = d.lookup_abbrev_patterns(pinyin)?;
     *cached_patterns = Some(indexed);
     let indexed = cached_patterns.as_ref().expect("刚存入");
-    // **填充档（freq ≤ `FILLER_FREQ_TIER`）也并入**——但它们在**容错层的分数闸**
-    // 里不算「覆盖整串」的证据（见 `lookup.rs` 的 `covering_best`）。两头都对：
-    // - 词条本身进名单：`jiejyonggong` → 解决用工、`zaoshenjhua` → 造神计划
-    //   这类**只有索引能证实**的混合读法，词频恰好落在填充档——词库 70% 的
-    //   条目都在这一档，一律拒之门外等于把这些形态也一并拒掉；
-    // - 但它们无权否决容错纠错：`zhuagn` 按混合形态切出来的唯一词条是填充档的
-    //   「转化功能」，早先它「覆盖整串」⇒ 容错层的「装」被分数闸挡住、纠错失效。
-    //
-    // 「填充档没有真实依据」仍然成立：它决定的是**能不能否决别人的证据**，
-    // 不是**能不能出现在名单里**。
-    if indexed.is_empty() {
+    let user_matches = if only_evidence {
+        Vec::new()
+    } else {
+        user_entries.map_or_else(Vec::new, |u| u.lookup_abbrev_entries(pinyin))
+    };
+    if indexed.is_empty() && user_matches.is_empty() {
         return Ok(false);
     }
     let total = engine.dict.total_freq()?;
@@ -70,6 +66,7 @@ pub(super) fn merge_indexed_mixed(
     // 该词在真实上文下的 LM 分）。区别只在这里不查一次主索引：`freq` 就是
     // 副索引里那条词条自己的词频（与主索引同源，见 `abbrev_to_bin.py`）。
     let log10_total = (total as f64).log10();
+    let real_dict = total >= 1_000_000;
     let state = engine.lm.state_from_context(ctx);
     let scorer = engine.lm.prepare(&state);
     // 去重:同一个 (词, 拼音) 已在表里就不再进第二份——兜底路/精确路与索引
@@ -92,11 +89,32 @@ pub(super) fn merge_indexed_mixed(
         }
         let mut c = src.clone();
         let dict_logp = ImeEngine::word_prior_logp(c.freq, log10_total, total);
-        let lm_gain = scorer.score_gain(&c.word, WANXIANG_GAIN_SCALE);
-        c.score = dict_logp
-            + lm_gain * engine.lm_weight
-            + engine.internal_cohesion_bonus(&c.word, c.freq)
+        c.score = scorer.word_score(
+            &c.word,
+            dict_logp,
+            real_dict,
+            WANXIANG_GAIN_SCALE,
+            engine.lm_weight,
+        ) + engine.internal_cohesion_bonus(&c.word, c.freq)
             - ImeEngine::abbrev_syllable_penalty(pinyin, &c.pinyin);
+        c.spelling = SpellingKind::Abbrev;
+        c.covered = pinyin.len();
+        ranked.push(c);
+        merged = true;
+    }
+    for (word, py) in user_matches {
+        if !seen.insert((word.clone(), py.clone())) {
+            continue;
+        }
+        let mut c = Candidate::new(word, py, 0);
+        let dict_logp = ImeEngine::word_prior_logp(0, log10_total, total);
+        c.score = scorer.word_score(
+            &c.word,
+            dict_logp,
+            real_dict,
+            WANXIANG_GAIN_SCALE,
+            engine.lm_weight,
+        ) - ImeEngine::abbrev_syllable_penalty(pinyin, &c.pinyin);
         c.spelling = SpellingKind::Abbrev;
         c.covered = pinyin.len();
         ranked.push(c);

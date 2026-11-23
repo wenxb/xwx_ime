@@ -5,10 +5,23 @@ use super::*;
 
 impl InputSession {
     /// 组合结束:已确认段 + 这次选中的整串候选**一次**交给应用。
+    /// 若本次预编辑经 ≥2 段选出且满足自造词条件，立即记入用户词条。
     pub(super) fn commit_selection(&mut self, c: &Candidate) -> String {
+        let coined = if !self.confirmed.is_empty() && self.uncovered_suffix(c).is_empty() {
+            let mut segs: Vec<&Candidate> =
+                self.confirmed.iter().map(|s| &s.candidate).collect();
+            segs.push(c);
+            Self::reusable_phrase_entry(&segs)
+        } else {
+            None
+        };
         let mut text = self.confirmed_text();
         self.replay_confirmed();
         text.push_str(&self.record_commit(c));
+        if let Some((word, key)) = coined {
+            self.engine.coin_entry(&word, &key);
+            self.last_word = Some(word);
+        }
         self.reset();
         text
     }
@@ -30,7 +43,6 @@ impl InputSession {
         self.english.clear();
         let mut text = self.confirmed_text();
         self.replay_confirmed();
-        self.break_coin_run();
         self.record_committed(&raw, None);
         text.push_str(&raw);
         self.reset();
@@ -50,7 +62,7 @@ impl InputSession {
         word
     }
 
-    /// 上屏的**记账**部分:造词缓冲、上屏尾部(bigram 上文)、UserLM 学习。
+    /// 上屏的**记账**部分:上屏尾部(bigram 上文)与 UserLM 学习。
     ///
     /// 与「消耗输入串」拆开是因为分段上屏要先搬走前缀、再刷新剩余串的
     /// 候选,刷新失败必须能原样回滚——那时**不能**留下任何上屏副作用。
@@ -64,29 +76,12 @@ impl InputSession {
         // 原文与中文候选都是**语言边界**：之后的英文不再与提交前的英文
         // 词构成词对（中文重放同样走这里，天然清掉英文链）。
         self.english.clear();
-        if c.echo {
-            self.break_coin_run();
-        } else {
-            self.push_coin(c);
-        }
         let as_word = if c.echo { None } else { Some(word.as_str()) };
         self.record_committed(&word, as_word);
         word
     }
 
     /// 提交一条英文候选（Exact/Completion）：返回**实际**上屏文本。
-    ///
-    /// 顺序严格按会话分册第 4 节：保存 prev → 算文本（可能带一个前导
-    /// 空格）→ 打断中文造词段 → 只学一次英文 UserLM → 进上屏尾部并断
-    /// 中文 `last_word` → 更新英文上文 → 调用方按原有流程复位。
-    ///
-    /// 与中文路径的三处关键差别：
-    /// 1. **不 `push_coin`**：英文词不是中文造词段的材料，落进去会造出
-    ///    「拼音 key 为空」的垃圾词条；
-    /// 2. **不调 `record_committed`**：那会把英文词当中文词学进中文
-    ///    UserLM（`learn_committed(prev_zh, Some("Python"))`）；
-    /// 3. 中文 `last_word` 置 `None`：语言边界，中文字符级窗口仍靠
-    ///    `push_tail` 维护。
     pub(super) fn record_english_commit(&mut self, c: &Candidate) -> String {
         let Some(key) = c.english_key().map(str::to_string) else {
             return c.word.clone(); // 不可达:调用方已判 is_english
@@ -98,14 +93,12 @@ impl InputSession {
             text.push(' ');
         }
         text.push_str(&c.word);
-        // 4. 结束前面的中文造词段（不是把中文已确认段丢掉）。
-        self.break_coin_run();
-        // 5. 英文只学一次，学在**独立**的英文用户实例上。
+        // 英文只学一次，学在**独立**的英文用户实例上。
         self.engine.learn_english(prev.as_deref(), &key);
-        // 6. 上屏尾部（字符级窗口）要看得见这个词；中文词级上文断开。
+        // 上屏尾部（字符级窗口）要看得见这个词；中文词级上文断开。
         self.push_tail(&text);
         self.last_word = None;
-        // 7. 英文上文换成目标 key。
+        // 英文上文换成目标 key。
         self.english.on_word_committed(&key);
         text
     }
@@ -218,90 +211,51 @@ impl InputSession {
     /// 上屏任意文本并复位会话。原文计入上屏尾部；
     /// 原始字母/标点不是词，`last_word` 置 `None`。
     pub(super) fn commit_raw(&mut self, text: String) -> String {
-        // 原始上屏打断造词缓冲(标点/回车/Verbatim 大写都经此路径,
-        // 即「不跨标点造词」「不跨模式切换造词」的落点)。
         self.english.clear();
-        self.break_coin_run();
         self.record_committed(&text, None);
         self.reset();
         text
     }
 
-    /// 把一次非回声候选上屏推进造词缓冲。
-    ///
-    /// 候选自带的 `pinyin` 字段就是「空格分隔的音节串」(与词典 key
-    /// 同格式),直接入缓冲;段在 [`Self::break_coin_run`] 时才结算。
-    pub(super) fn push_coin(&mut self, c: &Candidate) {
-        self.coin_buffer.push((c.word.clone(), c.pinyin.clone()));
-        // 长度上限:超限即把当前缓冲结算后清空(防失控长段粘成
-        // 一个词;见 MAX_COIN_CHARS 注释)。结算发生在「打断」语义
-        // 之前——超限本身就是一种打断。
-        //
-        // 注意:这里用的是**字符**总数,与 is_reusable_phrase 的
-        // 「片段数/单字」判据是两件事,不要混:本上限拦的是「单次
-        // 编码片段过长」,那条拦的是「这一串到底像不像一个想复用的
-        // 短语」。两者各自独立生效。
-        let chars: usize = self
-            .coin_buffer
-            .iter()
-            .map(|(w, _)| w.chars().count())
-            .sum();
-        if chars > MAX_COIN_CHARS {
-            self.break_coin_run();
+    /// 校验同一次预编辑的多段选词是否够格记为用户自造词，够格则返回 `(词, 规范拼音 key)`。
+    pub(super) fn reusable_phrase_entry(segments: &[&Candidate]) -> Option<(String, String)> {
+        if segments.len() < MIN_COIN_SEGMENTS {
+            return None;
         }
-    }
-
-    /// 打断造词缓冲:缓冲够格时把整段造成一条用户词条
-    /// (词 = 各片段拼接,拼音 key = 各片段拼音空格连接),随后清空。
-    ///
-    /// 「够格」= [`Self::is_reusable_phrase`](见那里的实测依据与权衡)。
-    /// 不够格(连续打字的句子)时**只清空、不造词**——缓冲本身仍要
-    /// 清掉,否则下一次打断会把上一句的尾巴也拼进来。
-    pub(super) fn break_coin_run(&mut self) {
-        if self.is_reusable_phrase() {
-            let word: String = self.coin_buffer.iter().map(|(w, _)| w.as_str()).collect();
-            let key: String = self
-                .coin_buffer
-                .iter()
-                .map(|(_, p)| p.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-            self.engine.coin_entry(&word, &key);
+        let mut total_chars = 0usize;
+        let mut has_single_char = false;
+        let mut word = String::new();
+        let mut key = String::new();
+        for (idx, c) in segments.iter().enumerate() {
+            if c.echo || c.is_english() || c.word.is_empty() || c.pinyin.is_empty() {
+                return None;
+            }
+            let chars = c.word.chars().count();
+            if !c.word.chars().all(is_cjk_han) {
+                return None;
+            }
+            let syls: Vec<&str> = c.pinyin.split(' ').collect();
+            if syls.len() != chars
+                || syls.iter().any(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_lowercase()))
+            {
+                return None;
+            }
+            if chars == 1 {
+                has_single_char = true;
+            }
+            total_chars += chars;
+            word.push_str(&c.word);
+            if idx > 0 {
+                key.push(' ');
+            }
+            key.push_str(&c.pinyin);
         }
-        self.coin_buffer.clear();
-    }
-
-    /// 当前造词缓冲是否够格造成一条用户词条。
-    ///
-    /// 判据(依据见 [`COIN_ALL_SEGMENTS_SINGLE_CHAR`] 的完整注释):
-    /// 1. 片段数 ≥ [`MIN_COIN_SEGMENTS`]——一次完整词上屏不造词;
-    /// 2. **全部**片段都是单字——逐字组词(「张三丰」「西双版纳」)
-    ///    满足;只要有**一个**整词片段(连续打字的形状)就不满足,
-    ///    因而「设置为说着玩的说说中文」这类句子不会被粘成词条。
-    ///
-    /// 抽成独立方法是为了让它**可被直接单测**:造词是「用户无感知地
-    /// 写入持久数据」的行为,判据必须能被逐条钉住,而不是埋在
-    /// `break_coin_run` 里只能通过整体副作用观察。
-    pub(super) fn is_reusable_phrase(&self) -> bool {
-        if self.coin_buffer.len() < MIN_COIN_SEGMENTS {
-            return false;
-        }
-        if !COIN_ALL_SEGMENTS_SINGLE_CHAR {
-            return true;
-        }
-        if !self
-            .coin_buffer
-            .iter()
-            .all(|(w, _)| w.chars().count() == 1)
-        {
-            return false;
-        }
-        // 3. 总长 ≤ [`MAX_COIN_CHARS`]——超过上限时 [`Self::check_coin_limit`]
-        //    会调 `break_coin_run` 来**丢弃**,如果这里仍判够格,就会反过来
-        //    造出一条 25+ 字的用户词条。上限与「像不像
-        //    一个想复用的短语」是两件事,但**够格**必须同时满足两者。
-        let chars: usize = self.coin_buffer.iter().map(|(w, _)| w.chars().count()).sum();
-        chars <= MAX_COIN_CHARS
+        let max_chars = if has_single_char {
+            MAX_COIN_CHARS
+        } else {
+            MAX_COIN_MULTI_WORD_CHARS
+        };
+        (2..=max_chars).contains(&total_chars).then_some((word, key))
     }
 
     /// 把上屏文本追加进有界尾部并更新 `last_word`。
@@ -407,7 +361,6 @@ impl InputSession {
         // (那是「还没选」的内容,不该凭空进文档)。
         let text = self.confirmed_text();
         self.replay_confirmed();
-        self.break_coin_run();
         // **焦点切换同时是 LM 上下文边界**:不复位的话,
         // 复用同一个会话实例时下一个焦点会继承前一个焦点的 `last_word`,
         // 并据此学习跨焦点 bigram(在微信里选完词、切到浏览器继续打字,
@@ -445,12 +398,12 @@ impl InputSession {
             SessionOutput::Commit(text)
         } else {
             self.english_mode = !self.english_mode;
-            // **模式切换也是造词边界**:空闲时切走再切回来,
-            // 缓冲里上一段的字不该和下一段的字粘成一个词。`reset()` 刻意
-            // 不清缓冲(分段上屏要跨多次上屏累积),所以这里显式结算。
-            self.break_coin_run();
             self.reset();
             SessionOutput::Noop
         }
     }
+}
+
+fn is_cjk_han(ch: char) -> bool {
+    matches!(ch, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}')
 }

@@ -107,7 +107,6 @@ impl InputSession {
                 self.close_and_clear();
                 self.committed_tail.pop();
                 self.last_word = None;
-                self.coin_buffer.clear();
                 PredictionStep::Handled(SessionOutput::Noop)
             }
             InputEvent::Left | InputEvent::Right => {

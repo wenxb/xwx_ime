@@ -73,7 +73,6 @@ impl InputSession {
             if is_idle_backspace {
                 self.committed_tail.pop();
                 self.last_word = None;
-                self.coin_buffer.clear();
                 self.english.clear();
             } else if is_space {
                 // 空闲时透传的 ASCII 空格：保留上一词，但要记住「已经隔开」，
@@ -295,16 +294,7 @@ impl InputSession {
                 if self.pinyin.is_empty() && self.confirmed.is_empty() {
                     Ok(SessionOutput::Commit(self.commit_raw(punct.to_string())))
                 } else {
-                    // 标点/英文字符结束这次组合:已确认段 + 当前候选(或原样
-                    // 拼音)**一次**上屏,再把该字符拼在末尾。不能走
-                    // `commit_candidate`——它在「只覆盖前缀」时会返回 Updated
-                    // (段留在组合里),标点就没地方落地了。
-                    // **标点/大写是造词段的边界**:逐字选
-                    // 「张」「三」后打标点、再选「丰」,不结算的话三段的单字会
-                    // 跨标点粘成「张三丰」——标点两侧不是同一段。
-                    // 位置在提交之前:标点这一刻的候选属于**新一段**(它跟着
-                    // 标点一起上屏),不该并进上一段再一起结算。
-                    self.break_coin_run();
+                    // 标点结束这次组合:已确认段 + 当前候选(或原样拼音)**一次**上屏,再拼标点。
                     let out = match self.candidates.get(self.cursor).cloned() {
                         Some(c) => {
                             // **后缀守恒**:候选只覆盖输入的一部分时,
@@ -408,11 +398,8 @@ impl InputSession {
 
             // —— Esc：清空 ——
             InputEvent::Escape if self.composing() => {
-                // 取消当前输入:打断造词缓冲(结算已累积的段),
-                // 保证缓冲不跨「用户明确取消」的边界泄漏。
-                // Escape 也是**显式结束本次英文上下文**(会话分册第 2 节)。
+                // Escape 取消当前组合并显式结束英文上下文。
                 self.english.clear();
-                self.break_coin_run();
                 self.reset();
                 Ok(SessionOutput::Updated(self.update()))
             }

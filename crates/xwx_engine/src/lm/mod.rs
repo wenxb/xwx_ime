@@ -403,10 +403,13 @@ impl MixedLM {
     pub fn user(&self) -> &UserLM {
         &self.user
     }
+    pub(super) fn user_counts(&self, state: &MixedState, word: &str) -> (u32, u32) {
+        self.user
+            .counts_with(&state.snap, state.user_prev.as_deref(), word)
+    }
+
     pub(super) fn user_boost(&self, state: &MixedState, word: &str) -> f32 {
-        let (c_uni, c_bi) = self
-            .user
-            .counts_with(&state.snap, state.user_prev.as_deref(), word);
+        let (c_uni, c_bi) = self.user_counts(state, word);
         let uni = if state.user_prev.is_some() && c_bi == 0 {
             count_gain(c_uni) * USER_UNPAIRED_UNI_SCALE
         } else {

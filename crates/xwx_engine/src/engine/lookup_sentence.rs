@@ -152,17 +152,25 @@ impl ImeEngine {
             }
         }
         // 含叠字母错拼（如 `zhongguoo`→中国、`shanghaai`→上海）时，若容错整串读法的
-        // 统一对数分显著强于精确碎片拼接（`中国哦`），以真实分数决胜负（`nanning`/`gongguan` 等合法词不受影响）。
+        // 统一对数分强于精确碎片拼接（`中国哦`），以真实分数决胜负；
+        // 首位已是可靠精确整词（`anniu`→按钮、`nanning`→南宁、`gongguan`→公关）时绝不被容错顶掉。
         if has_doubled {
-            let best_fuzzy = ranked
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.covered >= pinyin.len() && c.spelling == SpellingKind::Fuzzy)
-                .max_by(|(_, a), (_, b)| a.score.total_cmp(&b.score));
-            if let (Some((fidx, fcand)), Some(top)) = (best_fuzzy, ranked.first()) {
-                if fidx != 0 && fcand.score > top.score {
-                    let c = ranked.remove(fidx);
-                    ranked.insert(0, c);
+            let top_is_reliable_exact = ranked.first().is_some_and(|top| {
+                top.covered >= pinyin.len()
+                    && top.spelling == SpellingKind::Exact
+                    && top.freq > FILLER_FREQ_TIER
+            });
+            if !top_is_reliable_exact {
+                let best_fuzzy = ranked
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.covered >= pinyin.len() && c.spelling == SpellingKind::Fuzzy)
+                    .max_by(|(_, a), (_, b)| a.score.total_cmp(&b.score));
+                if let (Some((fidx, fcand)), Some(top)) = (best_fuzzy, ranked.first()) {
+                    if fidx != 0 && fcand.score > top.score {
+                        let c = ranked.remove(fidx);
+                        ranked.insert(0, c);
+                    }
                 }
             }
         }

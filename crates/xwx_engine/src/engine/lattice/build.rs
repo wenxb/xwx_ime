@@ -159,6 +159,13 @@ impl ImeEngine {
             };
             whole.extend(d.lookup_abbrev(pinyin)?);
             whole.extend(d.lookup_mixed_whole(pinyin)?);
+            if let Some(snap) = user_entries {
+                for (word, py) in snap.lookup_abbrev_entries(pinyin) {
+                    let mut c = Candidate::new(word, py, 0);
+                    c.covered = n_letters;
+                    whole.push(c);
+                }
+            }
             // 去重从「逐条线性扫 `lattice[0]`」改成哈希集合：索引驱动那条供给
             // 一次可带回上千条（2 字母键的词条数 p99≈900），线性扫是 O(n²)。
             let mut seen_whole: std::collections::HashSet<String> = lattice[0]

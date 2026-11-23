@@ -281,7 +281,6 @@ fn u01_english_learn_does_not_touch_the_chinese_user_lm_or_coin_buffer() {
     let zh = s.engine.user_lm().expect("应有中文用户层");
     assert_eq!(zh.unigram_len(), 0, "英文不得进中文一元计数");
     assert_eq!(zh.entry_len(), 0, "英文不得进中文造词条目");
-    assert!(s.coin_buffer.is_empty(), "英文不得进中文造词缓冲");
     assert_eq!(english_unigram(&s, "hello"), 1, "只进英文计数");
 }
 

@@ -251,7 +251,6 @@ fn recognized_commit_does_not_learn_and_does_not_coin() {
         s.handle(InputEvent::Space).expect("不应失败"),
         SessionOutput::Commit(ref t) if t == "你"
     ));
-    s.break_coin_run();
     assert_eq!(user.entry_len(), 0, "识别态原文不应参与造词");
 }
 

@@ -91,6 +91,7 @@ impl ImeEngine {
             &en_cands,
             recent_en,
             good_en,
+            e0_zipf,
             en_zipf_max,
             total_freq,
         ) {

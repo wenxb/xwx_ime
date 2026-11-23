@@ -86,6 +86,10 @@ pub(super) struct UserTables {
     pub(super) english_prefix_top: HashMap<String, Vec<String>>,
     /// 英文下一词派生索引:前词 -> 最多 32 个规范英文 key。**不序列化**。
     pub(super) english_next_top: HashMap<String, Vec<String>>,
+    /// 自造词音节前缀集合（O(1) 判定，不序列化）。
+    pub(super) entry_prefixes: HashSet<String>,
+    /// 自造词按首字母分桶的简拼/混拼派生索引（不序列化）。
+    pub(super) entry_by_first: HashMap<u8, Vec<super::entry_index::UserEntryItem>>,
 }
 
 impl UserLM {
@@ -194,10 +198,13 @@ impl UserLM {
             blocklist,
             english_prefix_top: HashMap::new(),
             english_next_top: HashMap::new(),
+            entry_prefixes: HashSet::new(),
+            entry_by_first: HashMap::new(),
         };
         // 加载成功出口之一:**必须**在这里建好派生索引——旧文件没有索引
         // 不是文件损坏,而是「按计数重建一次」的信号。
         tables.rebuild_english_index();
+        tables.rebuild_entry_index();
         Ok(tables)
     }
 

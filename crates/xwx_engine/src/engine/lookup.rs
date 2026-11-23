@@ -227,6 +227,7 @@ impl ImeEngine {
                 &mut ranked,
                 &mut abbrev_patterns,
                 reachable_mixed_fallback,
+                user_snapshot.as_ref(),
             )?;
         }
         let abbrev_layer_unified = !reachable && self.dict.has_abbrev();

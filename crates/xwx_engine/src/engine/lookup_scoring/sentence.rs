@@ -165,6 +165,7 @@ impl ImeEngine {
         let mut beams: Vec<Vec<usize>> = (0..=len).map(|_| Vec::new()).collect();
         let total = self.dict.total_freq()?;
         let log_total = (total as f64).log10();
+        let real_dict = total >= 1_000_000;
         arena.push(BeamNode {
             score: 0.0,
             state: Some(self.lm.state_from_context(ctx)),
@@ -180,14 +181,16 @@ impl ImeEngine {
             }
             let mut touched = Vec::new();
             let mut touched_end = false;
-            let dict_scores: Vec<f32> = lattice[pos]
+            let dict_scores: Vec<(f32, f32)> = lattice[pos]
                 .iter()
                 .map(|edge| {
                     if edge.gap {
-                        0.0
+                        (0.0, 0.0)
                     } else {
-                        Self::word_prior_logp(edge.freq, log_total, total)
-                            + self.internal_cohesion_bonus(&edge.word, edge.freq)
+                        (
+                            Self::word_prior_logp(edge.freq, log_total, total),
+                            self.internal_cohesion_bonus(&edge.word, edge.freq),
+                        )
                     }
                 })
                 .collect();
@@ -227,10 +230,17 @@ impl ImeEngine {
                         let score = if edge.gap {
                             node_score - edge.typo_penalty
                         } else {
-                            let lm_gain = scorer.score_gain(&edge.word, WANXIANG_GAIN_SCALE);
+                            let (dict_logp, cohesion) = dict_scores[slot];
+                            let word_score = scorer.word_score(
+                                &edge.word,
+                                dict_logp,
+                                real_dict,
+                                WANXIANG_GAIN_SCALE,
+                                self.lm_weight,
+                            );
                             node_score
-                                + dict_scores[slot]
-                                + lm_gain * self.lm_weight
+                                + word_score
+                                + cohesion
                                 - edge.fuzzy_penalty
                                 - edge.typo_penalty
                                 - boundary_cost
@@ -255,12 +265,19 @@ impl ImeEngine {
                     if used > MAX_TYPO_EDITS {
                         continue;
                     }
-                    let lm_gain = scorer.score_gain(&edge.word, WANXIANG_GAIN_SCALE);
+                    let (dict_logp, cohesion) = dict_scores[slot];
+                    let word_score = scorer.word_score(
+                        &edge.word,
+                        dict_logp,
+                        real_dict,
+                        WANXIANG_GAIN_SCALE,
+                        self.lm_weight,
+                    );
                     let idx = arena.len();
                     arena.push(BeamNode {
                         score: node_score
-                            + dict_scores[slot]
-                            + lm_gain * self.lm_weight
+                            + word_score
+                            + cohesion
                             - edge.fuzzy_penalty
                             - edge.typo_penalty
                             - boundary_cost,

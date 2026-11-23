@@ -107,28 +107,75 @@ pub(super) fn pinyin_reads_input(input: &[u8], pinyin: &str) -> bool {
     walk(tail, rest, &mut failed, stride, 0, 0)
 }
 
-/// **中文可读**：中文通道里有「拼音真的读得出输入、且有真实词频」的候选。
+/// **中文可读**：中文通道里有比英文更可信的拼音读法（`freq > 填充档`）。
 ///
-/// 「读得出」有两种形态，缺一不可的条件是**真实词频**（`freq > 填充档`）：
-///
-/// - **全拼前缀**：`rug`→如果（`ruguo` 以 `rug` 开头）；`hello`→黑龙
-///   （`heilong` 第 3 个字母就不对）不算。
-/// - **简拼读法**：`yidd`→一点点（`yi | d | d`）；字面上
-///   `yidiandian` 并不以 `yidd` 开头，只能按逐音节前缀对齐判。
-///
-/// 真实词频挡掉简拼通道的拼装链（`thank`→他和安康那种 `freq=0` 的
-/// 货色）——不然一切英文输入都成了"可能是中文"。两个一起，`rug`/
-/// `bir`/`yidd` 判为中文可读，`python`/`hello`/`thank` 判不出来——
-/// 正好是用户要的分界。
-fn plausible_chinese(zh: &[Candidate], raw_input: &str) -> bool {
+/// - **全拼/全拼前缀**（`starts_with`）：默认中文优先，仅在真实大词库下放行极低频偶然碰撞
+///   （`freq < 2_000` 且先验落后英文 ≥1.5 量级，如 `cache`→擦车、`data`→打他、`linu`→狸奴）；
+/// - **混合简拼**（`pinyin_reads_input` 但非全拼前缀）：按统一 log10 先验与英文对决——
+///   英文精确命中完整词时中文简拼须不落后于英文精确词（3 字母留 0.50 余量保 `ann`/`ans`），
+///   英文仅补全时留 1.50 余量（保 `yidd`/`piz`/`hel`，拦 `worl`/`butto`/`wat`/`nig`/`mod`/`mus`）。
+fn plausible_chinese(
+    zh: &[Candidate],
+    raw_input: &str,
+    e0_exact: bool,
+    e0_zipf: u16,
+    en_zipf_max: u16,
+    total_freq: u64,
+) -> bool {
     let lower = raw_input.to_ascii_lowercase();
     let bytes = lower.as_bytes();
+    let real_dict = total_freq >= 1_000_000;
+    let log10_total = if real_dict {
+        (total_freq as f64).log10()
+    } else {
+        0.0
+    };
+    let e0_prior = if e0_zipf > 0 {
+        e0_zipf as f64 / 100.0 - 9.0
+    } else {
+        f64::NEG_INFINITY
+    };
+    let pool_prior = if en_zipf_max > 0 {
+        en_zipf_max as f64 / 100.0 - 9.0
+    } else {
+        f64::NEG_INFINITY
+    };
     zh.iter().any(|c| {
-        !c.echo
-            && !c.is_english()
-            && c.freq > super::filler_freq_tier()
-            && (c.pinyin.replace(' ', "").starts_with(&lower)
-                || pinyin_reads_input(bytes, &c.pinyin))
+        if c.echo || c.is_english() || c.freq <= super::filler_freq_tier() {
+            return false;
+        }
+        let zh_prior = if real_dict {
+            (c.freq as f64).log10() - log10_total
+        } else {
+            0.0
+        };
+        let stripped = c.pinyin.replace(' ', "");
+        if stripped.starts_with(&lower) {
+            if real_dict && c.freq < 2_000 && en_zipf_max > 0 && zh_prior < pool_prior - 1.5 {
+                return false;
+            }
+            // 未打完的中文前缀（如 `lunch`→lunchuan 轮船、`more`→moren 默认）撞上完整英文精确词时按先验竞争；
+            // `rug`→如果（+2.27）仍稳居中文优先，`lunch`/`more` 则归还英文优先。
+            if real_dict && stripped.len() > lower.len() && e0_exact && e0_zipf > 0 {
+                let margin = if raw_input.len() <= 3 { 0.50 } else { 0.0 };
+                return zh_prior >= e0_prior - margin;
+            }
+            return true;
+        }
+        if !pinyin_reads_input(bytes, &c.pinyin) {
+            return false;
+        }
+        if !real_dict {
+            return true;
+        }
+        if e0_exact && e0_zipf > 0 {
+            let margin = if raw_input.len() <= 3 { 0.50 } else { 0.0 };
+            zh_prior >= e0_prior - margin
+        } else if en_zipf_max > 0 {
+            zh_prior >= pool_prior - 1.50
+        } else {
+            true
+        }
     })
 }
 
@@ -256,6 +303,7 @@ pub(crate) fn classify_intent(
     en: &[Candidate],
     recent_en: bool,
     good_en: bool,
+    e0_zipf: u16,
     en_zipf_max: u16,
     total_freq: u64,
 ) -> Option<IntentBand> {
@@ -295,14 +343,21 @@ pub(crate) fn classify_intent(
         }
         return Some(IntentBand::ChineseFirst);
     }
-    if plausible_chinese(zh, raw_input) {
+    if plausible_chinese(zh, raw_input, e0_exact, e0_zipf, en_zipf_max, total_freq) {
         return Some(IntentBand::ChineseFirst);
     }
     if abbrev_prior_beats_en(zh, raw_input, en_zipf_max, total_freq) {
         return Some(IntentBand::ChineseFirst);
     }
-    // 中文读不出来 ⇒ 用户就是在打英文。
-    if good_en {
+    // 中文读不出来 ⇒ 用户就是在打英文：
+    // 英文足够强、或精确命中完整词（Docker/debug/encrypt），或中文无真实整串词条时直接 EnglishFirst。
+    let zh_has_real_cover = zh.iter().any(|c| {
+        !c.echo
+            && !c.is_english()
+            && c.covered >= raw_input.len()
+            && c.freq > super::filler_freq_tier()
+    });
+    if good_en || e0_exact || (!zh_has_real_cover && raw_input.len() >= 4) {
         return Some(IntentBand::EnglishFirst);
     }
     Some(IntentBand::Mixed)

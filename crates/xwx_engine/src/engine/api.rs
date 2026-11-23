@@ -193,24 +193,29 @@ impl ImeEngine {
         }
     }
 
-    /// 记一条造词条目(unity_table_encoder 的等价物:把上屏的整段
-    /// 反查编码后写入用户词典)。
+    /// 记一条用户自造词条（由同一次预编辑的分段选词即时触发）。
     ///
-    /// 由 [`InputSession`](crate::session::InputSession) 的造词缓冲在
-    /// 「连续候选上屏段被打断/超长且 ≥ 2 字」时调用。`pinyin_key`
-    /// 是空格分隔的音节串(与词典 key 同格式),由缓冲里各片段的
-    /// 候选拼音拼接而成。无用户层时是 no-op(与 `learn_committed`
-    /// 同一取舍)。落盘复用用户模型的 dirty/flush 调度,不在此同步做。
+    /// 主词库已有可靠词条（`freq > FILLER_FREQ_TIER`）时不重复占用 `entries` 名额，仅记学习提权；
+    /// 若该词条此前被误屏蔽则随显式重造自动解除屏蔽。
     pub(crate) fn coin_entry(&self, word: &str, pinyin_key: &str) {
         let Some(user) = self.user_lm() else {
             return;
         };
-        user.add_entry(word, pinyin_key);
-        // **召回与打分必须成对**(见 `user_lm.rs` 的 `entries` 字段注释):
-        // `add_entry` 让词库里没有的短语能被查到,`learn` 记一次上屏计数,
-        // 它下次才会排到前面。只 add_entry 时自造词「查得到但排不上」——
-        // 实测 `coined_entry_surfaces_via_lattice_like_dict_word` 里
-        // 会被同串的首字「张」挤到第 2。
+        if user.snapshot().is_blocked(pinyin_key, word) {
+            user.unblock(word, pinyin_key);
+        }
+        let in_reliable_dict = match &self.dict {
+            DictStore::Mmap(d) => d
+                .entry_freq(pinyin_key, word)
+                .ok()
+                .flatten()
+                .is_some_and(|f| f > FILLER_FREQ_TIER),
+            DictStore::Sqlite(_) => false,
+        };
+        if !in_reliable_dict {
+            user.add_entry(word, pinyin_key);
+        }
+        // 召回与打分成对：`learn` 记一次上屏计数，使自造词下次即刻排到前面。
         user.learn(None, word);
     }
 

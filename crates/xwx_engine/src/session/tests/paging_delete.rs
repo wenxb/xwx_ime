@@ -108,10 +108,11 @@ fn ctrl_delete_user_coined_entry_also_removed() {
         ("丰", "feng", 100),
     ]);
     let user = engine.user_lm().expect("应有用户层");
-    type_and_commit(&mut s, "zhang", "张");
-    type_and_commit(&mut s, "san", "三");
-    type_and_commit(&mut s, "feng", "丰");
-    s.break_coin_run();
+    type_str(&mut s, "zhangsanfeng");
+    for w in ["张", "三", "丰"] {
+        let idx = s.candidates.iter().position(|c| c.word == w).expect("应有单字");
+        s.handle(InputEvent::CandidateClicked(idx)).expect("选词失败");
+    }
     assert_eq!(user.entry_len(), 1);
 
     type_str(&mut s, "zhangsanfeng");

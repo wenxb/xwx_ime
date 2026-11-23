@@ -71,6 +71,7 @@ impl ImeEngine {
     ) -> f32 {
         let total_freq = self.dict.total_freq().unwrap_or(0);
         let log10_total = (total_freq as f64).log10();
+        let real_dict = total_freq >= 1_000_000;
         let mut st = self.lm.state_from_context(ctx);
         let mut score = 0.0f32;
         let mut rest = word;
@@ -81,12 +82,18 @@ impl ImeEngine {
                 .map_or(rest.len(), |(i, _)| i);
             let (piece, tail) = rest.split_at(cut);
             rest = tail;
-            let lm_gain = self
-                .lm
-                .score_gain_with_context(&st, None, piece, WANXIANG_GAIN_SCALE);
+            let dict_logp = Self::word_prior_logp(*freq, log10_total, total_freq);
+            let word_score = self.lm.word_score_with_context(
+                &st,
+                None,
+                piece,
+                dict_logp,
+                real_dict,
+                WANXIANG_GAIN_SCALE,
+                self.lm_weight,
+            );
             st = self.lm.advance_state(&st, piece);
-            score += Self::word_prior_logp(*freq, log10_total, total_freq)
-                + lm_gain * self.lm_weight
+            score += word_score
                 + self.internal_cohesion_bonus(piece, *freq)
                 - if idx > 0 { WORD_BOUNDARY_PENALTY } else { 0.0 };
         }
@@ -315,6 +322,7 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
         let len = pinyin.len();
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
+        let real_dict = total_freq >= 1_000_000;
         let _ = ctx;
         let initial = self.lm.initial_state();
 
@@ -371,17 +379,17 @@ fn is_one_char_deletion(w: &str, syl: &str) -> bool {
                             let s = if edge.gap {
                                 -edge.typo_penalty
                             } else {
-                                let lm_gain = self.lm.score_gain_with_context(
+                                let dict_logp =
+                                    Self::word_prior_logp(edge.freq, log10_total, total_freq);
+                                self.lm.word_score_with_context(
                                     &initial,
                                     None,
                                     &edge.word,
+                                    dict_logp,
+                                    real_dict,
                                     WANXIANG_GAIN_SCALE,
-                                );
-                                let dict_logp =
-                                    Self::word_prior_logp(edge.freq, log10_total, total_freq);
-                                dict_logp
-                                    + lm_gain * self.lm_weight
-                                    + self.internal_cohesion_bonus(&edge.word, edge.freq)
+                                    self.lm_weight,
+                                ) + self.internal_cohesion_bonus(&edge.word, edge.freq)
                                     - edge.fuzzy_penalty
                                     - edge.typo_penalty
                                     - WORD_BOUNDARY_PENALTY

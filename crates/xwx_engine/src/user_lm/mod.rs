@@ -32,6 +32,7 @@ use std::sync::{Arc, RwLock};
 use tracing::info;
 
 mod english_index;
+mod entry_index;
 mod file;
 
 use file::{block_key, UserTables};
@@ -129,11 +130,18 @@ impl UserLmSnapshot {
             .unwrap_or(&[])
     }
 
-    /// 是否存在以 `prefix` 为前缀的用户造词条目（无造词时 O(1) 返回 `false`）。
+    /// 是否存在以 `prefix` 为音节前缀的用户造词条目（O(1) 哈希查找）。
     #[inline]
     pub(crate) fn has_entry_prefix(&self, prefix: &str) -> bool {
-        !self.tables.entries.is_empty()
-            && self.tables.entries.keys().any(|k| k.starts_with(prefix))
+        !self.tables.entry_prefixes.is_empty() && self.tables.entry_prefixes.contains(prefix)
+    }
+
+    /// 查询与 `input` 匹配的简拼/混拼用户造词条目，返回 `(word, pinyin_key)`。
+    pub(crate) fn lookup_abbrev_entries(&self, input: &str) -> Vec<(String, String)> {
+        if self.tables.entry_by_first.is_empty() {
+            return Vec::new();
+        }
+        self.tables.lookup_abbrev_entries(input)
     }
 
     /// 英文前缀派生索引:该前缀下最多 32 个规范英文 key(计数降序、key 升序)。
@@ -310,6 +318,7 @@ impl UserLM {
             let words = t.entries.entry(pinyin_key.to_string()).or_default();
             if !words.iter().any(|w| w == word) {
                 words.push(word.to_string());
+                t.entry_on_add(word, pinyin_key);
             }
             if t.entries.len() > MAX_USER_ENTRIES {
                 Self::decay_entries(t);
@@ -359,6 +368,7 @@ impl UserLM {
             t.bigrams.remove(word);
             // 删除是「计数消失」,增量算法只处理增加:全量重建。
             t.rebuild_english_index();
+            t.rebuild_entry_index();
         })
     }
 
@@ -445,6 +455,7 @@ impl UserLM {
             words.retain(|w| !drop.contains(&(key.clone(), w.clone())));
             !words.is_empty()
         });
+        t.rebuild_entry_index();
         info!(
             entries = t.entries.len(),
             "造词条目超限,已按上屏频次淘汰低频一半"

@@ -136,6 +136,19 @@ fn c07d_pure_consonant_abbrev_with_real_words_keeps_chinese_first() {
         let out = lookup(engine, input, None);
         assert_eq!(first_lang(&out), "english", "{input} 应保持英文首选");
     }
+    // 完整英文词与低频中文简拼/偶然全拼碰撞时英文应占首位。
+    for input in [
+        "rust", "button", "month", "lunch", "hour", "here", "list", "fast", "push", "wait",
+        "more", "docker", "debug", "encrypt", "cache", "data", "and",
+    ] {
+        let out = lookup(engine, input, None);
+        assert_eq!(
+            first_lang(&out),
+            "english",
+            "{input} 应英文首选，实际前 3: {:?}",
+            out.iter().take(3).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
 }
 
 #[test]

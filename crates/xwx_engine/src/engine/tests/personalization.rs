@@ -196,3 +196,116 @@ fn prewarm_and_prepare_startup_are_read_only() {
     assert_eq!(user.entry_len(), 0);
     assert_eq!(user.blocklist_len(), 0);
 }
+
+/// 重度用户历史高频单字/二元不会把整词拆碎（复现真实 `user_bigram.txt` 下 `ann`/`anniu`/`dianjiann` 退化）。
+#[test]
+fn real_dict_heavy_user_lm_does_not_shatter_whole_words() {
+    let Some(engine) = fresh_real_dict_engine() else {
+        return;
+    };
+    if !engine.dict.has_abbrev() {
+        return;
+    }
+    let user = crate::UserLM::in_memory();
+    for (w, n) in [
+        ("按钮", 600usize),
+        ("按", 60),
+        ("你", 800),
+        ("啊", 500),
+        ("那", 80),
+        ("的", 3000),
+        ("点击", 90),
+    ] {
+        for _ in 0..n {
+            user.learn(None, w);
+        }
+    }
+    for (p, w, n) in [
+        ("按", "你", 3usize),
+        ("那", "你", 2),
+        ("的", "啊", 7),
+        ("啊", "你", 3),
+        ("按", "上", 1),
+    ] {
+        for _ in 0..n {
+            user.learn(Some(p), w);
+        }
+    }
+    let engine = engine.with_user_lm(user);
+    let top1 = |q: &str| {
+        engine
+            .lookup_candidates(q, &LmContext::empty())
+            .expect("查询失败")[0]
+            .word
+            .clone()
+    };
+    assert_eq!(top1("ann"), "按钮");
+    assert_eq!(top1("anniu"), "按钮");
+    assert_eq!(top1("dianjiann"), "点击按钮");
+}
+
+/// 真实词库下：同预编辑分段选出词库缺词后，立即在全拼、纯简拼、混拼均排首位，且 Ctrl+Delete 可连根删掉。
+#[test]
+fn real_dict_segmented_coining_surfaces_immediately_in_full_and_abbrev() {
+    let Some(engine) = fresh_real_dict_engine() else {
+        return;
+    };
+    if !engine.dict.has_abbrev() {
+        return;
+    }
+    let engine = Arc::new(engine.with_user_lm(crate::UserLM::in_memory()));
+    let mut session = engine.create_session();
+
+    for ch in "xinglange".chars() {
+        session.handle(crate::InputEvent::Char(ch)).expect("输入失败");
+    }
+    assert!(
+        !session.candidates().iter().any(|c| c.word == "星澜阁"),
+        "造词前词库不应含「星澜阁」"
+    );
+    for seg in ["星", "澜", "阁"] {
+        let idx = session
+            .candidates()
+            .iter()
+            .position(|c| c.word == seg)
+            .unwrap_or_else(|| panic!("候选缺少「{seg}」"));
+        let out = session
+            .handle(crate::InputEvent::CandidateClicked(idx))
+            .expect("选词失败");
+        if seg == "阁" {
+            assert!(matches!(out, crate::SessionOutput::Commit(ref t) if t == "星澜阁"));
+        } else {
+            assert!(matches!(out, crate::SessionOutput::Updated(_)));
+        }
+    }
+
+    // 紧接着直接查全拼、纯简拼、尾混拼、首混拼，全部即刻登顶。
+    for q in ["xinglange", "xlg", "xinglg", "xlange"] {
+        let cands = engine
+            .lookup_candidates(q, &LmContext::empty())
+            .expect("查询失败");
+        assert_eq!(
+            cands.first().map(|c| c.word.as_str()),
+            Some("星澜阁"),
+            "造词后 {q} 应立刻排首位，实际前3={:?}",
+            cands.iter().take(3).map(|c| &c.word).collect::<Vec<_>>()
+        );
+    }
+
+    // Ctrl+Delete 删除后，全拼与简拼均不再召回。
+    for ch in "xinglange".chars() {
+        session.handle(crate::InputEvent::Char(ch)).expect("输入失败");
+    }
+    session
+        .handle(crate::InputEvent::DeleteCandidate)
+        .expect("删词失败");
+    for q in ["xinglange", "xlg", "xinglg", "xlange"] {
+        let cands = engine
+            .lookup_candidates(q, &LmContext::empty())
+            .expect("查询失败");
+        assert!(
+            !cands.iter().any(|c| c.word == "星澜阁"),
+            "删除后 {q} 不应再出现「星澜阁」"
+        );
+    }
+}

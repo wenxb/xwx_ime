@@ -21,7 +21,6 @@ impl InputSession {
             last_word: None,
             english_mode,
             english: EnglishRunContext::new(),
-            coin_buffer: Vec::new(),
             confirmed: Vec::new(),
             prediction: std::sync::Arc::new(Vec::new()),
             prediction_cursor: 0,

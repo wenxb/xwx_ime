@@ -112,21 +112,21 @@ impl ImeEngine {
         }
         let log10_total = (ev.total as f64).log10();
         let dict_logp = Self::word_prior_logp(freq, log10_total, ev.total);
-        let lm_gain = self.lm.score_gain_with_context(
+        let word_score = self.lm.word_score_with_context(
             &ev.state,
             ev.context.as_ref(),
             &c.word,
+            dict_logp,
+            ev.total >= 1_000_000,
             WANXIANG_GAIN_SCALE,
+            self.lm_weight,
         );
         let abbrev_cost = if c.spelling == SpellingKind::Abbrev {
             Self::abbrev_syllable_penalty(pinyin, &c.pinyin)
         } else {
             0.0
         };
-        let entry_score = dict_logp
-            + lm_gain * self.lm_weight
-            + self.internal_cohesion_bonus(&c.word, freq)
-            - abbrev_cost;
+        let entry_score = word_score + self.internal_cohesion_bonus(&c.word, freq) - abbrev_cost;
         if from_chain {
             // 组合链分不该被词库填充档（freq=100）或偏低整词频拖垮：取两者更强证据。
             if freq > FILLER_FREQ_TIER {
@@ -215,6 +215,7 @@ impl ImeEngine {
     ) -> Result<Vec<Candidate>, EngineError> {
         let total_freq = self.dict.total_freq()?;
         let log10_total = (total_freq as f64).log10();
+        let real_dict = total_freq >= 1_000_000;
 
         let initial = self.lm.state_from_context(ctx);
         let scorer = self.lm.prepare(&initial);
@@ -224,12 +225,15 @@ impl ImeEngine {
             if edge.gap {
                 continue;
             }
-            let lm_gain = scorer.score_gain(&edge.word, WANXIANG_GAIN_SCALE);
             let dict_logp = Self::word_prior_logp(edge.freq, log10_total, total_freq);
             let remaining = (best_suffix.len() - 1).saturating_sub(edge.edit_count as usize);
-            let score = dict_logp
-                + lm_gain * self.lm_weight
-                + self.internal_cohesion_bonus(&edge.word, edge.freq)
+            let score = scorer.word_score(
+                &edge.word,
+                dict_logp,
+                real_dict,
+                WANXIANG_GAIN_SCALE,
+                self.lm_weight,
+            ) + self.internal_cohesion_bonus(&edge.word, edge.freq)
                 - edge.fuzzy_penalty
                 - edge.typo_penalty
                 + best_suffix[remaining][edge.end];

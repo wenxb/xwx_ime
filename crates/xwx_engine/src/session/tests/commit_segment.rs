@@ -115,21 +115,24 @@ fn segmented_commits_never_drop_typed_letters() {
 }
 
 #[test]
-fn segmented_commits_of_whole_words_do_not_coin_a_phrase() {
+fn segmented_commits_of_long_multi_word_sentence_do_not_coin_a_phrase() {
     let (engine, mut s) = session_for_coin(&[
-        ("我们", "wo men", 300),
-        ("我", "wo", 500),
-        ("今天", "jin tian", 300),
+        ("当前", "dang qian", 300),
+        ("主线", "zhu xian", 300),
+        ("进度", "jin du", 300),
     ]);
     let user = engine.user_lm().expect("应有用户层");
-    type_str(&mut s, "womenjintian");
+    type_str(&mut s, "dangqianzhuxianjindu");
 
-    let idx = s.candidates.iter().position(|c| c.word == "我们").expect("应有「我们」");
-    s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
-    let idx = s.candidates.iter().position(|c| c.word == "今天").expect("应有「今天」");
-    s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
-    s.break_coin_run();
-    assert_eq!(user.entry_len(), 0, "连续确认多个整词不应造词");
+    for word in ["当前", "主线", "进度"] {
+        let idx = s
+            .candidates
+            .iter()
+            .position(|c| c.word == word)
+            .unwrap_or_else(|| panic!("应有「{word}」"));
+        s.handle(InputEvent::CandidateClicked(idx)).expect("不应失败");
+    }
+    assert_eq!(user.entry_len(), 0, "超过 5 字的纯多字整句分段不应造词");
 }
 
 #[test]
@@ -180,7 +183,6 @@ fn escape_hatch_commits_the_unexplained_remainder_verbatim() {
         matches!(out, SessionOutput::Commit(ref t) if t == "nihaozzzzz"),
         "逃生口应原样上屏: {out:?}"
     );
-    s.break_coin_run();
     assert_eq!(user.entry_len(), 0, "原样上屏不应造词");
 }
 
